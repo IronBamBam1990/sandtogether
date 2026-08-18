@@ -45,7 +45,7 @@ That's it — [b]forever[/b]. From v0.9.39 the mod checks the Workshop folder at
 [*] Per-player memory: rejoin a world and you're back where you left off, with your inventory
 [*] Steam achievements keep working; the panel warns in red on mod-version or game-build mismatch
 [*] Bilingual UI (English / Polski)
-[*] Windows + macOS (macOS port by DwoaC, LAN co-op verified on Apple Silicon; Steam invites got a fix in 0.9.41 — Mac feedback welcome!)
+[*] Windows + macOS (macOS port by DwoaC, LAN co-op verified on Apple Silicon; Steam invites got a fix in 0.9.41 — Mac feedback welcome! Note: the installer is named [b]install.command[/b] — it replaced the briefly-announced install-macos.command)
 [/list]
 
 [h2]How to play (Steam)[/h2]
@@ -73,7 +73,7 @@ This mod patches the game files (the game has no built-in mod loader for Early A
 [h2]💛 Thank you — this mod is community-built[/h2]
 Huge thanks to the code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts — a whole pull request!) and [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix, tested on two Macs).
 
-And to the testers whose precise bug reports shaped almost every release: [b]TCentraL[/b], [b]Warlow[/b], [b]NanYu_sad.[/b], [b]ЗаКеЛьМан[/b], [b]星灵[/b], [b]Lofar666[/b], [b]Bobulator333[/b], [b]thatsmaik[/b], [b]uolkx[/b], [b]MIXUIL[/b], [b]Justin[/b], [b]Hooye!![/b], [b]tony.s.jennette[/b], [b]Sprut[/b] — and everyone else who reported, tested and played. A short description + your log file (%APPDATA%\\Sandustry\\logs\\main.log) is the fastest route to a fix.
+And to the testers whose precise bug reports shaped almost every release: [b]TCentraL[/b], [b]Warlow[/b], [b]derErste67[/b], [b]NanYu_sad.[/b], [b]ЗаКеЛьМан[/b], [b]星灵[/b], [b]Lofar666[/b], [b]Bobulator333[/b], [b]thatsmaik[/b], [b]uolkx[/b], [b]MIXUIL[/b], [b]Justin[/b], [b]Hooye!![/b], [b]tony.s.jennette[/b], [b]Sprut[/b] — and everyone else who reported, tested and played. A short description + your log file (%APPDATA%\\Sandustry\\logs\\main.log) is the fastest route to a fix.
 
 [h2]Open source / Contributing[/h2]
 The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]github.com/IronBamBam1990/sandtogether[/url] — MIT license. Bug fixes, features and ports (e.g. a macOS installer — the mod code itself is cross-platform) are welcome as pull requests. The README covers the architecture and dev workflow.
@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.44-beta — GRABBER NO LONGER MIXES MATERIALS (second report by derErste67, thanks for the fast re-test!). The vanilla grabber locks its tank to ONE element type — the first thing you grab — but the host-side harvest was scooping everything in radius (dirt + stone + gold in one tank). It now locks to the first collected type exactly like vanilla, and the client sends its tank\'s locked type so refills stay pure too. Includes 0.9.43 (liquids require the team\'s waterGrab research) and 0.9.42 (research fully shared: buildings, items, map). Auto-updates on next launch.',
+    changeNote: 'Description update: derErste67 added to the thank-you section (two precise grabber reports fixed same-hour in 0.9.43/0.9.44) and a clarification for Mac players: the macOS installer is named install.command (it replaced the briefly-announced install-macos.command — thanks tony.s.jennette for flagging the confusion). Mod files unchanged since v0.9.44-beta.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
