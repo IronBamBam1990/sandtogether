@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.42-beta — RESEARCH NOW FULLY SHARED (fixes the report by ЗаКеЛьМан: "my friend studied the map, but I do not have it"). Root cause: syncing the tech FLAG was not enough — unlocking research in this game also registers buildings in the build menu, adds the unlocked items to your inventory and enables the MAP. The mod now calls the real unlock routine of the game on both sides, so when any teammate researches something, everyone gets the buildings, the items AND the map. Works on Steam and LAN. Auto-updates on next launch (or run the installer once if you never have).',
+    changeNote: 'v0.9.43-beta — GRABBER RESPECTS RESEARCH GATES (fixes the report by derErste67: as the joining player you could collect water without the water-pickup research). The host-side harvest now enforces the same rule as the vanilla grabber: liquids require the grabber waterGrab upgrade — which is team-shared, so once anyone researches it, everyone can. Non-grabbable elements are filtered by their config on the host too. Includes 0.9.42: research is FULLY shared (buildings, items and the map materialize for the whole team, not just the researcher — fixes ЗаКеЛьМан\'s report). Auto-updates on next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

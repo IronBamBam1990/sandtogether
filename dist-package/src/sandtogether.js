@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.42-beta";
+	const VER = "0.9.43-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1384,6 +1384,13 @@
 		const types = [];
 		// cap = wolne sloty tanku klienta (msg.f); stary klient bez f → ostrożne 8. Nigdy >48.
 		const cap = Math.max(1, Math.min(48, typeof msg.f === "number" ? msg.f : 8));
+		// BRAMKA NAUKOWA (fix derErste67: klient zbierał wodę bez badania): vanilla grabber wymaga
+		// upgrade'u grabber.waterGrab dla PŁYNÓW — host-side harvest musi to egzekwować tak samo.
+		// matterType "Liquid" ustalamy dynamicznie z configu wody (RJ.Water=3) — bez hardcodu enuma.
+		if (ST._mtLiquid === undefined) { try { const wc = el.getConfig && el.getConfig(3); ST._mtLiquid = wc && wc.matterType != null ? wc.matterType : null; } catch (e) { ST._mtLiquid = null; } }
+		const wg = state.store.upgrades && state.store.upgrades.grabber && state.store.upgrades.grabber.waterGrab;
+		const canLiquid = !!(wg && wg.level);
+		let gateSkipped = 0;
 		const R = 4; let taken = 0;
 		for (let dy = -R; dy <= R && taken < cap; dy++)
 			for (let dx = -R; dx <= R && taken < cap; dx++) {
@@ -1392,13 +1399,17 @@
 					const info = getInfo(state, x, y);
 					if (!info || !info.elementType) continue;
 					if (info.isGrabbable === false) continue; // szanuj flagę gdy jest; gdy brak — bierz (klient celował)
+					const cfg = el.getConfig ? el.getConfig(info.elementType) : null;
+					if (cfg && cfg.isGrabbable === false) continue;
+					if (ST._mtLiquid !== null && cfg && cfg.matterType === ST._mtLiquid && !canLiquid) { gateSkipped++; continue; } // płyn bez badania waterGrab
 					removeAt(state, x, y);
 					markCellDirty(state, x, y);
 					types.push(info.elementType);
 					taken++;
 				} catch (e) {}
 			}
-		if (types.length) { net.send({ t: "grabres", types }, fromId); if ((ST._grabHostDiag = (ST._grabHostDiag || 0) + 1) <= 40) log("HOST grabH @", msg.x, msg.y, "→ zebrano", types.length, "elementów"); }
+		if (types.length) { net.send({ t: "grabres", types }, fromId); if ((ST._grabHostDiag = (ST._grabHostDiag || 0) + 1) <= 40) log("HOST grabH @", msg.x, msg.y, "→ zebrano", types.length, "elementów" + (gateSkipped ? " (pominięto " + gateSkipped + " płynów — brak waterGrab)" : "")); }
+		else if (gateSkipped && (ST._grabGateDiag = (ST._grabGateDiag || 0) + 1) <= 10) log("HOST grabH: 0 zebranych,", gateSkipped, "płynów zablokowanych (brak badania waterGrab)");
 	}
 	// KLIENT: wypełnij tank grabbera (matrix) typami zebranymi przez hosta. B[0]=locked type, B[1]=count, B[2..]=sloty.
 	function clientFillGrabTank(types) {
