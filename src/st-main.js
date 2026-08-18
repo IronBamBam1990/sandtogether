@@ -122,6 +122,9 @@ function startWsServer(port) {
       sock.on('data', feed);
       if (rest.length) feed(rest);
       emitEvent('peer-connected', { id: peerId });
+      // fix (DwoaC): serwer WS też musi się PRZYWITAĆ — bez hello hosta klient nigdy nie odpowiada
+      // mver i host po 5s widział fałszywy alarm "OLD mod" (Steam robi to w refreshLobbyMembers)
+      sendToPeer(peer, { t: 'hello', nick: S.myNick, ver: PROTO_VER });
     });
     sock.on('close', () => { if (S.peers.delete(peerId)) emitEvent('peer-disconnected', { id: peerId }); });
     sock.on('error', () => {});

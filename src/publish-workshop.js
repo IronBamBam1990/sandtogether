@@ -15,7 +15,7 @@ const PREVIEW = path.resolve(__dirname, '../workshop/preview.png');
 
 const TITLE = 'SandTogether — Co-op Multiplayer';
 const DESCRIPTION = `[h1]SandTogether — Co-op Multiplayer for Sandustry[/h1]
-[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD[/b]
+[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD, DwoaC[/b]
 
 Play Sandustry together over the internet — no server, no port forwarding. Connect through Steam friend invites. Up to 4 players.
 
@@ -24,7 +24,7 @@ Sandustry cannot auto-load this kind of mod yet, so after subscribing you run th
 [olist]
 [*] Subscribe (you already did) and let Steam finish downloading.
 [*] Open the mod folder. In Steam: right-click Sandustry → Manage → Browse local files, go up one level, then open: steamapps\\workshop\\content\\2764460\\3784750764\\  (or just search your PC for "SandTogether")
-[*] [b]Windows:[/b] right-click [b]install.bat[/b] → Run. [b]macOS:[/b] open Terminal → [b]bash install-macos.command[/b] (uses the game's own engine — no dependencies). The installer finds your game and installs the mod automatically.
+[*] [b]Windows:[/b] right-click [b]install.bat[/b] → Run. [b]macOS:[/b] double-click [b]install.command[/b] (or run it in Terminal; no dependencies — it uses the game's own engine), then launch via [b]SandTogether-Launch.command[/b] or Steam. The installer finds your game and installs the mod automatically.
 [*] Launch Sandustry from Steam. A [b]SandTogether[/b] panel appears in the top-right corner.
 [/olist]
 That's it — [b]forever[/b]. From v0.9.39 the mod checks the Workshop folder at every launch and installs newer versions by itself (the game restarts once when it does). Both players are always on the same version automatically.
@@ -45,7 +45,7 @@ That's it — [b]forever[/b]. From v0.9.39 the mod checks the Workshop folder at
 [*] Per-player memory: rejoin a world and you're back where you left off, with your inventory
 [*] Steam achievements keep working; the panel warns in red on mod-version or game-build mismatch
 [*] Bilingual UI (English / Polski)
-[*] Windows + macOS (macOS installer is new in 0.9.40 — feedback from Mac players very welcome!)
+[*] Windows + macOS (macOS port by DwoaC, LAN co-op verified on Apple Silicon; Steam invites got a fix in 0.9.41 — Mac feedback welcome!)
 [/list]
 
 [h2]How to play (Steam)[/h2]
@@ -71,7 +71,7 @@ Both players must run the same mod version (the panel warns in red if they diffe
 This mod patches the game files (the game has no built-in mod loader for Early Access yet). Subscribe, then run [b]install.bat[/b] from this item's folder — [b]once[/b]. From then on the mod auto-updates itself at every game launch, so both players always match. Full instructions in README.md (EN) / INSTRUKCJA.md (PL).
 
 [h2]💛 Thank you — this mod is community-built[/h2]
-Huge thanks to the code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync) and [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts — a whole pull request!).
+Huge thanks to the code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts — a whole pull request!) and [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix, tested on two Macs).
 
 And to the testers whose precise bug reports shaped almost every release: [b]TCentraL[/b], [b]Warlow[/b], [b]NanYu_sad.[/b], [b]ЗаКеЛьМан[/b], [b]星灵[/b], [b]Lofar666[/b], [b]Bobulator333[/b], [b]thatsmaik[/b], [b]uolkx[/b], [b]MIXUIL[/b], [b]Justin[/b], [b]Hooye!![/b], [b]tony.s.jennette[/b], [b]Sprut[/b] — and everyone else who reported, tested and played. A short description + your log file (%APPDATA%\\Sandustry\\logs\\main.log) is the fastest route to a fix.
 
@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.40-beta — macOS SUPPORT! New installer for Mac players: open Terminal and run bash install-macos.command from the mod folder — zero dependencies (it cleverly uses the game engine itself to do the install), handles Gatekeeper, finds your Steam library automatically. The auto-updater now works on macOS too. Honest note: built blind on Windows — Mac players, you are the first real test, please report results (ping tony.s.jennette who asked for this!). Windows players: nothing changes for you, but the auto-updater will pull this version in — that is also its first live test.',
+    changeNote: 'v0.9.41-beta — COMMUNITY macOS RELEASE! Merged two pull requests by DwoaC (thank you!): a fully TESTED macOS installer + launcher (verified LAN co-op on two Apple Silicon Macs — install.command / SandTogether-Launch.command replace the blind-built 0.9.40 scripts) and the root-cause fix for Steam invites on macOS (the Mac Steam library reports callback fields in snake_case — invites should now complete; Mac players, please confirm!). Plus two bugs DwoaC reported, fixed: the LAN host no longer shows a false OLD-mod warning (the server never said hello, so the client could not answer), and red foundation tiles left by CLIENT demolishes are now swept too. Windows auto-updater pulls this in on next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

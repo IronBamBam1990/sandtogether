@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.40-beta";
+	const VER = "0.9.41-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1580,6 +1580,13 @@
 				ST._applyingNet = true;
 				try { for (const s of msg.list) removeOne(state, s); } finally { ST._applyingNet = false; }
 				net.send({ t: "st", k: "rm", list: msg.list });
+				// fix (DwoaC): sweep osieroconych kafli uzbrajał się TYLKO na przeciągnięcia hosta —
+				// rozbiórki klienta zostawiały czerwone kafle. Uzbrajamy go bounding-boxem listy (±2).
+				if (msg.list && msg.list.length) {
+					let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+					for (const s of msg.list) { if (s.x < x0) x0 = s.x; if (s.x > x1) x1 = s.x; if (s.y < y0) y0 = s.y; if (s.y > y1) y1 = s.y; }
+					ST._hostDemolRect = { x0: x0 - 2, y0: y0 - 2, x1: x1 + 6, y1: y1 + 6, t: performance.now() };
+				}
 			} else if (msg.k === "upg") {
 				// zakup ulepszenia klienta (wspólna pula): ustaw poziom + odejmij koszt autorytatywnie
 				ST._applyingNet = true;
