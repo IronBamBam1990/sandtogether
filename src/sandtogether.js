@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.44-beta";
+	const VER = "0.9.45-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1209,8 +1209,12 @@
 					// NOWY tech od hosta → PEŁNY unlock u klienta (menu budynków, itemy do ekwipunku, MAPA!)
 					// — goła flaga zostawiała UI martwe ("kolega zbadał mapę, ja jej nie mam" — ЗаКеЛьМан)
 					ST._applyingNet = true;
-					try { if (!techUnlock(state, k)) state.store.player.tech[k] = true; } finally { ST._applyingNet = false; }
-					log("SYNC: tech od drużyny odblokowany:", k);
+					let realU = false;
+					try {
+						realU = techUnlock(state, k);
+						if (!realU) { state.store.player.tech[k] = true; try { ST.FH.events.emit(state, "tech:unlocked", { techId: k, suppressMusic: true }); } catch (e) {} }
+					} finally { ST._applyingNet = false; }
+					log("SYNC: tech od drużyny odblokowany:", k, realU ? "(REAL)" : "(FALLBACK flaga — patch _techMod nie pasuje!)");
 				}
 			}
 			if (msg.pg && state.store.progression) Object.assign(state.store.progression, msg.pg);
@@ -1623,7 +1627,10 @@
 				if (msg.list && msg.list.length) {
 					let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
 					for (const s of msg.list) { if (s.x < x0) x0 = s.x; if (s.x > x1) x1 = s.x; if (s.y < y0) y0 = s.y; if (s.y > y1) y1 = s.y; }
-					ST._hostDemolRect = { x0: x0 - 2, y0: y0 - 2, x1: x1 + 6, y1: y1 + 6, t: performance.now() };
+					// src:'client' → sweep usunie TYLKO pominięte struktury, BEZ pasa osieroconych kafli
+					// (fix TCentraL: "area delete wokół obiektu / znika grunt" — kafle malowanych fundamentów
+					// bez struktury na każdej komórce wpadały w margines i były zjadane przy każdej rozbiórce)
+					ST._hostDemolRect = { x0: x0 - 2, y0: y0 - 2, x1: x1 + 6, y1: y1 + 6, t: performance.now(), src: "client" };
 				}
 			} else if (msg.k === "upg") {
 				// zakup ulepszenia klienta (wspólna pula): ustaw poziom + odejmij koszt autorytatywnie
@@ -1643,11 +1650,13 @@
 					if (state.store.player && state.store.player.tech && !state.store.player.tech[msg.id]) {
 						deductCosts(state, msg.cost);
 						// PEŁNY unlock (budynki/itemy/mapa + własny emit tech:unlocked); fallback = goła flaga
-						if (!techUnlock(state, msg.id)) {
+						const real = techUnlock(state, msg.id);
+						if (!real) {
 							state.store.player.tech[msg.id] = true;
 							try { ST.FH.events.emit(state, "tech:unlocked", { techId: msg.id, suppressMusic: true }); } catch (e) {}
 						}
-						log("HOST: tech klienta odblokowany (pełny unlock):", msg.id);
+						// log MÓWI PRAWDĘ (raport TCentraL: "pełny unlock" drukował się też przy gołej fladze):
+						log("HOST: tech klienta odblokowany:", msg.id, real ? "(REAL unlockTech)" : "(FALLBACK flaga — patch _techMod nie pasuje do tego builda gry!)");
 					}
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "story") {
@@ -2404,7 +2413,9 @@
 						// zostały w świecie — rozbiórka gry czyści komórki tylko przy usuwaniu ŻYWEJ struktury.
 						// Rozpoznanie: sim.cellIds → id terenu (1..1000) → sim.terrainType[id]. Usuwamy przez
 						// FH.terrains.removeAt WYŁĄCZNIE komórki bez żywej struktury (kafel Block bez struktury = śmieć).
-						try {
+						// UWAGA: pas kafli TYLKO dla celowego przeciągnięcia HOSTA (src!=='client') — przy rozbiórce
+						// klienta zjadał sąsiednie kafle malowanych fundamentów (raport TCentraL "area delete").
+						if (hd.src !== "client") try {
 							const sh = state.shared || {};
 							const simc = sh.sim && sh.sim.cellIds, tt = sh.sim && sh.sim.terrainType;
 							const TR = ST.FH.terrains;
