@@ -51,6 +51,26 @@
       ]
     },
     {
+      "name": "drone deploy hook (_drone)",
+      "critical": false,
+      "variants": [
+        {
+          "anchor": "E=(e,t)=>{e.store.drones.push(t)}",
+          "patched": "E=(e,t)=>{window.SandTogether&&window.SandTogether._drone&&window.SandTogether._drone(e,t);e.store.drones.push(t)}"
+        }
+      ]
+    },
+    {
+      "name": "projectile fire hook (_proj)",
+      "critical": false,
+      "variants": [
+        {
+          "anchor": "e.store.projectiles.push(f)",
+          "patched": "(window.SandTogether&&window.SandTogether._proj&&window.SandTogether._proj(e,f),e.store.projectiles.push(f))"
+        }
+      ]
+    },
+    {
       "name": "grabber host-side hook (_grab)",
       "critical": false,
       "variants": [
@@ -151,6 +171,10 @@
         {
           "anchor": "try{let{start:t,end:n}=H(e);const o=b.FH.action.getSelected(e)",
           "patched": "try{let{start:t,end:n}=H(e);if(window.SandTogether&&window.SandTogether._demol&&window.SandTogether._demol(e,t,n)){a.action.customData=null;return}const o=b.FH.action.getSelected(e)"
+        },
+        {
+          "anchor": "try{let{start:t,end:n}=L(e);const s=g.FH.action.getSelected(e)",
+          "patched": "try{let{start:t,end:n}=L(e);if(window.SandTogether&&window.SandTogether._demol&&window.SandTogether._demol(e,t,n)){a.action.customData=null;return}const s=g.FH.action.getSelected(e)"
         }
       ]
     },
