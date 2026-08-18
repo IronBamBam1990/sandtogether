@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.43-beta — GRABBER RESPECTS RESEARCH GATES (fixes the report by derErste67: as the joining player you could collect water without the water-pickup research). The host-side harvest now enforces the same rule as the vanilla grabber: liquids require the grabber waterGrab upgrade — which is team-shared, so once anyone researches it, everyone can. Non-grabbable elements are filtered by their config on the host too. Includes 0.9.42: research is FULLY shared (buildings, items and the map materialize for the whole team, not just the researcher — fixes ЗаКеЛьМан\'s report). Auto-updates on next launch.',
+    changeNote: 'v0.9.44-beta — GRABBER NO LONGER MIXES MATERIALS (second report by derErste67, thanks for the fast re-test!). The vanilla grabber locks its tank to ONE element type — the first thing you grab — but the host-side harvest was scooping everything in radius (dirt + stone + gold in one tank). It now locks to the first collected type exactly like vanilla, and the client sends its tank\'s locked type so refills stay pure too. Includes 0.9.43 (liquids require the team\'s waterGrab research) and 0.9.42 (research fully shared: buildings, items, map). Auto-updates on next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

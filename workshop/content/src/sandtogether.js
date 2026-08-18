@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.43-beta";
+	const VER = "0.9.44-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1360,8 +1360,8 @@
 					for (let i = 2; i < B.length; i++) if (B[i] === 0) free++;
 					if (free > 0) {
 						ST._grabTool = tool; // zapamiętaj do wypełnienia tanku po odpowiedzi hosta
-						try { net.send({ t: "act", k: "grabH", x: cp.x | 0, y: cp.y | 0, f: free }); } catch (e) {}
-						if ((ST._grabHDiag = (ST._grabHDiag || 0) + 1) <= 40) log("CLIENT grabH forward @", cp.x | 0, cp.y | 0, "free=" + free);
+						try { net.send({ t: "act", k: "grabH", x: cp.x | 0, y: cp.y | 0, f: free, lt: B[0] || 0 }); } catch (e) {}
+						if ((ST._grabHDiag = (ST._grabHDiag || 0) + 1) <= 40) log("CLIENT grabH forward @", cp.x | 0, cp.y | 0, "free=" + free, "lock=" + (B[0] || 0));
 					}
 				}
 			}
@@ -1391,6 +1391,10 @@
 		const wg = state.store.upgrades && state.store.upgrades.grabber && state.store.upgrades.grabber.waterGrab;
 		const canLiquid = !!(wg && wg.level);
 		let gateSkipped = 0;
+		// JEDEN TYP NA TANK (fix derErste67 #2: "grabbing dirt also grabs stone and gold"): vanilla
+		// blokuje tank na PIERWSZYM złapanym typie (T[0]; `if(L&&U!==L)continue`). Klient może przysłać
+		// zablokowany typ tanku (msg.lt); przy pustym tanku pierwszy zebrany element definiuje blokadę.
+		let lockType = (typeof msg.lt === "number" && msg.lt > 0) ? msg.lt : 0;
 		const R = 4; let taken = 0;
 		for (let dy = -R; dy <= R && taken < cap; dy++)
 			for (let dx = -R; dx <= R && taken < cap; dx++) {
@@ -1402,6 +1406,8 @@
 					const cfg = el.getConfig ? el.getConfig(info.elementType) : null;
 					if (cfg && cfg.isGrabbable === false) continue;
 					if (ST._mtLiquid !== null && cfg && cfg.matterType === ST._mtLiquid && !canLiquid) { gateSkipped++; continue; } // płyn bez badania waterGrab
+					if (lockType && info.elementType !== lockType) continue; // tank przyjmuje tylko JEDEN typ (jak vanilla)
+					if (!lockType) lockType = info.elementType;
 					removeAt(state, x, y);
 					markCellDirty(state, x, y);
 					types.push(info.elementType);
