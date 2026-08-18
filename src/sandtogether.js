@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.41-beta";
+	const VER = "0.9.42-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1155,6 +1155,20 @@
 			}
 		} catch (e) {}
 	}
+	// PRAWDZIWE odblokowanie tech (fix ЗаКеЛьМан: "kolega zbadał mapę, ja jej nie mam").
+	// Samo `tech[id]=true` NIE wystarcza: unlockTech gry rejestruje budynki w menu, tworzy
+	// przedmioty do ekwipunku i emituje tech:mapUnlocked (minimapa!). _techMod = eksport
+	// modułu 77135 przez patch "tech module export".
+	function techUnlock(state, techId) {
+		try {
+			const tm = ST._techMod;
+			if (tm && tm.unlockTech && tm.getTechDefinition) {
+				const def = tm.getTechDefinition(techId);
+				if (def) { tm.unlockTech(state, def, { suppressMusic: true }); return true; }
+			}
+		} catch (e) { log("techUnlock error:", techId, e.message); }
+		return false;
+	}
 	function fpArr(state) { // surowa tablica SAB (do zapisu u klienta)
 		try {
 			const w = ST.FH.workers;
@@ -1190,7 +1204,14 @@
 				}
 			}
 			if (msg.th && state.store.player && state.store.player.tech) {
-				for (const k of Object.keys(msg.th)) if (msg.th[k]) state.store.player.tech[k] = msg.th[k];
+				for (const k of Object.keys(msg.th)) {
+					if (!msg.th[k] || state.store.player.tech[k]) continue;
+					// NOWY tech od hosta → PEŁNY unlock u klienta (menu budynków, itemy do ekwipunku, MAPA!)
+					// — goła flaga zostawiała UI martwe ("kolega zbadał mapę, ja jej nie mam" — ЗаКеЛьМан)
+					ST._applyingNet = true;
+					try { if (!techUnlock(state, k)) state.store.player.tech[k] = true; } finally { ST._applyingNet = false; }
+					log("SYNC: tech od drużyny odblokowany:", k);
+				}
 			}
 			if (msg.pg && state.store.progression) Object.assign(state.store.progression, msg.pg);
 				ST._resSnapshot = Object.assign({}, state.store.resources); // re-baza dla przyrostów klienta (dotNine)
@@ -1603,10 +1624,13 @@
 				ST._applyingNet = true;
 				try {
 					if (state.store.player && state.store.player.tech && !state.store.player.tech[msg.id]) {
-						state.store.player.tech[msg.id] = true;
 						deductCosts(state, msg.cost);
-						try { ST.FH.events.emit(state, "tech:unlocked", { techId: msg.id, suppressMusic: true }); } catch (e) {}
-						log("HOST: tech klienta odblokowany:", msg.id);
+						// PEŁNY unlock (budynki/itemy/mapa + własny emit tech:unlocked); fallback = goła flaga
+						if (!techUnlock(state, msg.id)) {
+							state.store.player.tech[msg.id] = true;
+							try { ST.FH.events.emit(state, "tech:unlocked", { techId: msg.id, suppressMusic: true }); } catch (e) {}
+						}
+						log("HOST: tech klienta odblokowany (pełny unlock):", msg.id);
 					}
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "story") {

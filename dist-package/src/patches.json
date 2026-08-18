@@ -165,6 +165,16 @@
       ]
     },
     {
+      "name": "tech module export (_techMod)",
+      "critical": false,
+      "variants": [
+        {
+          "anchor": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>_,",
+          "patched": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>_,});window.SandTogether&&(window.SandTogether._techMod=t);n.d(t,{"
+        }
+      ]
+    },
+    {
       "name": "achievements with mods",
       "variants": [
         {

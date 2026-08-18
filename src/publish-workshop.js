@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.41-beta — COMMUNITY macOS RELEASE! Merged two pull requests by DwoaC (thank you!): a fully TESTED macOS installer + launcher (verified LAN co-op on two Apple Silicon Macs — install.command / SandTogether-Launch.command replace the blind-built 0.9.40 scripts) and the root-cause fix for Steam invites on macOS (the Mac Steam library reports callback fields in snake_case — invites should now complete; Mac players, please confirm!). Plus two bugs DwoaC reported, fixed: the LAN host no longer shows a false OLD-mod warning (the server never said hello, so the client could not answer), and red foundation tiles left by CLIENT demolishes are now swept too. Windows auto-updater pulls this in on next launch.',
+    changeNote: 'v0.9.42-beta — RESEARCH NOW FULLY SHARED (fixes the report by ЗаКеЛьМан: "my friend studied the map, but I do not have it"). Root cause: syncing the tech FLAG was not enough — unlocking research in this game also registers buildings in the build menu, adds the unlocked items to your inventory and enables the MAP. The mod now calls the real unlock routine of the game on both sides, so when any teammate researches something, everyone gets the buildings, the items AND the map. Works on Steam and LAN. Auto-updates on next launch (or run the installer once if you never have).',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
