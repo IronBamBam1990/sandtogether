@@ -183,6 +183,36 @@
       ]
     },
     {
+      "name": "volcanizer lava hook (_volc)",
+      "critical": false,
+      "variants": [
+        {
+          "anchor": "p=s;(0,At.Lu)(e,h,p,e=>{ie.FH.world.isCellEmpty(e,h,p)&&ie.FH.elements.createAt(e,h,p,D.RJ.Lava",
+          "patched": "p=s;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,p),(0,At.Lu)(e,h,p,e=>{ie.FH.world.isCellEmpty(e,h,p)&&ie.FH.elements.createAt(e,h,p,D.RJ.Lava"
+        }
+      ]
+    },
+    {
+      "name": "caulkBlaster spray hook (_caulk)",
+      "critical": false,
+      "variants": [
+        {
+          "anchor": "h=i;(0,At.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,xu.caulkElementType",
+          "patched": "h=i;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h),(0,At.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,xu.caulkElementType"
+        }
+      ]
+    },
+    {
+      "name": "caulkBlaster remove hook (_caulkRm)",
+      "critical": false,
+      "variants": [
+        {
+          "anchor": "const s=t,i=n,l=a;return(0,At.Lu)(e,s,i,e=>{ie.FH.elements.getResolvedTypeAtPos(e,s,i)!==l?",
+          "patched": "const s=t,i=n,l=a;return window.SandTogether&&window.SandTogether._caulkRm&&window.SandTogether._caulkRm(e,s,i),(0,At.Lu)(e,s,i,e=>{ie.FH.elements.getResolvedTypeAtPos(e,s,i)!==l?"
+        }
+      ]
+    },
+    {
       "name": "demolish module exports (pipeZn/areaL)",
       "critical": false,
       "variants": [

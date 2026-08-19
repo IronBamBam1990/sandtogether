@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.47-beta";
+	const VER = "0.9.48-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -341,7 +341,7 @@
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; // nowa sesja klienta
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
-				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); // stan z poprzedniej sesji = inne współrzędne/świat
+				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
 				setStatus(t("joined", ev.transport));
 			} else if (ev.kind === "peer-hello" || ev.kind === "peer-connected") {
 				if (!ST.peers.has(ev.id)) ST.peers.set(ev.id, { nick: ev.nick || "?", x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
@@ -362,7 +362,7 @@
 			} else if (ev.kind === "stopped") {
 				if (ST.state) profileSave(ST.state); // przed resetem roli (isClientSync jeszcze true)
 				ST.net.role = "idle"; ST.peers.clear(); removeAllPeerPuppets(); setStatus(t("offline"), "#aaa"); showInviteButton(false); ST.net.lobbyId = null; updateLobbyIdDisplay(); updatePingDisplay();
-				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear();
+				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = [];
 				ST._gotHostWorld = false;
 				setClientPaused(false);
 			} else if (ev.kind === "reconnecting") { setStatus(t("reconnecting", ev.attempt), "#fd5");
@@ -1443,6 +1443,12 @@
 	// (jego współrzędne nie mają sensu w świecie hosta).
 	ST._fire = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return false; if (ST._fireQ.length < 2000) ST._fireQ.push(x, y); return true; };
 	ST._cryo = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._cryoQ.length < 2000) ST._cryoQ.push(x, y); };
+	// volcanizer (lawa) + caulkBlaster (spray/usuwanie caulku): ten sam wzorzec co cryo — sekwencja
+	// przed Lu (lokalne Lu i tak dropowane u klienta), batch co 60ms, host odtwarza z guardami.
+	ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = [];
+	ST._volc = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._volcQ.length < 2000) ST._volcQ.push(x, y); };
+	ST._caulk = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._caulkQ.length < 2000) ST._caulkQ.push(x, y); };
+	ST._caulkRm = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._caulkRmQ.length < 2000) ST._caulkRmQ.push(x, y); };
 
 	function hostHarvestVacuum(msg, fromId) {
 		const state = ST.state;
@@ -1856,6 +1862,38 @@
 					}
 				} finally { ST._applyingNet = false; }
 				if (!ST._fireLogged) { ST._fireLogged = true; log("HOST: ogień klienta odtworzony (z ochroną terenu),", c.length / 2, "komórek"); }
+			} else if (msg.k === "volcB") {
+				// lawa volcanizera klienta: TYLKO w puste komórki (jak vanilla isCellEmpty) — teren nietykalny
+				const elV = ST.FH.elements, cV = msg.c || [];
+				ST._applyingNet = true;
+				try { for (let i = 0; i + 1 < cV.length; i += 2) { try { if (ST.FH.world && ST.FH.world.isCellEmpty && ST.FH.world.isCellEmpty(state, cV[i], cV[i + 1]) && elV && elV.createAt) elV.createAt(state, cV[i], cV[i + 1], 19 /* RJ.Lava */); } catch (e) {} } } finally { ST._applyingNet = false; }
+				if (!ST._volcLogged) { ST._volcLogged = true; log("HOST: lawa klienta odtworzona,", cV.length / 2, "komórek"); }
+			} else if (msg.k === "caulkB") {
+				// spray caulku: typ elementu rozwiązywany dynamicznie (mod-element, runtime id); tylko puste komórki
+				const elC = ST.FH.elements, cC = msg.c || [];
+				let caulkTy = null;
+				try { caulkTy = elC && elC.getElementTypeFromId && elC.getElementTypeFromId(state, "caulk"); } catch (e) {}
+				ST._applyingNet = true;
+				try { if (caulkTy != null) for (let i = 0; i + 1 < cC.length; i += 2) { try { if (ST.FH.world && ST.FH.world.isCellEmpty && ST.FH.world.isCellEmpty(state, cC[i], cC[i + 1]) && elC.createAt) elC.createAt(state, cC[i], cC[i + 1], caulkTy); } catch (e) {} } } finally { ST._applyingNet = false; }
+				if (!ST._caulkLogged) { ST._caulkLogged = true; log("HOST: caulk klienta odtworzony,", cC.length / 2, "komórek (typ=" + caulkTy + ")"); }
+			} else if (msg.k === "caulkRmB") {
+				// usuwanie caulku: 1:1 z logiką gry — element caulk → elements.removeAt; teren TYLKO gdy
+				// isPosTerrainId 'solidite' → terrains.removeAt. Żaden inny teren nie jest dotykany.
+				const elR = ST.FH.elements, trR = ST.FH.terrains, cR = msg.c || [];
+				let caulkTy2 = null;
+				try { caulkTy2 = elR && elR.getElementTypeFromId && elR.getElementTypeFromId(state, "caulk"); } catch (e) {}
+				ST._applyingNet = true;
+				try {
+					for (let i = 0; i + 1 < cR.length; i += 2) {
+						const x = cR[i], y = cR[i + 1];
+						try {
+							const ty = elR && elR.getResolvedTypeAtPos && elR.getResolvedTypeAtPos(state, x, y);
+							if (caulkTy2 != null && ty === caulkTy2) { if (elR.removeAt) elR.removeAt(state, x, y); }
+							else if (trR && trR.isPosTerrainId && trR.isPosTerrainId(state, x, y, "solidite") && trR.removeAt) trR.removeAt(state, x, y);
+						} catch (e) {}
+					}
+				} finally { ST._applyingNet = false; }
+				if (!ST._caulkRmLogged) { ST._caulkRmLogged = true; log("HOST: usuwanie caulku klienta odtworzone,", cR.length / 2, "komórek"); }
 			} else if (msg.k === "cryoB") {
 				const el = ST.FH.elements, c = msg.c || [];
 				ST._applyingNet = true;
@@ -2510,6 +2548,9 @@
 			// flush batchy ognia/lodu co ~60 ms
 			if (ST._fireQ.length && now - (ST._lastFireB || 0) > 60) { ST._lastFireB = now; try { net.send({ t: "act", k: "fireB", c: ST._fireQ }); } catch (e) {} ST._fireQ = []; }
 			if (ST._cryoQ.length && now - (ST._lastCryoB || 0) > 60) { ST._lastCryoB = now; try { net.send({ t: "act", k: "cryoB", c: ST._cryoQ }); } catch (e) {} ST._cryoQ = []; }
+			if (ST._volcQ.length && now - (ST._lastVolcB || 0) > 60) { ST._lastVolcB = now; try { net.send({ t: "act", k: "volcB", c: ST._volcQ }); } catch (e) {} ST._volcQ = []; }
+			if (ST._caulkQ.length && now - (ST._lastCaulkB || 0) > 60) { ST._lastCaulkB = now; try { net.send({ t: "act", k: "caulkB", c: ST._caulkQ }); } catch (e) {} ST._caulkQ = []; }
+			if (ST._caulkRmQ.length && now - (ST._lastCaulkRmB || 0) > 60) { ST._lastCaulkRmB = now; try { net.send({ t: "act", k: "caulkRmB", c: ST._caulkRmQ }); } catch (e) {} ST._caulkRmQ = []; }
 			// Podpowiedź: połączony, ale host nie wysłał jeszcze świata (brak paczek do odrzucenia = gracz widzi "nic")
 			if (!ST.wsx.everApplied && !ST.wsx.mismatchLogged && ST.peers.size > 0 && now - (ST._waitHintT || 0) > 3000) {
 				ST._waitHintT = now;
