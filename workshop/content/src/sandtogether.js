@@ -157,6 +157,19 @@
 			paused: false,        // client: czy sim zapauzowany
 			applyCount: 0, applyBytes: 0, statT: 0, statTxt: "",
 			mismatchWarned: false,
+			bpc: 0,               // host: EMA of compressed bytes per chunk, sizes each batch to a byte budget
+			lastNear: 0,          // host: fast lane usage last batch, splits the budget between the two lanes
+			// Congestion control. Without it the host pushes whatever the sim dirties (measured 349 KB/s)
+			// into Steam's send buffer, which then grows without bound. Reliable is ORDERED, so the client
+			// replays history instead of seeing the present (measured ~60 s behind).
+			// Backlog kept HERE coalesces: rowH compares against the last SENT state, so a chunk touched
+			// 50 times while queued sends once, current. Backlog in the network buffer does not coalesce.
+			// So we measure how far behind the client is and throttle ourselves. Choppier updates beat
+			// time travel.
+			seq: 0,               // host: sequence number of the next wc batch, echoed back by clients
+			ackSeen: false,       // host: has any client ever acked, so older clients never throttle anyone
+			lag: 0,               // host: seq minus the slowest ack, in batches (1 batch is ~100 ms)
+			rate: 1,              // host: byte budget multiplier driven by AIMD below
 		},
 		// struktury/zasoby/vacuum
 		_applyingNet: false,      // tłumik pętli eventów przy aplikowaniu zmian z sieci
@@ -372,11 +385,13 @@
 				ST.net.role = "host"; ST.net.transport = ev.transport;
 				setStatus(ev.transport === "steam" ? t("hosting_steam") : t("hosting_lan", ev.port));
 				ST.net.lobbyId = ev.lobbyId || null; ST._autoSentWid = null; // reset auto-send; zapamiętaj lobbyId
+				resetWorldQueue(); // new host session starts clean, peer-connected re-queues the full world
 					updateLobbyIdDisplay();
 					if (ev.transport === "steam") showInviteButton(true);
 			} else if (ev.kind === "joined") {
 				ST.net.role = "client"; ST.net.transport = ev.transport;
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; // nowa sesja klienta
+				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
 				ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
@@ -407,6 +422,8 @@
 				ST.net.role = "idle"; ST.peers.clear(); removeAllPeerPuppets(); setStatus(t("offline"), "#aaa"); showInviteButton(false); ST.net.lobbyId = null; updateLobbyIdDisplay(); updatePingDisplay();
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = [];
 				ST._gotHostWorld = false;
+				ST._lastAppliedSq = null; // drop the ack so it cannot throttle the next session
+				resetWorldQueue();        // queue, row hashes and congestion state are all per session
 				setClientPaused(false);
 			} else if (ev.kind === "reconnecting") { setStatus(t("reconnecting", ev.attempt), "#fd5");
 			} else if (ev.kind === "version-mismatch") setStatus(t("ver_mismatch"), "#f66");
@@ -493,6 +510,13 @@
 			}
 		} else if (msg.t === "wc") {
 			applyWorldBatch(msg).catch((e) => log("apply error:", e.message));
+		} else if (msg.t === "wcack") {
+			// Client acks the last APPLIED batch. This is the only signal we have for how far behind it is:
+			// Steam's send buffer is invisible to us and sendP2PPacket never reports that it is full.
+			if (ST.net.role === "host" && typeof msg.sq === "number") {
+				const p = ST.peers.get(from);
+				if (p) { p.ackSq = msg.sq; ST.wsx.ackSeen = true; } // per peer, so the slowest one governs
+			}
 		} else if (msg.t === "act") {
 			if (ST.net.role === "host") replayAction(msg, from);
 		} else if (msg.t === "st") {
@@ -641,6 +665,19 @@
 		log("Pełny świat zakolejkowany:", d.cx * d.cy, "chunków");
 	}
 
+	// Mirror queue and congestion state are SESSION state, like _grabbedCells and _fireQ. They were the
+	// only part never reset. A host that stopped and hosted again started with the previous session's
+	// backlog, and worse, with row hashes from the previous world, so chunks counted as "unchanged" and
+	// were never sent at all.
+	function resetWorldQueue() {
+		ST.wsx.pending.clear();
+		ST.wsx.priority.clear();
+		if (ST.wsx.rowH) ST.wsx.rowH.clear();   // stale hashes would suppress sends in the new world
+		ST.wsx.sweep = 0;
+		ST.wsx.bpc = 0; ST.wsx.lastNear = 0;    // re-measure chunk cost, the new world compresses differently
+		ST.wsx.seq = 0; ST.wsx.ackSeen = false; ST.wsx.lag = 0; ST.wsx.rate = 1; // start un-throttled
+	}
+
 	function scanDirty(state) {
 		try {
 			const flags = state.shared.sim && state.shared.sim.chunkShouldUpdate;
@@ -661,28 +698,76 @@
 		// rolling sweep — samonaprawa przeoczonych chunków (4 na batch)
 		for (let k = 0; k < 4; k++) { w.pending.add(w.sweep % total); w.sweep++; }
 		if (!w.pending.size) return;
+		// --- Congestion control: how far behind is the SLOWEST client? ---
+		// Clients ack the last APPLIED batch, so lag catches a saturated link and a client that cannot
+		// keep up applying. A client that never acks (older mod version) throttles nobody, fail open.
+		{
+			let minAck = null;
+			for (const p of ST.peers.values()) if (typeof p.ackSq === "number" && (minAck === null || p.ackSq < minAck)) minAck = p.ackSq;
+			if (w.ackSeen && minAck !== null) {
+				w.lag = Math.max(0, w.seq - minAck);  // in batches, so lag 600 literally reads as 60 s behind
+				// AIMD with a 4..8 dead zone. The measurement carries ~1 batch of ack age plus RTT, so a
+				// healthy link sits around 2-3. Thresholds have to clear that noise, otherwise we would
+				// throttle a connection with nothing wrong with it.
+				if (w.lag > 8) w.rate = Math.max(0.03, w.rate * 0.85);        // over 0.8 s behind, cut hard
+				else if (w.lag <= 4) w.rate = Math.min(1, w.rate * 1.05);     // keeping up, give back slowly
+				// Hard stop. The buffer is so full that shrinking batches cannot drain it in time. Send
+				// nothing at all: pending grows here instead, where chunks coalesce, so the client gets
+				// one current state rather than replaying every intermediate frame in order.
+				if (w.lag > 25) {
+					if (now - (w.stallLogT || 0) > 2000) { w.stallLogT = now; log("CONGESTION: client", w.lag, "batches behind (~" + Math.round(w.lag / 10) + " s), pausing sends, queue", w.pending.size); }
+					w.lastBatch = now; // hold the 100 ms cadence while stalled, else the sweep runs every frame
+					return;
+				}
+			} else w.lag = 0;
+		}
 		w.busy = true; w.lastBatch = now;
 		try {
 			// DWA PASMA (fix "kolejka 8600, klient widzi świat sprzed 20s" — wielka mapa brudzi się szybciej
 			// niż stary limit 40/batch, a sort po odległości GŁODZIŁ dalekie chunki w nieskończoność):
 			// fast lane = WSZYSTKIE brudne w promieniu FAST_R od dowolnego gracza (to widzą gracze — zawsze świeże),
-			// slow lane = stała porcja najstarszych z reszty (Set iteruje w kolejności wstawienia → FIFO, zero głodzenia).
+			// slow lane = porcja najstarszych z reszty (Set iteruje w kolejności wstawienia → FIFO, zero głodzenia).
+			//
+			// Adaptive budget. slowN used to be FIXED (20 or 40), so far lane drain never grew with the
+			// backlog. A far chunk's delay is |far| / slowN, which rose linearly with base size and time
+			// played. Now the portion grows with the queue but is capped by a BYTE budget (bpc is the
+			// measured average compressed chunk size) scaled by w.rate from the controller above.
 			const anchors = [{ x: state.store.player.x / 4, y: state.store.player.y / 4 }];
 			for (const p of ST.peers.values()) anchors.push({ x: p.tx / 4, y: p.ty / 4 });
 			const FAST_R = 24 * CHUNK; // ~2 ekrany wokół gracza (Manhattan, w komórkach)
+			const budget = Math.floor(96 * 1024 * w.rate);  // ~96 KB compressed per batch, a 960 KB/s ceiling at rate 1
+			const bpc = w.bpc || 512;                       // measured compressed bytes per chunk, updated after deflate
+			// Floor of 2, not 8. At the measured bpc of ~2 KB a floor of 8 still held ~310 KB/s, which is
+			// nearly the 349 KB/s that caused the jam: the controller had nowhere to go and degenerated
+			// into pure on/off stalling.
+			const maxN = Math.max(2, Math.min(400, Math.floor(budget / bpc)));
+			const nearN = Math.min(120, maxN);              // what players can actually see gets the budget first
+			// Fast lane usage from the PREVIOUS batch, which is stable frame to frame. Without it we
+			// reserved all 120 slots even when nothing near the players was dirty, so the far lane got
+			// scraps on a link that was doing nothing.
+			const nearEst = Math.min(nearN, w.lastNear || 0);
+			// The floor min(20, maxN) must not exceed maxN, otherwise throttling would never take effect
+			const slowN = Math.max(Math.min(20, maxN), Math.min(maxN - nearEst, Math.ceil(w.pending.size / 20)));
 			const near = [], far = [];
 			for (const a of w.pending) {
+				// Early break. The Set is FIFO, so the first nearN and slowN hits are EXACTLY the chunks a
+				// full scan would pick. Without it every batch walked the WHOLE queue (O(|pending|)) and
+				// allocated a far array of that size 10x per second, on the renderer thread inside the
+				// frame hook. Bigger backlog gave longer frames, fewer batches per second, and a bigger
+				// backlog again, which is why lag grew the longer a session ran.
+				if (near.length >= nearN && far.length >= slowN) break;
 				const ax = (a % d.cx) * CHUNK, ay = Math.floor(a / d.cx) * CHUNK;
 				let dm = 1e9;
 				for (const an of anchors) { const dd = Math.abs(ax - an.x) + Math.abs(ay - an.y); if (dd < dm) dm = dd; }
-				if (dm <= FAST_R) { if (near.length < 120) near.push(a); }
-				else far.push(a);
+				if (dm <= FAST_R) { if (near.length < nearN) near.push(a); }  // cap is budget driven now, was a fixed 120
+				else if (far.length < slowN) far.push(a);                     // stop at slowN, was collecting every far chunk
 			}
-			const slowN = w.pending.size > 3000 ? 40 : 20;
+			w.lastNear = near.length; // feeds nearEst on the next batch
 			// PRIORYTET najpierw (grabber/vacuum) — ZAWSZE wysyłane, omijają limit near/far (fix "re-grab: miroir ne livre pas").
 			const prio = w.priority.size ? [...w.priority] : [];
 			w.priority.clear();
-			const take = prio.concat(near.filter((i) => !prio.includes(i)), far.slice(0, slowN).filter((i) => !prio.includes(i)));
+			// far is already capped to slowN by the loop above, so the old far.slice(0, slowN) is redundant
+			const take = prio.concat(near.filter((i) => !prio.includes(i)), far.filter((i) => !prio.includes(i)));
 			for (const i of take) w.pending.delete(i);
 			// serializacja v4: [u16 cx][u16 cy][u8 cw][u8 ch] + per-komórka: 4 map + 1 wall + 1 shadow + 1 auth + 4 cellIds + 1 elemType = 12 B
 			const parts = [];
@@ -753,12 +838,21 @@
 			const all = new Uint8Array(size);
 			let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
 			const packed = await deflate(all);
-			net.send({ t: "wc", v: 5, wid: state.store.meta && state.store.meta.worldId, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, d: b64enc(packed) });
+			w.seq++; // batch number the client echoes back in wcack
+			net.send({ t: "wc", v: 5, sq: w.seq, wid: state.store.meta && state.store.meta.worldId, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, d: b64enc(packed) });
+			// EMA of what a chunk really costs on the wire, drives the batch budget above. Cheap chunks
+			// (few changed rows) earn a bigger portion, expensive ones a smaller one, so the byte ceiling
+			// holds regardless of what the sim is doing.
+			const bpcNow = packed.length / parts.length;
+			w.bpc = w.bpc ? w.bpc * 0.8 + bpcNow * 0.2 : bpcNow;
 			// statystyki
 			w.applyBytes += packed.length; w.applyCount += parts.length;
 			w.fogSkipped = (w.fogSkipped || 0) + fogSkipped;
 			if (now - w.statT > 2000) {
-				const info = t("sync_up", Math.round(w.applyBytes / 2048), Math.round(w.applyCount / 2), w.pending.size);
+				// lag and rate appended raw, no i18n: this is a diagnostic readout, not player facing text.
+				// Blank when no client acks, so an un-throttled session does not show a misleading zero.
+				const cc = w.ackSeen ? "  lag " + w.lag + " (" + Math.round(w.rate * 100) + "%)" : "";
+				const info = t("sync_up", Math.round(w.applyBytes / 2048), Math.round(w.applyCount / 2), w.pending.size) + cc;
 				setSyncInfo(info);
 				log("SYNC-HOST", info, w.fogSkipped ? "(fog-skip: " + w.fogSkipped + ")" : "");
 				w.applyBytes = 0; w.applyCount = 0; w.statT = now; w.fogSkipped = 0;
@@ -877,6 +971,9 @@
 		}
 		const w = ST.wsx;
 		if (applied > 0) ST._lastWcT = performance.now(); // do wskaźnika zatoru (sync_stalled)
+		// Record the batch AFTER applying it, not on receipt, so the host's lag also catches a client that
+		// is CPU bound, not only a saturated link.
+		if (typeof msg.sq === "number") ST._lastAppliedSq = msg.sq;
 		if (applied > 0 && !w.everApplied) {
 			w.everApplied = true; log("Pierwsze paczki świata zastosowane — lustro działa"); setStatus(t("players", ST.peers.size + 1));
 			profileRestore(state, msg.wid || ST._trustedWid); // wróć tam, gdzie skończyłeś w TYM świecie (G7-lite)
@@ -3065,6 +3162,14 @@
 				ST._rePauseT = now;
 				const mgr = managerWorker(state);
 				if (mgr) try { mgr.postMessage([54, true]); } catch (e) {}
+			}
+			// Mirror ack at 10 Hz, matching the host's batch rate. The host derives its lag from this and
+			// throttles itself. Cheap (~20 B) and sent unordered, so it never queues behind world packets.
+			// A slower ack (2 Hz say) would add ~5 batches of its own age to the measurement and the
+			// controller would throttle a perfectly healthy link.
+			if (ST._lastAppliedSq != null && now - (ST._lastAckT || 0) > 100) {
+				ST._lastAckT = now;
+				try { net.send({ t: "wcack", sq: ST._lastAppliedSq }); } catch (e) {}
 			}
 			sendMyProjectilesIfDue(state);
 			sendResourceDeltaIfDue(state); // wyślij hostowi przyrosty zasobów klienta (dotNine)
