@@ -16,9 +16,9 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.45-beta";
+	const VER = "0.9.46-beta";
 	const AUTHOR = "Kamil Padula";
-	const CONTRIBUTORS = "dotNine";
+	const CONTRIBUTORS = "dotNine + Cr0ss0vr";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
 	const RJ_FIRE = 11, RJ_FREEZINGICE = 12; // wartości enuma RJ z obecnego builda (do createAt na hoście)
 	const CHUNK = 40;
@@ -1630,7 +1630,7 @@
 					// src:'client' → sweep usunie TYLKO pominięte struktury, BEZ pasa osieroconych kafli
 					// (fix TCentraL: "area delete wokół obiektu / znika grunt" — kafle malowanych fundamentów
 					// bez struktury na każdej komórce wpadały w margines i były zjadane przy każdej rozbiórce)
-					ST._hostDemolRect = { x0: x0 - 2, y0: y0 - 2, x1: x1 + 6, y1: y1 + 6, t: performance.now(), src: "client" };
+					ST._hostDemolRect = { x0: x0, y0: y0, x1: x1 + 2, y1: y1 + 2, t: performance.now(), src: "client" };
 				}
 			} else if (msg.k === "upg") {
 				// zakup ulepszenia klienta (wspólna pula): ustaw poziom + odejmij koszt autorytatywnie
