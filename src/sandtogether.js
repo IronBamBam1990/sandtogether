@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.65-beta";
+	const VER = "0.9.66-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1829,6 +1829,13 @@
 			// klocki, których nawet host nie może usunąć". SA.removeAt idzie inną ścieżką i je zdejmuje.
 			// UWAGA: działa też SOLO/offline (zacięte klocki zostają w save'ie i trzeba je móc czyścić bez sesji).
 			if (!isClientSync() || !ST.wsx.paused) {
+				// TRYB RUR (raport TCentraL "removes pipe and blocks"): usuwanie RUR celowo zostawia
+				// struktury/bloki w recie — dobijacz brałby je za zacięte niedobitki QUEUED i zdejmował.
+				// W trybie rur NIE uzbrajamy dobijacza (rury gra usuwa sama, poprawnie).
+				try {
+					const sel = ST.FH.action && ST.FH.action.getSelected && ST.FH.action.getSelected(state);
+					if (sel && String(sel.id).toLowerCase().indexOf("pipe") >= 0) return false;
+				} catch (e) {}
 				ST._hostDemolRect = { x0: Math.floor(Math.min(start.x, end.x)), y0: Math.floor(Math.min(start.y, end.y)), x1: Math.ceil(Math.max(start.x, end.x)), y1: Math.ceil(Math.max(start.y, end.y)), t: performance.now() };
 				return false; // gra rozbiera normalnie; my tylko posprzątamy po niej
 			}

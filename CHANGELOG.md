@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-20 (v0.9.66) — deleting PIPES no longer deletes blocks too (report: TCentraL)
+
+The post-demolish cleanup pass (which removes building tiles the game leaves stuck in a QUEUED state) armed itself on EVERY demolisher drag without knowing the tool mode. Deleting pipes intentionally leaves structures in the selection — the cleanup mistook them for stuck leftovers and removed them. In pipe mode the cleanup no longer arms; the game removes pipes correctly by itself.
+
 ## 2026-08-20 (v0.9.65) — Multiplayer button no longer floats over the Load/Options screens (report: Psychospark89)
 
 Sub-screens replace the main-menu buttons in the DOM, which used to trigger the button's fallback position — it now hides whenever its menu anchor disappears (and recognizes the menu in five game languages: EN/PL/DE/FR/ES).
