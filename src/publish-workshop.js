@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.64 + v0.9.65 — (1) CONGESTION CONTROL for the world sync by new contributor AlyxiaFox (PR #8): the client acks each applied batch, the host measures how far behind the slowest player is and throttles itself — a bandwidth-limited player now sees ONE current world instead of replaying up to 60 s of history; also fixed a long-standing bug where re-hosting could silently skip chunks (mirror queue/hashes were never reset between sessions), and ping/RTT measures the network again instead of the send-queue depth. (2) The Multiplayer menu button no longer floats over the Load/Options screens and recognizes the menu in EN/PL/DE/FR/ES (report: Psychospark89 — also our first confirmed Linux player!). Auto-updates at next launch.',
+    changeNote: 'v0.9.66 + v0.9.67 — GAME UPDATE COMPATIBILITY: Sandustry Update #2 (v0.5.5, Aug 19) renamed game internals and most of the mod stopped working on the new build ("only the host can mine" — reports: Drewby, Tobi1Kenobi). All 22 file patches now have 0.5.5 variants, verified on the new build and still compatible with 0.5.2-0.5.4. IMPORTANT: both players must be on the SAME game version and let the mod auto-update at launch (the red warning in the panel tells you when builds differ). Also: deleting PIPES no longer deletes blocks in the selection too (report: TCentraL). Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
