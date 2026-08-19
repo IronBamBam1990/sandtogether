@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.54-beta";
+	const VER = "0.9.55-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2024,9 +2024,12 @@
 			'<button id="st-join-id">' + t("btn_join_id") + "</button>" +
 			// Wiersz z polem IP dla Join LAN — Electron/Chromium NIE obsługuje window.prompt(),
 			// więc adres wpisuje się tu, w panelu (nie przez dialog przeglądarki).
+			// osobne pola IP i PORT (QoL — TCentraL)
 			'<div id="st-lan-row" style="display:none;margin-top:4px">' +
-			'<input id="st-lan-addr" placeholder="ip or ip:port" value="127.0.0.1:27777" spellcheck="false" ' +
-			'style="width:150px;background:#111;color:#ddd;border:1px solid #555;border-radius:3px;font:11px monospace;padding:2px 4px"> ' +
+			'<input id="st-lan-addr" placeholder="IP" value="127.0.0.1" spellcheck="false" ' +
+			'style="width:104px;background:#111;color:#ddd;border:1px solid #555;border-radius:3px;font:11px monospace;padding:2px 4px">' +
+			'<input id="st-lan-port" placeholder="port" value="27777" spellcheck="false" maxlength="5" ' +
+			'style="width:44px;margin-left:2px;background:#111;color:#ddd;border:1px solid #555;border-radius:3px;font:11px monospace;padding:2px 4px"> ' +
 			'<button id="st-lan-go">' + t("btn_connect") + "</button>" +
 			"</div>" +
 			// czat drużynowy (host relayuje między klientami)
@@ -2044,30 +2047,35 @@
 		hud.querySelector("#st-host").onclick = async () => { setStatus(t("creating_lobby")); const r = await net.hostSteam(); if (!r.ok) setStatus(t("error", r.error), "#f66"); };
 		hud.querySelector("#st-invite").onclick = () => net.invite();
 		hud.querySelector("#st-host-lan").onclick = async () => { const r = await net.hostWs(27777); if (!r.ok) setStatus(t("error", r.error), "#f66"); };
-		// Join LAN: pokaż wbudowane pole na adres (window.prompt nie działa w Electronie) i połącz
+		// Join LAN: osobne pola IP i PORT (QoL — TCentraL); window.prompt nie działa w Electronie
 		const lanRow = hud.querySelector("#st-lan-row");
 		const lanInput = hud.querySelector("#st-lan-addr");
+		const lanPort = hud.querySelector("#st-lan-port");
 		async function doJoinLan() {
-			const addr = (lanInput.value || "").trim();
-			if (!addr) { lanInput.focus(); return; }
-			const [h, p] = addr.split(":");
-			if (!h) { setStatus(t("error", t("join_prompt")), "#f66"); lanInput.focus(); return; }
+			let h = (lanInput.value || "").trim();
+			let p = (lanPort.value || "").trim();
+			// wygoda: wklejenie "ip:port" w pole IP rozdziela się samo
+			if (h.indexOf(":") >= 0) { const parts = h.split(":"); h = parts[0]; if (parts[1]) { p = parts[1]; lanPort.value = p; } lanInput.value = h; }
+			if (!h) { lanInput.focus(); return; }
+			const port = parseInt(p || "27777", 10);
+			if (!(port > 0 && port < 65536)) { setStatus(t("error", "port?"), "#f66"); lanPort.focus(); lanPort.select(); return; }
 			setStatus(t("creating_lobby"));
-			const r = await net.joinWs(h, parseInt(p || "27777", 10));
+			const r = await net.joinWs(h, port);
 			if (!r.ok) setStatus(t("error", r.error), "#f66");
-			else { lanRow.style.display = "none"; lanInput.blur(); } // oddaj klawiaturę grze (input z fokusem połyka WASD)
+			else { lanRow.style.display = "none"; lanInput.blur(); lanPort.blur(); } // oddaj klawiaturę grze
 		}
-		// Klawisze wpisywane w pole IP nie mogą docierać do gry (keyup w grze NIE filtruje INPUT-ów;
-		// bąbelkują do window — stopPropagation na inpucie ucina całą klasę problemu)
-		lanInput.addEventListener("keydown", (e) => e.stopPropagation());
-		lanInput.addEventListener("keyup", (e) => e.stopPropagation());
+		// Klawisze wpisywane w pola nie mogą docierać do gry (keyup w grze NIE filtruje INPUT-ów;
+		// bąbelkują do window — stopPropagation na inputach ucina całą klasę problemu)
+		for (const el2 of [lanInput, lanPort]) {
+			el2.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); doJoinLan(); } });
+			el2.addEventListener("keyup", (e) => e.stopPropagation());
+		}
 		hud.querySelector("#st-join-lan").onclick = () => {
 			const showing = lanRow.style.display !== "none";
 			if (!showing) { lanRow.style.display = "block"; lanInput.focus(); lanInput.select(); }
 			else doJoinLan(); // drugie kliknięcie = połącz z wpisanym adresem
 		};
 		hud.querySelector("#st-lan-go").onclick = doJoinLan;
-		lanInput.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); doJoinLan(); } };
 		// CZAT: wysyłka Enterem/przyciskiem; klawisze nie przeciekają do gry (jak pole LAN)
 		const chatIn = hud.querySelector("#st-chat-in");
 		const chatSend = () => {
