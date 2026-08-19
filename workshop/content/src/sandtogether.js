@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.52-beta";
+	const VER = "0.9.53-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -38,6 +38,7 @@
 			btn_join_lan: "Join LAN", btn_connect: "Connect", btn_stop: "Stop", btn_send_world: "Send world", btn_resync: "Resync",
 			host_paused: "Host paused (menu) — world frozen, will resume automatically", sync_stalled: "No world data from host for {0}s…",
 			reconnecting: "Connection lost — reconnecting (attempt {0}/5)…",
+			left_to_menu: "Left the co-op session (returned to title screen)",
 			chat_ph: "chat message…", chat_me: "You",
 			btn_join_id: "Join by ID (clipboard)", lobby_copied: "Copied!",
 			clipboard_no_id: "Clipboard has no Lobby ID — first click the host's green Lobby ID line to copy it",
@@ -68,6 +69,7 @@
 			btn_join_lan: "Dołącz LAN", btn_connect: "Połącz", btn_stop: "Stop", btn_send_world: "Wyślij świat", btn_resync: "Resync",
 			host_paused: "Host w pauzie (menu) — świat zamrożony, wznowi się sam", sync_stalled: "Brak danych świata od hosta od {0}s…",
 			reconnecting: "Zerwane połączenie — łączę ponownie (próba {0}/5)…",
+			left_to_menu: "Opuszczono sesję co-op (powrót do menu głównego)",
 			chat_ph: "wiadomość czatu…", chat_me: "Ty",
 			btn_join_id: "Dołącz po ID (schowek)", lobby_copied: "Skopiowano!",
 			clipboard_no_id: "Schowek nie zawiera Lobby ID — najpierw kliknij zieloną linię Lobby ID u hosta, żeby je skopiować",
@@ -2630,6 +2632,17 @@
 			if (!ST.wsx.everApplied && !ST.wsx.mismatchLogged && ST.peers.size > 0 && now - (ST._waitHintT || 0) > 3000) {
 				ST._waitHintT = now;
 				setStatus(t("waiting_world"), "#fd5");
+			}
+			// POWRÓT DO MENU TYTUŁOWEGO = wyjście z sesji (sugestia tony.s.jennette): po tym jak lustro
+			// już działało (everApplied), scena 1 oznacza świadome wyjście ze świata — rozłączamy czysto
+			// zamiast zostawiać sesję w limbo. (Przed pierwszym światem klient CZEKA w menu — nie ruszamy.)
+			if (ST.wsx.everApplied && state.store.scene && state.store.scene.active === 1) {
+				log("Klient wrócił do menu tytułowego — opuszczam sesję co-op");
+				profileSave(state); // pozycja/ekwipunek per świat — PRZED zdjęciem pauzy (profileSave wymaga paused)
+				setClientPaused(false);
+				try { net.stop(); } catch (e) {}
+				setStatus(t("left_to_menu"), "#fd5");
+				return; // rola już idle — reszta pętli klienta nie ma sensu w tej klatce
 			}
 			// ZMIANA ŚWIATA u klienta (menu/inny save) → wyczyść stan narzędzi związany z poprzednim światem
 			// (fix tony: "infinite items" — stary _grabTool/tank z poprzedniego świata + ruchy myszy = spam grabPlace)
