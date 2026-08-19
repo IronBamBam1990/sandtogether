@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.48-beta — the big consolidated release. WEAPONS COMPLETE for the joining player: rockets & guns now explode with real host-side physics and deployed drones survive (Knight-HD PR #4 — thank you!), the flamethrower no longer melts terrain/foundations/scenery, and the volcanizer + caulk blaster finally work (lava/caulk only into empty cells, caulk removal exactly by the vanilla rule). Also in this line since the freeze: team chat, per-player memory, machine settings sync, row-delta streaming, AUTO-UPDATE (install once, ever), macOS support (DwoaC), fully shared research (buildings/items/map for the team), grabber research gates + single-type tank, precise client demolish (Cr0ss0vr). If your panel shows an old version: re-run the installer once — auto-update handles everything after.',
+    changeNote: 'v0.9.49-beta — important stability batch from tonight’s community reports: (1) RED-BLOCK CONTAMINATION FIXED — quitting to the menu or loading another world as the joining player no longer paints the co-op world over it (mirror trust is now paired to the exact world you loaded). (2) INFINITE PHANTOM ITEMS fixed — all client actions now require an active world mirror, and tool state resets on world change. (3) Tech nodes researched by a teammate no longer show as unpurchased (no more double-buying to progress). (4) Demolish leftover cleanup retries harder. (5) Streamer-safe lobby id: masked on screen, click copies the full id. Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
