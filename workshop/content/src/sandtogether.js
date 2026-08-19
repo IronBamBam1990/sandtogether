@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.46-beta";
+	const VER = "0.9.47-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1500,10 +1500,24 @@
 	// DN wywoływane przez stworki/drony NIE jest forwardowane (host liczy je sam).
 	ST._dig = (state, x, y, mask, vel, dmg, opts) => {
 		if (!isClientSync()) return false; // host/offline: kop normalnie
-		// Klient ma ZAPAUZOWANĄ symulację → brak kopań AI (stworki/drony liczy host).
-		// Dlatego KAŻDE wywołanie DN na kliencie to akcja gracza lub jego pocisku → forwardujemy.
+		// Pociski są symulowane AUTORYTATYWNIE po stronie hosta (patrz ST._proj) → NIE forwardujemy kopań
+		// z kontekstu pocisku (_projCtx), inaczej podwójne dziury (pocisk klienta + pocisk hosta).
+		if (ST._projCtx) return true; // pomiń: eksplozję/dziurę zrobi pocisk hosta
 		try { net.send({ t: "act", k: "dig", x, y, m: mask, v: vel, d: dmg }); } catch (e) {}
 		return true; // pomiń lokalne wykonanie (i tak zapauzowane)
+	};
+	// _drone (patch bundle na E=deploy): klient wdraża drona LOKALNIE → sync hosta nadpisuje store.drones →
+	// dron znika. Forwardujemy drona do hosta, host dodaje go autorytatywnie (jego sim go "ożywia").
+	ST._drone = (state, drone) => {
+		if (!isClientSync() || ST._applyingNet) return;
+		try { net.send({ t: "act", k: "drone", d: drone }); if ((ST._drDiag = (ST._drDiag || 0) + 1) <= 20) { let _dd = ""; try { _dd = JSON.stringify(drone && drone.data).slice(0, 300); } catch (e) {} log("CLIENT forward drone:", drone && drone.type, "@", drone && drone.x, drone && drone.y, "data=", _dd); } } catch (e) {}
+	};
+	// _proj (patch bundle na projectiles.push): klient odpala broń → pocisk lokalny (sim w pauzie = martwy,
+	// eksplozja nie działa). Forwardujemy pocisk do hosta; host wrzuca go do store.projectiles → jego sim
+	// symuluje lot+eksplozję+dmg autorytatywnie, wynik wraca lustrem/strumieniem encji. (rocket/fusil)
+	ST._proj = (state, proj) => {
+		if (!isClientSync() || ST._applyingNet) return;
+		try { net.send({ t: "act", k: "proj", p: proj }); if ((ST._prDiag = (ST._prDiag || 0) + 1) <= 20) log("CLIENT forward proj:", proj && proj.type, "@", proj && Math.round(proj.x), proj && Math.round(proj.y)); } catch (e) {}
 	};
 	// _setCell (patch B/Gz): KLIENT nigdy nie pisze komórek lokalnie (host-autorytatywnie).
 	// - podczas aplikacji struktury z sieci (_applyingNet): pomiń zapis (teren pokaże lustro mapData hosta)
@@ -1771,6 +1785,17 @@
 				hostHarvestVacuum(msg, fromId);
 			} else if (msg.k === "grabH") {
 				hostHarvestGrab(msg, fromId);
+			} else if (msg.k === "drone") {
+				// klient wdrożył drona → dodaj autorytatywnie do store.drones hosta (jego sim go obsłuży)
+				const d = msg.d;
+				if (d && d.id != null) {
+					const arr = state.store.drones || (state.store.drones = []);
+					if (!arr.some((x) => x && x.id === d.id)) { arr.push(d); if ((ST._drHDiag = (ST._drHDiag || 0) + 1) <= 20) log("HOST: dron klienta dodany", d.type, "@", d.x, d.y, "(drones=" + arr.length + ")"); }
+				}
+			} else if (msg.k === "proj") {
+				// klient odpalił broń → dodaj pocisk do store.projectiles hosta → jego sim symuluje lot+eksplozję
+				const p = msg.p;
+				if (p) { const arr = state.store.projectiles || (state.store.projectiles = []); arr.push(p); if ((ST._prHDiag = (ST._prHDiag || 0) + 1) <= 20) log("HOST: pocisk klienta dodany", p.type, "@", Math.round(p.x), Math.round(p.y), "(proj=" + arr.length + ")"); }
 			} else if (msg.k === "move") {
 				ST._applyingNet = true;
 				try { for (const s of msg.from) removeOne(state, s); for (const s of msg.to) buildOne(state, s); } finally { ST._applyingNet = false; }
