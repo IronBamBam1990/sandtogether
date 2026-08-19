@@ -16,9 +16,9 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.45-beta";
+	const VER = "0.9.48-beta";
 	const AUTHOR = "Kamil Padula";
-	const CONTRIBUTORS = "dotNine";
+	const CONTRIBUTORS = "dotNine + Cr0ss0vr";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
 	const RJ_FIRE = 11, RJ_FREEZINGICE = 12; // wartości enuma RJ z obecnego builda (do createAt na hoście)
 	const CHUNK = 40;
@@ -1582,7 +1582,7 @@
 			}
 			if (!found.size) { log("_demol: pusty rect [" + x0 + "," + y0 + " → " + x1 + "," + y1 + "] — nic do rozbiórki"); return true; }
 			const list = [...found.values()];
-			try { net.send({ t: "act", k: "demolish", list }); } catch (e) {}
+			try { net.send({ t: "act", k: "demolish", list, rect: { x0, y0, x1, y1 } }); } catch (e) {}
 			log("CLIENT demolish rect →", list.length, "struktur");
 			return true; // pomiń lokalną (nie-działającą) rozbiórkę — potwierdzenie przyjdzie przez st rm
 		} catch (e) { return false; }
@@ -1627,10 +1627,15 @@
 				if (msg.list && msg.list.length) {
 					let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
 					for (const s of msg.list) { if (s.x < x0) x0 = s.x; if (s.x > x1) x1 = s.x; if (s.y < y0) y0 = s.y; if (s.y > y1) y1 = s.y; }
-					// src:'client' → sweep usunie TYLKO pominięte struktury, BEZ pasa osieroconych kafli
-					// (fix TCentraL: "area delete wokół obiektu / znika grunt" — kafle malowanych fundamentów
-					// bez struktury na każdej komórce wpadały w margines i były zjadane przy każdej rozbiórce)
-					ST._hostDemolRect = { x0: x0 - 2, y0: y0 - 2, x1: x1 + 6, y1: y1 + 6, t: performance.now(), src: "client" };
+					// Nowy klient przesyła DOKŁADNY rect zaznaczenia. Możemy w nim bezpiecznie posprzątać
+					// osierocone kafle fundamentu; wcześniejszy kod zgadywał obszar z anchorów struktur (+2)
+					// i przez to usuwał zdrowe, malowane fundamenty poza zaznaczeniem. Dla starego klienta
+					// zachowujemy fallback z bboxem, ale bez czyszczenia kafli.
+					const r = msg.rect;
+					const exact = r && [r.x0, r.y0, r.x1, r.y1].every(Number.isFinite) && r.x1 >= r.x0 && r.y1 >= r.y0 && (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) <= 40000;
+					ST._hostDemolRect = exact
+						? { x0: Math.floor(r.x0), y0: Math.floor(r.y0), x1: Math.ceil(r.x1), y1: Math.ceil(r.y1), t: performance.now(), cleanOrphans: true }
+						: { x0: x0, y0: y0, x1: x1 + 2, y1: y1 + 2, t: performance.now(), src: "client" };
 				}
 			} else if (msg.k === "upg") {
 				// zakup ulepszenia klienta (wspólna pula): ustaw poziom + odejmij koszt autorytatywnie
@@ -2407,15 +2412,20 @@
 							log("demolish-dobicie: gra pominęła", leftovers.size, "struktur (kafle QUEUED?) — usuwam przez removeAt");
 							for (const st of leftovers.values()) { try { SA.removeAt(state, st.x, st.y, {}); } catch (e) {} }
 							if (ST.net.role === "host" && ST.peers.size) try { net.send({ t: "st", k: "rm", list: [...leftovers.values()].map(slimStruct) }); } catch (e) {}
+							// removeAt może tylko zakolejkować usunięcie. W tym samym przebiegu getAtCell nadal
+							// widzi strukturę, więc poniższy sweep terenu słusznie nie ruszy jej czerwonych kafli.
+							// Wróć po kolejnych 250 ms, gdy rejestr struktur zdąży się opróżnić. Limit chroni
+							// przed nieskończoną pętlą przy faktycznie nieusuwalnej strukturze.
+							if ((hd.retry || 0) < 3) ST._hostDemolRect = { ...hd, t: performance.now(), retry: (hd.retry || 0) + 1 };
 						}
 						// OSIEROCONE KAFLE ("czerwone klocki"): struktura już NIE istnieje (getAtCell=null — log
 						// "czysto" przy widocznych klockach!), ale komórki-fundament (terrain Block=15/Sliding 16-18)
 						// zostały w świecie — rozbiórka gry czyści komórki tylko przy usuwaniu ŻYWEJ struktury.
 						// Rozpoznanie: sim.cellIds → id terenu (1..1000) → sim.terrainType[id]. Usuwamy przez
 						// FH.terrains.removeAt WYŁĄCZNIE komórki bez żywej struktury (kafel Block bez struktury = śmieć).
-						// UWAGA: pas kafli TYLKO dla celowego przeciągnięcia HOSTA (src!=='client') — przy rozbiórce
-						// klienta zjadał sąsiednie kafle malowanych fundamentów (raport TCentraL "area delete").
-						if (hd.src !== "client") try {
+						// Dla klienta czyścimy kafle tylko wtedy, gdy wiadomość zawierała jego dokładny rect
+						// zaznaczenia; stare klienty z bboxem anchorów nadal omijają ten krok.
+						if (hd.src !== "client" || hd.cleanOrphans) try {
 							const sh = state.shared || {};
 							const simc = sh.sim && sh.sim.cellIds, tt = sh.sim && sh.sim.terrainType;
 							const TR = ST.FH.terrains;
