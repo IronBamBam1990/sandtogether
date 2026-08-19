@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.53-beta";
+	const VER = "0.9.54-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -470,6 +470,9 @@
 			if (ST.net.role === "client") clientFillTanks(msg.types || []);
 		} else if (msg.t === "grabres") {
 			if (ST.net.role === "client") clientFillGrabTank(msg.types || [], msg.offs || null);
+		} else if (msg.t === "grabRef") {
+			// REFUND odkładania (R5): host nie zdołał położyć elementu (komórka zajęta) → oddaj do tanku
+			if (ST.net.role === "client" && typeof msg.et === "number" && msg.et > 0) clientFillGrabTank([msg.et], null);
 		} else if (msg.t === "resync") {
 			if (ST.net.role === "host") { enqueueFullWorld(); ST._lastSnap = 0; }
 		} else if (msg.t === "world-begin") {
@@ -1880,6 +1883,10 @@
 					// DIAG: createAt a-t-il vraiment placé un élément (after∈[MIN,MAX]) ? sinon on saura pourquoi le re-grab échoue
 					if ((ST._grabPlaceHostDiag = (ST._grabPlaceHostDiag || 0) + 1) <= 60)
 						log("HOST grabPlace @", msg.x, msg.y, "et=" + msg.et, "before=" + before, "after=" + after, (after >= ELEMENTS_MIN && after <= ELEMENTS_MAX) ? "[OK placé]" : "[!! rien après createAt — perdu/occupé]");
+					// REFUND (domknięcie R5): vanilla oddaje element do tanku gdy komórka okazała się zajęta —
+					// u klienta refund-callback (Lu) nigdy nie działa, więc host odsyła zwrot jawnie.
+					const placed = after >= ELEMENTS_MIN && after <= ELEMENTS_MAX && after !== before;
+					if (!placed) try { net.send({ t: "grabRef", et: msg.et }, fromId); } catch (e) {}
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "fireB") {
 				// MITYGACJA (Knight-HD: "flamethrower klienta robi dziury w fundamentach/piramidzie"):
