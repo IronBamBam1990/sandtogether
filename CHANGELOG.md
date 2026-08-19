@@ -2,6 +2,12 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-19 (v0.9.63) — instant-kick on join + interleaved world transfers (reports: Akriz, derErste67)
+
+**Instant kick**: joining a host who was still in the MAIN MENU disconnected you within a second. The host was streaming its menu-scene buffers (an old both-in-menu "mirror test mode"), the joining client painted them and marked the mirror as started — which armed the "quit to title = leave session" logic from 0.9.53 and immediately stopped the session. Since the new lobby encourages hosting from the menu, this surfaced as "broken since the Multiplayer button". Fixed on all layers: a host in the menu no longer streams anything, the mirror never paints while you're in the menu (test mode removed), and auto-leave additionally requires that you actually WERE in a world this session. This also explains clients who "mine on their own world" while connected.
+
+**Interleaved transfers**: two world transfers could interleave into one download — the second transfer's header was ignored but its packets still landed in the first one's file, and since the host autosaves between sends, the client assembled a save stitched from TWO versions of the world and loaded a corrupted map (half the world as yellow garbage; digging looked dead because the client's world no longer matched the host's). Every transfer now carries an id, foreign packets are dropped, and the host won't start a new transfer while one is still sending.
+
 ## 2026-08-19 (v0.9.62) — big-map progress + a panel you can actually hide (feedback: TCentraL)
 
 The initial world sync now shows real progress — "host mirror: X KB/s, Y chunk/s — N chunks left" counts down to zero, and the long save-load phase says "Loading the host's world... (a big map can take a few minutes)" instead of looking frozen. Collapsing the panel (header click / Ctrl+Shift+H) now shrinks it to a tiny "ST ●" pill with a status-colored dot instead of leaving the full-width header.

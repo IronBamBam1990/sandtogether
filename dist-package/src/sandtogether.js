@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.62-beta";
+	const VER = "0.9.63-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -386,7 +386,7 @@
 					if (ev.transport === "steam") showInviteButton(true);
 			} else if (ev.kind === "joined") {
 				ST.net.role = "client"; ST.net.transport = ev.transport;
-				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; // nowa sesja klienta
+				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; ST.wsx.wasInWorld = false; // nowa sesja klienta
 				ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
@@ -402,10 +402,10 @@
 				if (ST._nickCustom) { try { net.send({ t: "hello", nick: ST._nickCustom }, ev.id); } catch (e) {} } // nowy peer ma znać nasz własny nick
 				setStatus(t("players", ST.peers.size + 1));
 				if (ST.net.role === "host") {
-					enqueueFullWorld(); // nowy gracz -> pełny świat (mirror)
-					// jeśli host jest już w świecie — wyślij save automatycznie (bez ręcznego "Wyślij świat")
 					const hostInWorld = ST.state && ST.state.store && ST.state.store.scene && ST.state.store.scene.active !== 1;
-					if (hostInWorld) sendWorld();
+					// nowy gracz -> pełny świat (mirror); TYLKO gdy host w świecie — w menu wymiary/bufory
+					// należą do sceny menu (i tak nie streamujemy, patrz gate w frame hooku)
+					if (hostInWorld) { enqueueFullWorld(); sendWorld(); } // save automatycznie, bez ręcznego "Wyślij świat"
 				}
 			} else if (ev.kind === "peer-disconnected") {
 				if (ST.state) profileSave(ST.state); // utrwal profil PRZED ewentualną zmianą stanu (G7-lite)
@@ -551,16 +551,23 @@
 			// (fix TCentraL "went crazy with the retrys"): ignorujemy, dopóki bieżący odbiór się nie skończy.
 			if (ST._worldRx && !ST._worldRx.done) { log("world-begin ZIGNOROWANY — odbiór poprzedniego transferu w toku"); return; }
 			ST._gotHostWorld = true; // otrzymaliśmy świat OD hosta → ufamy jego worldId gdy oboje w grze (patrz applyWorldBatch)
-			ST._worldRx = { name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false };
-			log("world-begin:", msg.name, "-", msg.chunks, "paczek,", Math.round((msg.size || 0) / 1024), "KB");
+			ST._worldRx = { tid: msg.tid, name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false };
+			log("world-begin: tid", msg.tid, "-", msg.name, "-", msg.chunks, "paczek,", Math.round((msg.size || 0) / 1024), "KB");
 			setStatus(t("receiving", 0, msg.chunks), "#ff5");
 			scheduleRxCheck();
 		} else if (msg.t === "world-chunk" && ST._worldRx) {
+			// paczka z INNEGO transferu niż bieżący = przeplot (host autosave'ował między wysyłkami) —
+			// wpuszczenie jej skleja save z dwóch wersji świata → ZEPSUTY świat (raport derErste67)
+			if (ST._worldRx.tid !== undefined && msg.tid !== undefined && msg.tid !== ST._worldRx.tid) {
+				if (!ST._tidDropLogged) { ST._tidDropLogged = true; log("world-chunk z obcego transferu ODRZUCONY (tid " + msg.tid + " ≠ " + ST._worldRx.tid + ")"); }
+				return;
+			}
 			if (ST._worldRx.parts[msg.i] === undefined) { ST._worldRx.parts[msg.i] = msg.data; ST._worldRx.got++; }
 			if (ST._worldRx.got % 20 === 0 || ST._worldRx.got === ST._worldRx.total)
 				setStatus(t("receiving", ST._worldRx.got, ST._worldRx.total), "#ff5");
 			maybeFinishRx();
 		} else if (msg.t === "world-end" && ST._worldRx) {
+			if (ST._worldRx.tid !== undefined && msg.tid !== undefined && msg.tid !== ST._worldRx.tid) return;
 			ST._worldRx.ended = true;
 			maybeFinishRx();
 		} else if (msg.t === "world-need") {
@@ -805,11 +812,13 @@
 		const state = ST.state;
 		const myWid = state.store.meta && state.store.meta.worldId;
 		const myScene = state.store.scene && state.store.scene.active;
-		// wyjątek: oba w menu (scene 1) = tryb testowy lustra, mimo różnych worldId
-		const menuTest = msg.scene === 1 && myScene === 1;
+		// Dawny "tryb testowy" (oba w menu → maluj mimo menu) USUNIĘTY (fix instant-kick, Akriz+derErste67):
+		// malował menu-bufory hosta po menu klienta i ustawiał everApplied w menu → auto-wyjście
+		// natychmiast rozłączało świeżo dołączonego gracza. Lustro w menu NIE MALUJE NIGDY.
+		const menuTest = false;
 		// KLIENT W MENU (fix tony: "menu główne zamienia się w czerwone bloki"): lustro hosta NIE MOŻE
 		// malować po scenie menu — dane świata lądowały w buforach sceny menu jako czerwone kafle.
-		if (myScene === 1 && !menuTest) return;
+		if (myScene === 1) return;
 		// ŁADOWANIE ŚWIATA W TOKU (fix TCentraL "big map freeze"): pisanie po buforach świata
 		// w TRAKCIE FH.game.load = wyścig z silnikiem wczytującym save (zwiecha/korupcja).
 		// Dropujemy — AUTO-RESYNC po starcie lustra i tak dośle pełny świat.
@@ -2273,6 +2282,12 @@
 			// HOST W MENU (raport TCentraL: Steam-join zanim host wczytał mapę → klient ładował
 			// spekulacyjny "ostatni save" w kółko): świat wysyłamy dopiero gdy host FAKTYCZNIE w nim jest —
 			// auto-send strzeli sam przy wejściu. Klient dostaje world-wait zamiast palić limit world-req.
+			// NIE zaczynaj nowego transferu, póki poprzedni jeszcze pompuje — przeplot paczek dwóch
+			// transferów = zepsuty save u klienta (fix derErste67)
+			if (ST._wtx && ST._wtx.queue && ST._wtx.queue.length) {
+				log("sendWorld POMINIĘTY — poprzedni transfer w toku (" + ST._wtx.queue.length + " paczek w kolejce)");
+				return;
+			}
 			const hostScene = ST.state && ST.state.store && ST.state.store.scene && ST.state.store.scene.active;
 			if (hostScene === 1) {
 				setStatus(t("host_enter_world_first"), "#fd5");
@@ -2296,10 +2311,15 @@
 			const total = Math.ceil(b64.length / CH);
 			const parts = new Array(total);
 			for (let i = 0; i < total; i++) parts[i] = b64.substr(i * CH, CH);
-			// kolejka do wysyłki z rozłożeniem w czasie (nie blast) + zapamiętane do ponowienia
-			ST._wtx = { name: save.name || save.id, parts, total, queue: [], sent: 0, sizeKB: Math.round(bytes.length / 1024) };
+			// kolejka do wysyłki z rozłożeniem w czasie (nie blast) + zapamiętane do ponowienia.
+			// tid = identyfikator transferu (fix derErste67 "żółte pół świata"): paczki DWÓCH transferów
+			// przeplatały się w jednym odbiorze → klient sklejał save z dwóch wersji świata (autosave
+			// hosta między wysyłkami!) i wczytywał ZEPSUTY świat. Teraz klient przyjmuje tylko paczki
+			// bieżącego tid, a host nie zaczyna nowego transferu póki trwa poprzedni (guard wyżej).
+			ST._wtxSeq = (ST._wtxSeq || 0) + 1;
+			ST._wtx = { tid: ST._wtxSeq, name: save.name || save.id, parts, total, queue: [], sent: 0, sizeKB: Math.round(bytes.length / 1024) };
 			for (let i = 0; i < total; i++) ST._wtx.queue.push(i);
-			net.send({ t: "world-begin", name: ST._wtx.name, size: bytes.length, chunks: total });
+			net.send({ t: "world-begin", tid: ST._wtx.tid, name: ST._wtx.name, size: bytes.length, chunks: total });
 			setStatus(t("world_sent", ST._wtx.sizeKB, total), "#5f5");
 			pumpWtx();
 		} catch (e) { setStatus(t("export_err", e.message), "#f66"); log("sendWorld error:", e); }
@@ -2316,11 +2336,11 @@
 			let n = 0;
 			while (w.queue.length && n < 4) { // 4 paczki na tick
 				const i = w.queue.shift();
-				net.send({ t: "world-chunk", i, data: w.parts[i] });
+				net.send({ t: "world-chunk", tid: w.tid, i, data: w.parts[i] });
 				w.sent++; n++;
 			}
 			if (w.queue.length) { ST._wtxTimer = setTimeout(step, 25); } // ~160 paczek/s = ~7.5 MB/s
-			else { net.send({ t: "world-end" }); ST._wtxTimer = null; }
+			else { net.send({ t: "world-end", tid: w.tid }); ST._wtxTimer = null; }
 		};
 		ST._wtxTimer = setTimeout(step, 0);
 	}
@@ -3077,7 +3097,10 @@
 			const wid = (state.store.meta && state.store.meta.worldId) || "unknown";
 			if (ST._autoSentWid !== wid) { ST._autoSentWid = wid; sendWorld(); }
 		}
-		if (isHostSync()) {
+		// HOST W MENU NIE STREAMUJE (fix "instant kick" — Akriz + derErste67): w menu bufory świata
+		// należą do SCENY MENU; streamowanie ich klientowi malowało śmieci i uruchamiało u niego
+		// auto-wyjście do menu (everApplied w menu) = klient wylatywał sekundę po dołączeniu.
+		if (isHostSync() && state.store.scene && state.store.scene.active !== 1) {
 			scanDirty(state);
 			maybeSendBatch(state);
 			sendSnapshotIfDue(state);
@@ -3196,10 +3219,13 @@
 				ST._worldReqT = now; ST._worldReqN = (ST._worldReqN || 0) + 1;
 				try { net.send({ t: "world-req" }); log("world-req " + ST._worldReqN + "/4: nie dostałem world-begin — proszę hosta o save"); } catch (e) {}
 			}
+			// klient FAKTYCZNIE był w świecie w tej sesji — warunek auto-wyjścia (pas i szelki po
+			// incydencie instant-kick: everApplied ustawione w menu nie może rozłączać)
+			if (state.store.scene && state.store.scene.active !== 1) ST.wsx.wasInWorld = true;
 			// POWRÓT DO MENU TYTUŁOWEGO = wyjście z sesji (sugestia tony.s.jennette): po tym jak lustro
-			// już działało (everApplied), scena 1 oznacza świadome wyjście ze świata — rozłączamy czysto
-			// zamiast zostawiać sesję w limbo. (Przed pierwszym światem klient CZEKA w menu — nie ruszamy.)
-			if (ST.wsx.everApplied && state.store.scene && state.store.scene.active === 1) {
+			// już działało (everApplied) I klient był w świecie, scena 1 oznacza świadome wyjście —
+			// rozłączamy czysto zamiast zostawiać sesję w limbo. (Przed pierwszym światem klient CZEKA w menu.)
+			if (ST.wsx.everApplied && ST.wsx.wasInWorld && state.store.scene && state.store.scene.active === 1) {
 				log("Klient wrócił do menu tytułowego — opuszczam sesję co-op");
 				profileSave(state); // pozycja/ekwipunek per świat — PRZED zdjęciem pauzy (profileSave wymaga paused)
 				setClientPaused(false);
