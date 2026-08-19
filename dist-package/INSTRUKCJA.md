@@ -22,6 +22,15 @@ zaproszenia Steam (lub LAN), do 4 graczy. Osiągnięcia Steam działają normaln
    gdyby update Steama go cofnął) albo normalnie ze Steama.
    LAN co-op w pełni zweryfikowany; zaproszenia Steam dostały fix w 0.9.41.
 
+**Linux** (eksperymentalne — szukamy testerów!):
+1. Miej zainstalowane Sandustry ze Steama (gra ma natywny build linuksowy).
+2. W terminalu: `bash install-linux.sh` (jeśli nie znajdzie gry, podaj folder:
+   `bash install-linux.sh /sciezka/do/steamapps/common/Sandustry`).
+   Bez zależności — instalator używa silnika samej gry.
+3. Odpal grę ze Steama — panel SandTogether w prawym górnym rogu. Jeśli
+   update GRY ze Steama cofnie moda, odpal ponownie `install-linux.sh`
+   (aktualizacje samego moda dalej są automatyczne).
+
 **To wszystko — na zawsze.** Od wersji 0.9.39 mod **aktualizuje się sam** przy
 każdym starcie gry (z Twojej subskrypcji Warsztatu; gra raz się zrestartuje przy
 aktualizacji). Instalatora nie odpalasz nigdy więcej, a obaj gracze zawsze mają

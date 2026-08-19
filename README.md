@@ -8,7 +8,7 @@ Play [Sandustry](https://store.steampowered.com/app/2764460/Sandustry/) together
 
 ## For players
 
-Subscribe on the Workshop, then run `install.bat` (Windows) or `install.command` (macOS) from the mod folder **once** — since v0.9.39 the mod auto-updates itself from the Workshop folder at every game launch. Full instructions: [README (EN)](dist-package/README.md) / [INSTRUKCJA (PL)](dist-package/INSTRUKCJA.md). macOS support is community-contributed by **DwoaC** (LAN co-op verified on two Apple Silicon Macs; the Steam-invite callback fix from PR #3 awaits a live test).
+Subscribe on the Workshop, then run `install.bat` (Windows), `install.command` (macOS) or `install-linux.sh` (Linux, experimental) from the mod folder **once** — since v0.9.39 the mod auto-updates itself from the Workshop folder at every game launch. Full instructions: [README (EN)](dist-package/README.md) / [INSTRUKCJA (PL)](dist-package/INSTRUKCJA.md). macOS support is community-contributed by **DwoaC** (LAN co-op verified on two Apple Silicon Macs; the Steam-invite callback fix from PR #3 awaits a live test).
 
 ## Architecture (for contributors)
 
@@ -36,7 +36,7 @@ The game is an Electron app; the simulation is non-deterministic (83× `Math.ran
 
 ### Dev loop
 
-1. Install the mod into your game once (`dist-package/install.bat`; macOS: `dist-package/install.command` — no Node needed, it runs on the game's own Electron via `ELECTRON_RUN_AS_NODE`).
+1. Install the mod into your game once (`dist-package/install.bat`; macOS: `dist-package/install.command`; Linux: `dist-package/install-linux.sh` — the Unix installers need no Node, they run on the game's own Electron via `ELECTRON_RUN_AS_NODE`).
 2. Edit `src/sandtogether.js`, then copy it to `<game>/resources/app/dist/js/sandtogether.js` and restart the game (bundle patches only need re-applying when `patches.json` changes).
 3. Two-instance local testing: launch a second copy with `--st-userdata=<dir>` (bypasses the single-instance lock; any `--st-*` arg does) and use `Host LAN` / `Join LAN` on `127.0.0.1`.
 4. Logs: `%APPDATA%\Sandustry\logs\main.log` (macOS: `~/Library/Logs/Sandustry/main.log`) — everything the mod does is tagged `[SandTogether]`.

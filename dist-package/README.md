@@ -31,6 +31,22 @@ Polska instrukcja: zobacz `INSTRUKCJA.md`.
 > Steam library reports callback fields differently) — please report whether
 > they work for you now.
 
+### Linux (experimental — testers welcome!)
+
+1. Have Sandustry installed from Steam (launch it once normally; the game has
+   a native Linux build).
+2. In a terminal: `bash install-linux.sh` (pass the game folder as an argument
+   if it is not found automatically:
+   `bash install-linux.sh /path/to/steamapps/common/Sandustry`).
+   No Node.js needed — it runs on the game's own Electron runtime.
+3. Launch the game from Steam — the **SandTogether** panel appears in the
+   top-right corner. If a **game** update from Steam reverts the mod, just
+   re-run `install-linux.sh` (mod updates are still automatic).
+
+> **Linux note:** untested by the author (no Linux box) — the mod code itself is
+> fully cross-platform and macOS works the same way, so it is expected to run.
+> Please report success or failure (with `~/.config/Sandustry/logs/main.log`).
+
 **That's it — forever.** Since v0.9.39 the mod **auto-updates itself** at every game
 launch from your Workshop subscription (the game restarts once when it does).
 You never run the installer again, and both players always match versions.

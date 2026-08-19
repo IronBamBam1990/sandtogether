@@ -2,6 +2,20 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-19 (v0.9.52 – v0.9.57) — live-session fixes, QoL, augments, Linux installer
+
+**0.9.52**: Shaking works for the joiner regardless of the host's own toggle (report: TCentraL) — the toggle lives in `mods.grabberSizeScroll`, which the host's 1 Hz mods stream was overwriting; per-player preferences are now preserved when applying the stream (all 8 shared-storage keys audited — the rest are legitimately team-shared).
+
+**0.9.53**: quitting to the title screen as the joining player cleanly LEAVES the co-op session (suggested by tony.s.jennette) — the per-world profile (position + inventory) is saved first, so rejoining puts you right back; no more half-connected ghost state after ESC → Quit.
+
+**0.9.54**: grabber place REFUND — when the host cannot place your element (target cell occupied), it returns to your tank instead of silently vanishing; the last known way to lose items with the grabber.
+
+**0.9.55**: separate IP and PORT fields for Join LAN (QoL suggested by TCentraL) — pasting `ip:port` auto-splits, Enter connects from either field, port validated.
+
+**0.9.56**: the augment/lab screen no longer LOCKS the joining client until the host picks (report: TCentraL) — the choice stays team-shared, but now EITHER player can make it: the client's pick is forwarded to the host (500 ms diff of `mods.augments`), the host applies it authoritatively and the stream closes the overlay for everyone; a 5 s protection window keeps the in-flight pick from flickering.
+
+**0.9.57**: LINUX installer (experimental) — `install-linux.sh` + a cross-platform `install.js` (one payload now serves macOS and Linux): finds Steam in classic/XDG/Flatpak locations and extra libraries, runs on the game's own native Linux Electron binary via `ELECTRON_RUN_AS_NODE` (no Node.js needed), kills only OTHER game processes (the installer itself runs under the game binary). Requested by Psychospark; untested by the author — Linux testers welcome.
+
 ## 2026-08-19 (v0.9.49 – v0.9.51) — night-report batch, PR #6, tool-audit closure
 
 **0.9.49**: red-block contamination fixed (the mirror refuses to paint when the client is in the menu; world trust is PAIRED — host wid + the client wid it was granted for — so loading a different world cleanly rejects); infinite phantom items fixed (all client→host forwards gated on an active mirror; tool state resets on local world change); tech nodes researched by a teammate no longer show unpurchased (unlockTech does not set the node flag — we do, both sides); demolish leftover sweep retries 3→6 at 400 ms; streamer-safe lobby id (masked, click copies).
