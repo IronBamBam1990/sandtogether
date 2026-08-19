@@ -2,6 +2,12 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-19 (v0.9.59) — MULTIPLAYER button in the main menu + a real lobby; reload-loop hotfix
+
+**New UI**: the main menu now has a proper **Multiplayer** button (styled like the game's own menu, placed under Mods/Maps). It opens a full-screen lobby: Host (Steam) / Host (LAN) / Join LAN (ip+port) / Join by Lobby ID — each with a description; when hosting you get an invite button, a masked lobby id (click = copy), a live player list (nick + mod version) and a one-click **"Load last save & PLAY"** — the world then sends itself to joined players automatically. The corner panel stays for in-game status/chat.
+
+**Hotfix for 0.9.58's reload loop** (live report: TCentraL): the new save re-request combined with auto-load could reload the same map over and over. Now a received world silences further requests for the session, auto-load is skipped when the mirror is already running, a world transfer arriving mid-receive is ignored (this caused the retry storm), requests are capped at 4 per session, and the client asks for a full resync right after auto-load (so the mirror starts even when there is nothing new to apply).
+
 ## 2026-08-19 (v0.9.58) — big-map join & freeze fixes (live report: TCentraL)
 
 Joining a host on a BIG map could freeze the game and strand the client on "Waiting for host's world". Three structural fixes: (1) AUTO-RESYNC — the initial full-world stream used to be sent while the client was still in the menu (where the mirror must drop it), and the host's row-hashes considered it delivered, leaving stale holes until a manual Resync; the client now automatically requests a full resync the moment the mirror starts applying. (2) The world mirror no longer writes into the game's buffers WHILE the host's save is being loaded (a race with the engine's loader — the likely freeze). (3) Self-healing save transfer: a client that never receives the world save (e.g. after a reconnect, when the host's auto-send doesn't re-fire) now actively requests it every 10 s. Plus much better console diagnostics around the whole transfer path.

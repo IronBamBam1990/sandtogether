@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.58-beta";
+	const VER = "0.9.59-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -63,6 +63,18 @@
 			ver_mismatch: "MOD VERSION MISMATCH — both players must update SandTogether!",
 			waiting_world: "Connected. Waiting for host's world — HOST must click 'Send world', then you: menu → Load Game.",
 			unsupported: "⚠ Unsupported game version — the game updated and broke the mod. Re-run install, or check the Workshop page for an update.",
+			mp_btn: "Multiplayer",
+			lb_title: "MULTIPLAYER", lb_sub: "SandTogether co-op — up to 4 players",
+			lb_host_steam_d: "Play over the internet — invite friends from your Steam friend list",
+			lb_host_lan_d: "Local network or VPN (Tailscale, Radmin...)",
+			lb_join_lan_d: "Connect to a LAN/VPN host by address",
+			lb_join_id_d: "Join with a Lobby ID copied to the clipboard",
+			lb_close: "✕", lb_disconnect: "Disconnect", lb_players: "Players", lb_you: "you",
+			lb_id: "Lobby ID", lb_copy: "copy", lb_copied: "copied!", lb_invite: "Invite a friend",
+			lb_play_last: "▶ Load last save & PLAY",
+			lb_play_note: "Your world is sent to joined players automatically. You can also just use Continue / Load Game.",
+			lb_wait_host: "Waiting for the host's world — it downloads and loads automatically.",
+			lb_hint: "Tip: a Steam invite can be accepted at ANY time — everything else happens automatically.",
 		},
 		pl: {
 			offline: "offline", btn_host: "Host (Steam)", btn_invite: "Zaproś", btn_host_lan: "Host LAN",
@@ -94,6 +106,18 @@
 			ver_mismatch: "RÓŻNE WERSJE MODA — obaj gracze muszą zaktualizować SandTogether!",
 			waiting_world: "Połączono. Czekam na świat hosta — HOST musi kliknąć 'Wyślij świat', potem Ty: menu → Load Game.",
 			unsupported: "⚠ Niewspierana wersja gry — gra się zaktualizowała i rozjechała moda. Uruchom install ponownie albo sprawdź update na Warsztacie.",
+			mp_btn: "Multiplayer",
+			lb_title: "MULTIPLAYER", lb_sub: "SandTogether co-op — do 4 graczy",
+			lb_host_steam_d: "Graj przez internet — zaproś znajomych z listy Steam",
+			lb_host_lan_d: "Sieć lokalna albo VPN (Tailscale, Radmin...)",
+			lb_join_lan_d: "Połącz się z hostem LAN/VPN po adresie",
+			lb_join_id_d: "Dołącz po Lobby ID skopiowanym do schowka",
+			lb_close: "✕", lb_disconnect: "Rozłącz", lb_players: "Gracze", lb_you: "ty",
+			lb_id: "Lobby ID", lb_copy: "kopiuj", lb_copied: "skopiowane!", lb_invite: "Zaproś znajomego",
+			lb_play_last: "▶ Wczytaj ostatni save i GRAJ",
+			lb_play_note: "Twój świat wyśle się dołączonym graczom automatycznie. Możesz też po prostu użyć Kontynuuj / Wczytaj.",
+			lb_wait_host: "Czekam na świat hosta — pobierze się i wczyta automatycznie.",
+			lb_hint: "Tip: zaproszenie Steam możesz przyjąć w KAŻDEJ chwili — reszta dzieje się sama.",
 		},
 	};
 	const t = (key, ...args) => {
@@ -341,6 +365,7 @@
 			} else if (ev.kind === "joined") {
 				ST.net.role = "client"; ST.net.transport = ev.transport;
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; // nowa sesja klienta
+				ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
@@ -374,6 +399,7 @@
 		net.onMsg(({ from, msg }) => handleMsg(from, msg));
 		net.status().then((s) => {
 			ST.net.role = s.role; ST.net.transport = s.transport;
+			ST._myNick = s.myNick || null; // nick lokalnego gracza (lista graczy w lobby)
 			ST._gameFp = s.gameFp || null; // odcisk buildu gry (guard różnych buildów między graczami)
 			for (const p of s.peers) ST.peers.set(p.id, { nick: p.nick, x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
 			if (s.role === "host") setStatus("HOST (" + s.transport + ") — gracze: " + (s.peers.length + 1));
@@ -483,6 +509,9 @@
 				sendWorld();
 			}
 		} else if (msg.t === "world-begin") {
+			// NOWY transfer w trakcie odbioru = restart z przemieszanymi indeksami paczek → burza world-need
+			// (fix TCentraL "went crazy with the retrys"): ignorujemy, dopóki bieżący odbiór się nie skończy.
+			if (ST._worldRx && !ST._worldRx.done) { log("world-begin ZIGNOROWANY — odbiór poprzedniego transferu w toku"); return; }
 			ST._gotHostWorld = true; // otrzymaliśmy świat OD hosta → ufamy jego worldId gdy oboje w grze (patrz applyWorldBatch)
 			ST._worldRx = { name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false };
 			log("world-begin:", msg.name, "-", msg.chunks, "paczek,", Math.round((msg.size || 0) / 1024), "KB");
@@ -518,9 +547,13 @@
 			const bytes = b64dec(rx.parts.join(""));
 			window.electron.importSave(bytes).then(async (r) => {
 				if (r && r.success === false) { setStatus(t("import_err", r.error), "#f66"); return; }
+				ST._worldRxDone = true; // mamy świat w tej sesji → world-req się wyłącza
 				log("World import OK:", rx.name, bytes.length, "bytes");
 				// Auto-load: jeśli FH.game.load istnieje, wskocz prosto do gry (bez ręcznego Load Game). (wkład dotNine)
 				const saveId = r && r.metaData && r.metaData.id;
+				// PĘTLA PRZEŁADOWAŃ (fix TCentraL "reloading the same map over and over"): kolejny transfer
+				// tego samego świata NIE wyrywa gracza z gry — gdy lustro już działa albo load w toku, nie ładujemy.
+				if (ST.wsx.everApplied || ST._loadingWorld) { log("auto-load POMINIĘTY (lustro działa / load w toku) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
 				if (saveId && ST.FH && ST.FH.game && typeof ST.FH.game.load === "function" && ST.state) {
 					try {
 						ST._loadingWorld = true; // lustro NIE pisze po buforach w trakcie load (fix freeze na dużej mapie)
@@ -532,6 +565,9 @@
 						// okno zaufania, żeby kolejne "wc" (mirror) nie były odrzucane jako "inny świat"
 						ST._pendingTrustUntil = performance.now() + 15000;
 						setStatus(t("world_imported_loaded", rx.name), "#5f5");
+						// pełny świat OD RAZU po wejściu (nie czekamy na everApplied — przy w pełni zgodnym
+						// save może nie być nic do zastosowania i AUTO-RESYNC przy starcie lustra by nie strzelił)
+						if (!ST._autoResynced) { ST._autoResynced = true; try { net.send({ t: "resync" }); log("AUTO-RESYNC po auto-load"); } catch (e2) {} }
 						return;
 					} catch (e) { log("auto-load nie powiódł się, fallback na ręczne Load Game:", e.message); }
 					finally { ST._loadingWorld = false; }
@@ -828,8 +864,8 @@
 			profileRestore(state, msg.wid || ST._trustedWid); // wróć tam, gdzie skończyłeś w TYM świecie (G7-lite)
 			// AUTO-RESYNC (fix TCentraL "big map"): initial flood (enqueueFullWorld po peer-hello) leciał
 			// gdy klient był jeszcze w MENU/loadzie i był DROPOWANY, a rowH hosta uważa go za dostarczony
-			// → bez tego stale dziury w świecie aż do ręcznego Resync. Raz na sesję, przy starcie lustra.
-			try { net.send({ t: "resync" }); log("AUTO-RESYNC: proszę hosta o pełny świat (paczki sprzed wejścia do świata były dropowane)"); } catch (e) {}
+			// → bez tego stale dziury w świecie aż do ręcznego Resync. Raz na sesję (flaga _autoResynced).
+			if (!ST._autoResynced) { ST._autoResynced = true; try { net.send({ t: "resync" }); log("AUTO-RESYNC: proszę hosta o pełny świat (paczki sprzed wejścia do świata były dropowane)"); } catch (e) {} }
 		}
 		w.applyBytes += msg.d.length * 0.75; w.applyCount += applied;
 		const now = performance.now();
@@ -2219,6 +2255,268 @@
 	}
 
 	// ------------------------------------------------------------------
+	// Menu główne: przycisk MULTIPLAYER + pełnoekranowe lobby.
+	// Menu gry to React+Tailwind w DOM — NIE dotykamy jego drzewa (React by nas
+	// wyrzucił przy re-renderze); nasz przycisk to osobny fixed element
+	// pozycjonowany po getBoundingClientRect prawdziwych przycisków.
+	// ------------------------------------------------------------------
+	const MENU_LEAF_TEXTS = ["kontynuuj", "continue", "nowa", "new game", "wczytaj", "load game", "opcje", "options", "wyjdź", "exit", "quit"];
+	const MENU_ANCHOR_TEXTS = ["mody", "mods", "mapy", "maps"];
+
+	function findMenuLeaf(texts) {
+		const all = document.body.querySelectorAll("div,button,span,a,p");
+		for (const el of all) {
+			if (el.id && el.id.indexOf("st-") === 0) continue;
+			if (el.closest && (el.closest("#st-hud") || el.closest("#st-lobby"))) continue;
+			if (el.childElementCount > 0) continue;
+			const txt = (el.textContent || "").trim().toLowerCase();
+			if (txt && txt.length <= 14 && texts.indexOf(txt) >= 0) return el;
+		}
+		return null;
+	}
+
+	function ensureMenuUi(state) {
+		const now = performance.now();
+		if (now - (ST._menuUiT || 0) < 500) return;
+		ST._menuUiT = now;
+		const inMenu = state.store && state.store.scene && state.store.scene.active === 1;
+		let btn = document.getElementById("st-mp-btn");
+		if (!inMenu) {
+			if (btn) btn.style.display = "none";
+			if (ST._lobbyOpen) closeLobby();
+			return;
+		}
+		const anchor = findMenuLeaf(MENU_ANCHOR_TEXTS) || findMenuLeaf(MENU_LEAF_TEXTS);
+		if (!btn) {
+			btn = document.createElement("div");
+			btn.id = "st-mp-btn";
+			btn.textContent = t("mp_btn");
+			btn.style.cssText = "position:fixed;z-index:99998;cursor:pointer;color:#fff;background:rgba(13,30,44,.92);" +
+				"border-radius:4px;padding:6px 22px;font-weight:700;letter-spacing:.5px;box-shadow:0 3px 6px rgba(0,0,0,.45);" +
+				"border:1px solid rgba(255,255,255,.14);user-select:none;white-space:nowrap";
+			btn.onmouseenter = () => { btn.style.background = "rgba(32,64,92,.95)"; };
+			btn.onmouseleave = () => { btn.style.background = "rgba(13,30,44,.92)"; };
+			btn.onclick = openLobby;
+			document.body.appendChild(btn);
+		}
+		btn.style.display = "block";
+		if (anchor) {
+			const src = anchor.closest("button") || anchor.parentElement || anchor;
+			const cs = getComputedStyle(src);
+			ST._gameFont = cs.fontFamily || ST._gameFont; // font gry — lobby też go używa
+			btn.style.font = "700 " + Math.max(15, parseInt(cs.fontSize, 10) || 17) + "px " + cs.fontFamily;
+			const r = src.getBoundingClientRect();
+			btn.style.left = Math.round(r.left) + "px";
+			btn.style.top = Math.round(r.bottom + 10) + "px";
+			btn.style.bottom = "";
+		} else {
+			btn.style.left = "24px"; btn.style.top = ""; btn.style.bottom = "24px";
+			btn.style.font = "700 17px sans-serif";
+		}
+		if (ST._lobbyOpen) renderLobby(false);
+	}
+
+	function openLobby() {
+		ST._lobbyOpen = true; ST._lobbyView = null;
+		try { net.status().then((s) => { ST._myNick = s.myNick || ST._myNick; }).catch(() => {}); } catch (e) {}
+		let ov = document.getElementById("st-lobby");
+		if (!ov) {
+			ov = document.createElement("div");
+			ov.id = "st-lobby";
+			ov.style.cssText = "position:fixed;inset:0;z-index:100000;background:rgba(2,10,18,.72);display:flex;align-items:center;justify-content:center";
+			ov.addEventListener("mousedown", (e) => { if (e.target === ov) closeLobby(); });
+			document.body.appendChild(ov);
+		}
+		renderLobby(true);
+	}
+	function closeLobby() {
+		ST._lobbyOpen = false; ST._lobbyView = null;
+		const ov = document.getElementById("st-lobby");
+		if (ov) ov.remove();
+	}
+
+	function lbBtn(label, desc, primary) {
+		const b = document.createElement("div");
+		b.style.cssText = "cursor:pointer;margin:7px 0;padding:10px 14px;border-radius:4px;border:1px solid rgba(255,255,255,.14);" +
+			"background:" + (primary ? "#1d4a6b" : "#14283a") + ";user-select:none";
+		b.onmouseenter = () => { b.style.background = primary ? "#276089" : "#1c3850"; };
+		b.onmouseleave = () => { b.style.background = primary ? "#1d4a6b" : "#14283a"; };
+		const l1 = document.createElement("div");
+		l1.style.cssText = "font-weight:700;font-size:16px;color:#fff"; l1.textContent = label;
+		b.appendChild(l1);
+		if (desc) {
+			const l2 = document.createElement("div");
+			l2.style.cssText = "font-size:11px;color:#9fb6c9;margin-top:2px"; l2.textContent = desc;
+			b.appendChild(l2);
+		}
+		return b;
+	}
+
+	function lbInput(ph, val, w) {
+		const i = document.createElement("input");
+		i.placeholder = ph; i.value = val; i.spellcheck = false;
+		i.style.cssText = "width:" + w + "px;background:#0b1620;color:#dfe9f2;border:1px solid #33506a;border-radius:3px;font:13px monospace;padding:5px 7px";
+		i.addEventListener("keydown", (e) => e.stopPropagation()); // klawisze nie przeciekają do gry
+		i.addEventListener("keyup", (e) => e.stopPropagation());
+		return i;
+	}
+
+	async function loadLatestAndPlay() {
+		try {
+			const saves = await window.electron.getSaveFiles();
+			if (!saves || !saves.length) { setStatus(t("no_saves"), "#f66"); return; }
+			const ts = (s) => s.timestamp || s.updatedAt || s.savedAt || s.time || s.date || 0;
+			saves.sort((a, b) => (ts(a) > ts(b) ? 1 : -1));
+			const save = saves[saves.length - 1];
+			if (!(ST.FH && ST.FH.game && typeof ST.FH.game.load === "function" && ST.state)) { setStatus(t("error", "game.load?"), "#f66"); return; }
+			closeLobby();
+			log("lobby: wczytuję ostatni save:", save.name || save.id);
+			const lr = await ST.FH.game.load(ST.state, save.id);
+			if (lr && lr.success === false) throw new Error(lr.error || "load failed");
+			// auto-send save'a do graczy zrobi frame hook hosta (auto-wyślij gdy host w świecie)
+		} catch (e) { setStatus(t("error", e.message), "#f66"); log("lobby loadLatestAndPlay error:", e.message); }
+	}
+
+	function renderLobby(force) {
+		const ov = document.getElementById("st-lobby");
+		if (!ov || !ST._lobbyOpen) return;
+		const view = ST.net.role === "idle" ? "start" : "lobby";
+		if (force || ST._lobbyView !== view) {
+			ST._lobbyView = view;
+			ov.innerHTML = "";
+			const p = document.createElement("div");
+			p.style.cssText = "width:540px;max-width:92vw;max-height:86vh;overflow:auto;background:rgba(8,20,30,.97);" +
+				"border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:20px 26px;color:#dfe9f2;box-shadow:0 10px 40px rgba(0,0,0,.6)";
+			p.style.fontFamily = ST._gameFont || "sans-serif";
+			// nagłówek + zamknięcie
+			const head = document.createElement("div");
+			head.style.cssText = "display:flex;justify-content:space-between;align-items:baseline;margin-bottom:2px";
+			const h1 = document.createElement("div");
+			h1.style.cssText = "font-weight:800;font-size:22px;letter-spacing:1px;color:#ffb454"; h1.textContent = t("lb_title");
+			const x = document.createElement("div");
+			x.style.cssText = "cursor:pointer;color:#9fb6c9;font-size:20px;padding:0 4px"; x.textContent = t("lb_close");
+			x.onclick = closeLobby;
+			head.appendChild(h1); head.appendChild(x); p.appendChild(head);
+			const sub = document.createElement("div");
+			sub.style.cssText = "font-size:11px;color:#7d95a8;margin-bottom:12px";
+			sub.textContent = t("lb_sub") + " — " + VER;
+			p.appendChild(sub);
+
+			if (view === "start") {
+				const bSteam = lbBtn(t("btn_host") /* Host (Steam) */, t("lb_host_steam_d"), true);
+				bSteam.onclick = async () => { setStatus(t("creating_lobby")); const r = await net.hostSteam(); if (!r.ok) setStatus(t("error", r.error), "#f66"); renderLobby(true); };
+				p.appendChild(bSteam);
+				const bLan = lbBtn(t("btn_host_lan"), t("lb_host_lan_d"), false);
+				bLan.onclick = async () => { const r = await net.hostWs(27777); if (!r.ok) setStatus(t("error", r.error), "#f66"); renderLobby(true); };
+				p.appendChild(bLan);
+				// Dołącz LAN: przycisk + pola adresu
+				const bJoin = lbBtn(t("btn_join_lan"), t("lb_join_lan_d"), false);
+				const row = document.createElement("div");
+				row.style.cssText = "display:none;margin:2px 0 6px;padding:0 2px";
+				const ip = lbInput("IP", "127.0.0.1", 170);
+				const port = lbInput("port", "27777", 62); port.maxLength = 5;
+				const go = document.createElement("button");
+				go.textContent = t("btn_connect");
+				go.style.cssText = "margin-left:6px;background:#1d4a6b;color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:3px;font:600 13px inherit;cursor:pointer;padding:5px 12px";
+				const doJoin = async () => {
+					let h = (ip.value || "").trim(); let pr = (port.value || "").trim();
+					if (h.indexOf(":") >= 0) { const a = h.split(":"); h = a[0]; if (a[1]) { pr = a[1]; port.value = pr; } ip.value = h; }
+					if (!h) { ip.focus(); return; }
+					const pn = parseInt(pr || "27777", 10);
+					if (!(pn > 0 && pn < 65536)) { port.focus(); port.select(); return; }
+					setStatus(t("creating_lobby"));
+					const r = await net.joinWs(h, pn);
+					if (!r.ok) setStatus(t("error", r.error), "#f66");
+					renderLobby(true);
+				};
+				for (const el of [ip, port]) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doJoin(); } });
+				go.onclick = doJoin;
+				row.appendChild(ip); row.appendChild(port); row.appendChild(go);
+				bJoin.onclick = () => { row.style.display = row.style.display === "none" ? "block" : "none"; if (row.style.display === "block") { ip.focus(); ip.select(); } };
+				p.appendChild(bJoin); p.appendChild(row);
+				const bId = lbBtn(t("btn_join_id"), t("lb_join_id_d"), false);
+				bId.onclick = async () => {
+					let id; try { id = (await navigator.clipboard.readText()).trim(); } catch (e) { setStatus(t("error", "clipboard: " + e.message), "#f66"); return; }
+					if (!id || !/^\d{5,}$/.test(id)) { setStatus(t("clipboard_no_id"), "#f66"); return; }
+					setStatus(t("creating_lobby"));
+					const r = await net.joinSteam(id);
+					if (!r.ok) setStatus(t("error", r.error), "#f66");
+					renderLobby(true);
+				};
+				p.appendChild(bId);
+				const hint = document.createElement("div");
+				hint.style.cssText = "margin-top:10px;font-size:11px;color:#7d95a8"; hint.textContent = t("lb_hint");
+				p.appendChild(hint);
+			} else {
+				// LOBBY: status + lobby id + zaproś + lista graczy + świat + rozłącz
+				const st2 = document.createElement("div");
+				st2.id = "st-lb-status"; st2.style.cssText = "font-size:12px;color:#ffd27a;margin:2px 0 8px";
+				p.appendChild(st2);
+				if (ST.net.role === "host" && ST.net.transport === "steam") {
+					const inv = lbBtn(t("lb_invite"), null, true);
+					inv.onclick = () => net.invite();
+					p.appendChild(inv);
+					const idRow = document.createElement("div");
+					idRow.style.cssText = "font-size:12px;color:#9f9;margin:4px 0 8px;cursor:pointer";
+					idRow.id = "st-lb-id"; idRow.title = "Click to copy";
+					idRow.onclick = async () => {
+						if (!ST.net.lobbyId) return;
+						try { await navigator.clipboard.writeText(ST.net.lobbyId); idRow.textContent = t("lb_id") + ": " + t("lb_copied"); } catch (e) {}
+					};
+					p.appendChild(idRow);
+				}
+				const plH = document.createElement("div");
+				plH.style.cssText = "font-weight:700;font-size:14px;color:#fff;margin-top:6px"; plH.textContent = t("lb_players");
+				p.appendChild(plH);
+				const pl2 = document.createElement("div");
+				pl2.id = "st-lb-players"; pl2.style.cssText = "margin:4px 0 10px;font-size:13px;line-height:1.6";
+				p.appendChild(pl2);
+				if (ST.net.role === "host") {
+					const play = lbBtn(t("lb_play_last"), t("lb_play_note"), true);
+					play.onclick = loadLatestAndPlay;
+					p.appendChild(play);
+				} else {
+					const w8 = document.createElement("div");
+					w8.style.cssText = "font-size:12px;color:#9fb6c9;margin:6px 0 10px"; w8.textContent = t("lb_wait_host");
+					p.appendChild(w8);
+				}
+				const dc = lbBtn(t("lb_disconnect"), null, false);
+				dc.onclick = () => { setClientPaused(false); net.stop(); renderLobby(true); };
+				p.appendChild(dc);
+			}
+			ov.appendChild(p);
+		}
+		// dynamiczne odświeżenie (bez przebudowy — inputy nie tracą focusa)
+		if (view === "lobby") {
+			const st2 = document.getElementById("st-lb-status");
+			if (st2) {
+				const hudSt = document.getElementById("st-status");
+				st2.textContent = (hudSt && hudSt.textContent) || "";
+			}
+			const idRow = document.getElementById("st-lb-id");
+			if (idRow && ST.net.lobbyId && idRow.textContent.indexOf(t("lb_copied")) < 0) {
+				const id = String(ST.net.lobbyId);
+				idRow.textContent = t("lb_id") + ": ●●●●●●" + id.slice(-3) + "  📋 (" + t("lb_copy") + ")";
+			}
+			const pl2 = document.getElementById("st-lb-players");
+			if (pl2) {
+				pl2.innerHTML = "";
+				const mk = (nick, info, ok) => {
+					const r = document.createElement("div");
+					const dot = document.createElement("span");
+					dot.textContent = "● "; dot.style.color = ok ? "#5f5" : "#f66";
+					const nm = document.createElement("span"); nm.textContent = nick; nm.style.color = "#fff";
+					const inf = document.createElement("span"); inf.textContent = "  " + info; inf.style.cssText = "color:#7d95a8;font-size:11px";
+					r.appendChild(dot); r.appendChild(nm); r.appendChild(inf);
+					return r;
+				};
+				pl2.appendChild(mk(ST._myNick || "Player", "(" + t("lb_you") + ") " + VER, true));
+				for (const [, pr] of ST.peers) pl2.appendChild(mk(pr.nick || "?", pr.modVer || "?", !pr.modVer || pr.modVer === VER));
+			}
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// Duszki
 	// ------------------------------------------------------------------
 	function ensureGhostCanvas() {
@@ -2569,6 +2867,7 @@
 		if (now - (ST._lastPingUi || 0) > 500) { ST._lastPingUi = now; updatePingDisplay(); }
 		// world sync + struktury + zasoby + encje
 		subscribeGameEvents(state);
+		ensureMenuUi(state); // przycisk MULTIPLAYER w menu głównym + lobby (throttle 500 ms w środku)
 		// host: auto-wyślij save gdy jest w świecie z graczami i jeszcze nie wysłał TEGO świata (klucz: worldId).
 		// Sprawdzamy stan CIĄGLE (nie edge menu->świat, który przy próbkowaniu łatwo przegapić). (wkład dotNine)
 		if (ST.net.role === "host" && ST.peers.size && state.store && state.store.scene && state.store.scene.active !== 1) {
@@ -2687,10 +2986,12 @@
 				if (!ST._worldRx) setStatus(t("waiting_world"), "#fd5"); // nie nadpisuj "Receiving world x/y"
 			}
 			// SELF-HEALING (fix TCentraL reconnect na dużej mapie): brak world-begin mimo połączenia
-			// (auto-send hosta nie zadziałał / zgubiony) → klient AKTYWNIE prosi o save co 10 s.
-			if (!ST._gotHostWorld && !ST._worldRx && !ST.wsx.everApplied && ST.peers.size > 0 && now - (ST._worldReqT || 0) > 10000) {
-				ST._worldReqT = now;
-				try { net.send({ t: "world-req" }); log("world-req: nie dostałem world-begin — proszę hosta o save"); } catch (e) {}
+			// (auto-send hosta nie zadziałał / zgubiony) → klient prosi o save co 15 s, MAX 4 razy na sesję,
+			// i NIGDY po udanym odbiorze świata (_worldRxDone) — inaczej pętla transferów/przeładowań (0.9.58!).
+			if (!ST._worldRxDone && !ST._gotHostWorld && !ST._worldRx && !ST.wsx.everApplied && ST.peers.size > 0 &&
+				(ST._worldReqN || 0) < 4 && now - (ST._worldReqT || 0) > 15000) {
+				ST._worldReqT = now; ST._worldReqN = (ST._worldReqN || 0) + 1;
+				try { net.send({ t: "world-req" }); log("world-req " + ST._worldReqN + "/4: nie dostałem world-begin — proszę hosta o save"); } catch (e) {}
 			}
 			// POWRÓT DO MENU TYTUŁOWEGO = wyjście z sesji (sugestia tony.s.jennette): po tym jak lustro
 			// już działało (everApplied), scena 1 oznacza świadome wyjście ze świata — rozłączamy czysto
