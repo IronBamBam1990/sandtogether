@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.52-beta — TCentraL triple-header (all found within one hour of testing): (1) MANUAL WET-SAND SHAKING fully works as the joining player — gold appears in the tank AND the residue spawns into the world (it was silently dropped), with the factory process counted for team progression. (2) Picked-up items land in the correct picker slots (spatially, like vanilla) instead of piling top-left. (3) Your Shaking toggle is YOURS — it was being overwritten by the host setting every second (it lives next to team story data; per-player preferences now survive the stream). Auto-updates at next launch.',
+    changeNote: 'v0.9.54-beta — two quality fixes: (1) Quitting to the title screen as the joining player now cleanly LEAVES the co-op session (your per-world position and inventory are saved first, so rejoining puts you right back) — suggested by tony.s.jennette. (2) GRABBER REFUND: when the host cannot place your element (cell occupied), it is returned to your tank instead of silently vanishing — the last known way to lose items with the grabber. Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
