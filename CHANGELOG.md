@@ -2,6 +2,26 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-19 (v0.9.49 – v0.9.51) — night-report batch, PR #6, tool-audit closure
+
+**0.9.49**: red-block contamination fixed (the mirror refuses to paint when the client is in the menu; world trust is PAIRED — host wid + the client wid it was granted for — so loading a different world cleanly rejects); infinite phantom items fixed (all client→host forwards gated on an active mirror; tool state resets on local world change); tech nodes researched by a teammate no longer show unpurchased (unlockTech does not set the node flag — we do, both sides); demolish leftover sweep retries 3→6 at 400 ms; streamer-safe lobby id (masked, click copies).
+
+**0.9.50 — PR #6 by TCentraL/tno1 (contributor #5)**: orphan red-tile cleanup blob-expands to the whole contiguous patch, even outside the drag. Review hardening: sloped/stair tile types restored, per-cell live-structure check (healthy painted foundations safe), scan-loop fix, 64-cell expansion cap.
+
+**0.9.51**: manual wet-sand shaking works for the joiner — the tank mutates locally (gold OK) but the residue was spawned into the world via the deferred queue the paused client drops, and the factory process only counted locally; a new bundle hook batches refined slots to the host, which spawns Residue into empty cells only and records the ShakeWetSand process. Picked-up items land in the correct picker slots (host sends per-element cursor-relative offsets; the tank grid is spatial like vanilla). Sweeper confirmed covered by the PR #4 drone sync. Last unidentified tool: placeholderGun/wall tool (safely inert on the client).
+
+## 2026-08-18/19 (v0.9.40 – v0.9.48) — macOS, community PRs, the Workshop freeze, weapons complete
+
+**0.9.40-0.9.41**: macOS support — DwoaC's tested installer/launcher (PR #2) replaced the blind-built scripts; his PR #3 fixed Steam invites on macOS (the osx steamworks binary reports callback fields in snake_case). Fixes for his reports: the WS server now sends its hello (no more false OLD-mod warning on LAN) and the orphan sweep arms on replayed client demolishes. Auto-updater path made platform-agnostic (walks up to steamapps). DwoaC = contributor #3.
+
+**Workshop freeze incident (18-19.08)**: 25+ publishes in 48 h tripped Steam's rate limit — the Workshop silently served 0.9.36 files while newer publishes reported success. Recovery: GitHub Releases as fallback distribution, one consolidated publish after the limit cleared, hard server-side verification (time_updated + fresh subscription download) now standard after every publish. Iron rule: max 1-3 Workshop publishes per day.
+
+**0.9.42-0.9.44**: research FULLY shared — the game's real unlockTech runs on both sides, so buildings, items and the map materialize for the whole team (report: ЗаКеЛьМан); the grabber respects research gates (liquids need the team's waterGrab upgrade) and locks its tank to ONE element type like vanilla (reports: derErste67).
+
+**0.9.45-0.9.46**: client-demolish sweep no longer eats neighboring painted-foundation tiles; honest REAL/FALLBACK tech-unlock logs; Cr0ss0vr's PR #5 (contributor #4) — the client sends its exact demolisher selection rectangle, so red-tile cleanup is precise, with a bounded retry for queued removals.
+
+**0.9.47-0.9.48**: Knight-HD's PR #4 — client rockets & guns simulated authoritatively in the host's sim (real explosions), client-deployed drones survive, no double craters; on top: the flamethrower can no longer delete terrain/foundations/scenery (terrain cells untouchable in the replay), drone id collisions re-assigned. Full weapon audit: volcanizer and caulk blaster forwarded with vanilla guards baked in (lava/caulk only into empty cells; caulk removal exactly by the game's rule).
+
 ## 2026-08-18 (v0.9.39-beta) — AUTO-UPDATE from the Workshop (install.bat needed only ONCE, ever)
 
 At every game launch `st-main.js` compares the mod version in `steamapps/workshop/content/2764460/<item>/src` (kept fresh by Steam) with the installed one (numeric compare — the author's newer local build is never downgraded). Newer → copies `sandtogether.js`/`st-main.js`, appends the preload bridge if missing, applies `patches.json` to `bundle.js` (a port of install.ps1's idempotent variant logic) and relaunches the game once. No relaunch loop (after the update local == workshop). Version drift between players — the #1 cause of "nothing works" reports — now solves itself.
