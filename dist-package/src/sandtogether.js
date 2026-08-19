@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.55-beta";
+	const VER = "0.9.56-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1210,6 +1210,10 @@
 				const prevMods = state.store.mods || {};
 				state.store.mods = msg.st;
 				for (const k of ["grabberSizeScroll"]) if (prevMods[k] !== undefined) state.store.mods[k] = prevMods[k];
+				// AUGMENTY (fix TCentraL: klient uwięziony w ekranie wyboru): świeży lokalny WYBÓR klienta
+				// (act:aug w drodze) nie może być nadpisany streamem — okno ochronne 5s; poza nim host rządzi.
+				if (ST._augEditT && performance.now() - ST._augEditT < 5000 && prevMods.augments !== undefined) state.store.mods.augments = prevMods.augments;
+				try { ST._augLast = JSON.stringify(state.store.mods.augments || null); } catch (e) {}
 			}
 			if (msg.gl) state.store.gloom = msg.gl;
 			if (msg.fp) { const a = fpArr(state); if (a) { const src = msg.fp; for (let i = 0; i < Math.min(a.length, src.length); i++) { try { Atomics.store(a, i, src[i]); } catch (e) { a[i] = src[i]; } } } }
@@ -1820,6 +1824,18 @@
 						ex.data = msg.data;
 						if (SA3.update) SA3.update(state, ex, { propagateToWorkers: true });
 						log("HOST: config maszyny od klienta:", msg.type, "@", msg.x, msg.y);
+					}
+				} finally { ST._applyingNet = false; }
+			} else if (msg.k === "aug") {
+				// wybór augmentu przez klienta: host przejmuje cały obiekt (nodes/pendingChoice/sockety);
+				// stream mods rozniesie stan do wszystkich (zamyka overlay także u klienta)
+				ST._applyingNet = true;
+				try {
+					if (msg.a && typeof msg.a === "object") {
+						state.store.mods = state.store.mods || {};
+						state.store.mods.augments = Object.assign(state.store.mods.augments || {}, msg.a);
+						try { ST.FH.ui && ST.FH.ui.overlays && ST.FH.ui.overlays.update && ST.FH.ui.overlays.update(state, "global"); } catch (e) {}
+						log("HOST: augmenty klienta zastosowane (wybór z ekranu augmentów)");
 					}
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "pipeRm") {
@@ -2673,6 +2689,20 @@
 			// profil klienta (G7-lite): zapis co 10s (pozycja+ekwipunek per świat hosta)
 			if (now - (ST._profT || 0) > 10000) { ST._profT = now; profileSave(state); }
 			scanDataEditsIfDue(state); // konfig maszyn edytowany przez klienta → forward (G5b)
+			// AUGMENTY: wybór klienta (ekran po artefakcie) mutuje mods.augments lokalnie — diff co 500ms
+			// vs ostatni snapshot streamu → forward całego obiektu do hosta (host = autorytet drużynowy).
+			if (now - (ST._augScanT || 0) > 500) {
+				ST._augScanT = now;
+				try {
+					const cur = JSON.stringify((state.store.mods && state.store.mods.augments) || null);
+					if (ST._augLast !== undefined && cur !== ST._augLast && cur !== "null") {
+						ST._augLast = cur;
+						ST._augEditT = now;
+						net.send({ t: "act", k: "aug", a: JSON.parse(cur) });
+						log("CLIENT augments → forward (wybór w ekranie augmentów)");
+					}
+				} catch (e) {}
+			}
 			// zator lustra (fix G4): działało, a od >4s nic nie przychodzi i host NIE zgłasza pauzy → pokaż ile czekamy
 			if (ST.wsx.everApplied && !ST._hostPausedShown && ST._lastWcT && now - ST._lastWcT > 4000 && now - (ST._stallHintT || 0) > 2000) {
 				ST._stallHintT = now;
