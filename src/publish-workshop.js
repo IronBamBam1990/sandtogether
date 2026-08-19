@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.49-beta — important stability batch from tonight’s community reports: (1) RED-BLOCK CONTAMINATION FIXED — quitting to the menu or loading another world as the joining player no longer paints the co-op world over it (mirror trust is now paired to the exact world you loaded). (2) INFINITE PHANTOM ITEMS fixed — all client actions now require an active world mirror, and tool state resets on world change. (3) Tech nodes researched by a teammate no longer show as unpurchased (no more double-buying to progress). (4) Demolish leftover cleanup retries harder. (5) Streamer-safe lobby id: masked on screen, click copies the full id. Auto-updates at next launch.',
+    changeNote: 'v0.9.50-beta — RED-TILE CLEANUP, FINAL FORM (by TCentraL — our sharpest tester just became contributor #5!). The orphan cleanup now BLOB-EXPANDS: drag the demolisher over any part of a stuck red patch and the whole contiguous patch disappears, even the parts outside your selection. Hardened in review: sloped/stair tiles included, healthy painted foundations are protected by a per-cell live-structure check, and expansion is capped. Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
