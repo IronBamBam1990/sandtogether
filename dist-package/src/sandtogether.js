@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.61-beta";
+	const VER = "0.9.62-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -58,7 +58,8 @@
 			other_world: "⚠ NOT on host's world! Host: click 'Send world'. You: menu → Load Game → load the received save.",
 			dims_differ: (a, b) => "⚠ Different world size (" + a + " vs host " + b + ") — load the host's save via Load Game.",
 			sync_up: (kb, ch, q) => "upload: " + kb + " KB/s, " + ch + " chunk/s, queue " + q,
-			sync_down: (kb, ch) => "host mirror: " + kb + " KB/s, " + ch + " chunk/s",
+			sync_down: (kb, ch, q) => "host mirror: " + kb + " KB/s, " + ch + " chunk/s" + (q > 0 ? " — " + q + " chunks left" : ""),
+			loading_world: "Loading the host's world... (a big map can take a few minutes — the game may look frozen)",
 			join_prompt: "Host address (ip or ip:port):",
 			ver_mismatch: "MOD VERSION MISMATCH — both players must update SandTogether!",
 			waiting_world: "Connected. Waiting for host's world — HOST must click 'Send world', then you: menu → Load Game.",
@@ -111,7 +112,8 @@
 			other_world: "⚠ NIE jesteś na świecie hosta! Host: kliknij 'Wyślij świat'. Ty: menu → Load Game → wczytaj otrzymany save.",
 			dims_differ: (a, b) => "⚠ Inny rozmiar świata (" + a + " vs host " + b + ") — wczytaj save hosta przez Load Game.",
 			sync_up: (kb, ch, q) => "wysyłka: " + kb + " KB/s, " + ch + " chunk/s, kolejka " + q,
-			sync_down: (kb, ch) => "lustro hosta: " + kb + " KB/s, " + ch + " chunk/s",
+			sync_down: (kb, ch, q) => "lustro hosta: " + kb + " KB/s, " + ch + " chunk/s" + (q > 0 ? " — zostało " + q + " paczek" : ""),
+			loading_world: "Wczytywanie świata hosta... (duża mapa może potrwać kilka minut — gra może wyglądać na zawieszoną)",
 			join_prompt: "Adres hosta (ip lub ip:port):",
 			ver_mismatch: "RÓŻNE WERSJE MODA — obaj gracze muszą zaktualizować SandTogether!",
 			waiting_world: "Połączono. Czekam na świat hosta — HOST musi kliknąć 'Wyślij świat', potem Ty: menu → Load Game.",
@@ -593,6 +595,7 @@
 				if (saveId && ST.FH && ST.FH.game && typeof ST.FH.game.load === "function" && ST.state) {
 					try {
 						ST._loadingWorld = true; // lustro NIE pisze po buforach w trakcie load (fix freeze na dużej mapie)
+						setStatus(t("loading_world"), "#ff5"); // duża mapa = minuty; bez tego wygląda jak zwiecha
 						const t0 = performance.now();
 						const lr = await ST.FH.game.load(ST.state, saveId);
 						log("auto-load save'a hosta zakończony w", Math.round(performance.now() - t0), "ms");
@@ -771,7 +774,7 @@
 			const all = new Uint8Array(size);
 			let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
 			const packed = await deflate(all);
-			net.send({ t: "wc", v: 5, wid: state.store.meta && state.store.meta.worldId, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, d: b64enc(packed) });
+			net.send({ t: "wc", v: 5, wid: state.store.meta && state.store.meta.worldId, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, q: w.pending.size, d: b64enc(packed) });
 			// statystyki
 			w.applyBytes += packed.length; w.applyCount += parts.length;
 			w.fogSkipped = (w.fogSkipped || 0) + fogSkipped;
@@ -906,7 +909,9 @@
 		w.applyBytes += msg.d.length * 0.75; w.applyCount += applied;
 		const now = performance.now();
 		if (now - w.statT > 2000) {
-			const info = t("sync_down", Math.round(w.applyBytes / 2048), Math.round(w.applyCount / 2));
+			// q = ile paczek zostało w kolejce hosta — realny wskaźnik postępu wstępnej synchronizacji
+			// dużej mapy (feedback TCentraL: "no real progress to when it loads")
+			const info = t("sync_down", Math.round(w.applyBytes / 2048), Math.round(w.applyCount / 2), typeof msg.q === "number" ? msg.q : 0);
 			setSyncInfo(info);
 			log("SYNC-CLIENT", info);
 			w.applyBytes = 0; w.applyCount = 0; w.statT = now;
@@ -2113,7 +2118,9 @@
 		hud.style.cssText = "position:fixed;top:8px;right:8px;z-index:99999;background:rgba(10,10,14,.85);color:#ddd;font:12px monospace;padding:8px 10px;border:1px solid #444;border-radius:6px;user-select:none;min-width:210px";
 		hud.innerHTML =
 			'<div id="st-head" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px">' +
-			'<span style="font-weight:bold;color:#ffb454">SandTogether <span style="color:#666">' + VER + '</span> <span style="color:#555;font-size:9px">' + t("by") + "</span></span>" +
+			'<span id="st-title-full" style="font-weight:bold;color:#ffb454">SandTogether <span style="color:#666">' + VER + '</span> <span style="color:#555;font-size:9px">' + t("by") + "</span></span>" +
+			// zwinięty panel = mała pigułka "ST ●" z kropką w kolorze stanu (feedback TCentraL: "wish I could hide it")
+			'<span id="st-title-mini" style="display:none;font-weight:bold;color:#ffb454">ST <span id="st-mini-dot" style="color:#f66">●</span></span>' +
 			'<span id="st-collapse" style="color:#888;font-size:14px;line-height:1">▾</span>' +
 			"</div>" +
 			'<div id="st-body">' +
@@ -2226,7 +2233,15 @@
 		let collapsed = false;
 		const body = hud.querySelector("#st-body");
 		const arrow = hud.querySelector("#st-collapse");
-		const setCollapsed = (c) => { collapsed = c; body.style.display = c ? "none" : "block"; arrow.textContent = c ? "▸" : "▾"; };
+		const setCollapsed = (c) => {
+			collapsed = c; body.style.display = c ? "none" : "block"; arrow.textContent = c ? "▸" : "▾";
+			// mini-pigułka: zwinięty panel zajmuje ~40px zamiast pełnej szerokości nagłówka
+			const full = hud.querySelector("#st-title-full"), mini = hud.querySelector("#st-title-mini");
+			if (full) full.style.display = c ? "none" : "";
+			if (mini) mini.style.display = c ? "" : "none";
+			hud.style.minWidth = c ? "0" : "210px";
+			hud.style.padding = c ? "3px 8px" : "8px 10px";
+		};
 		hud.querySelector("#st-head").onclick = () => setCollapsed(!collapsed);
 		// Bezpieczny skrót Ctrl+Shift+H, przechwycony (capture) i zablokowany, żeby NIE trafił do gry
 		window.addEventListener("keydown", (e) => {
@@ -2318,11 +2333,14 @@
 		const role = ST.net.role;
 		const trName = ST.net.transport === "steam" ? "Steam" : "LAN";
 		const badge = q("#st-badge");
+		const roleColor = role === "host" ? "#5f5" : role === "client" ? "#6cf" : "#f66";
 		if (badge) {
-			if (role === "host") { badge.textContent = t("badge_host", trName); badge.style.color = "#5f5"; }
-			else if (role === "client") { badge.textContent = t("badge_client", trName); badge.style.color = "#6cf"; }
-			else { badge.textContent = t("badge_offline"); badge.style.color = "#f66"; }
+			if (role === "host") { badge.textContent = t("badge_host", trName); badge.style.color = roleColor; }
+			else if (role === "client") { badge.textContent = t("badge_client", trName); badge.style.color = roleColor; }
+			else { badge.textContent = t("badge_offline"); badge.style.color = roleColor; }
 		}
+		const miniDot = q("#st-mini-dot");
+		if (miniDot) miniDot.style.color = roleColor; // kropka stanu też na zwiniętej mini-pigułce
 		const show = (id, on) => { const el = q(id); if (el) el.style.display = on ? "" : "none"; };
 		show("#st-host", role === "idle");
 		show("#st-host-lan", role === "idle");

@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-19 (v0.9.62) — big-map progress + a panel you can actually hide (feedback: TCentraL)
+
+The initial world sync now shows real progress — "host mirror: X KB/s, Y chunk/s — N chunks left" counts down to zero, and the long save-load phase says "Loading the host's world... (a big map can take a few minutes)" instead of looking frozen. Collapsing the panel (header click / Ctrl+Shift+H) now shrinks it to a tiny "ST ●" pill with a status-colored dot instead of leaving the full-width header.
+
 ## 2026-08-19 (v0.9.61) — community feedback batch: Linux CRLF guard, host-in-menu fix, player nick, save picker
 
 (1) The Linux installer now heals itself when a download or editor converted it to Windows line endings — the exact crash PsychoSpark hit on CachyOS ("set: pipefail: invalid option name"); it also survives being run with `sh` instead of `bash`. (2) A Steam player joining BEFORE the host loaded a map no longer triggers a speculative world transfer that reloaded the client's map forever (report: TCentraL) — the host now answers "world-wait" until it actually enters a world, and the client shows "waiting for the host to enter a world". (3) You can finally set your NICK (LAN players were all "Player") — a field in the lobby, stored locally, announced over the existing hello protocol. (4) The host lobby gained "📂 Choose a save..." next to "▶ Load last save & PLAY". (5) The menu Multiplayer button is bigger and shows a green connection dot when you're hosting/connected.
