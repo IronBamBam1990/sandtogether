@@ -2524,25 +2524,59 @@
 						// zaznaczenia; stare klienty z bboxem anchorów nadal omijają ten krok.
 						if (hd.src !== "client" || hd.cleanOrphans) try {
 							const sh = state.shared || {};
-							const simc = sh.sim && sh.sim.cellIds, tt = sh.sim && sh.sim.terrainType;
+							const simc = sh.sim && sh.sim.cellIds;
+							const tt = sh.sim && sh.sim.terrainType;
 							const TR = ST.FH.terrains;
 							const { W } = worldBuffers(state);
+
 							if (simc && tt && TR && TR.removeAt && W) {
-								const sim32 = new Uint32Array(simc.buffer, simc.byteOffset, simc.length);
-								let cleaned = 0;
-								for (let y = hd.y0; y <= hd.y1; y++) for (let x = hd.x0; x <= hd.x1; x++) {
-									const id = sim32[x + y * W];
-									if (id <= 0 || id > 1000) continue; // 0=pusto, >1000=elementy
-									const ty = tt[id];
-									if (ty < 15 || ty > 18) continue; // tylko Block/SlidingBlock* (kafle budowlane gracza)
-									let alive = null; try { alive = SA.getAtCell(state, x, y); } catch (e) {}
-									if (alive) continue; // żywa struktura — jej kafli nie ruszamy
-									try { TR.removeAt(state, x, y); cleaned++; } catch (e) {}
-								}
-								if (cleaned) log("demolish-dobicie: usunięto", cleaned, "OSIEROCONYCH kafli fundamentu (czerwone klocki)");
-								// przypadku "czysto" NIE logujemy — każde zwykłe przeciągnięcie demolisherem zaśmiecało log
+								const sim = new Uint32Array(simc.buffer, simc.byteOffset, simc.length);
+								const H = Math.floor(sim.length / W);
+
+									for (let y = hd.y0; y <= hd.y1; y++) {
+										for (let x = hd.x0; x <= hd.x1; x++) {
+											const id = sim[x + y * W];
+											if (id <= 0 || id > 1000 || tt[id] !== 15) continue;
+
+											let s = null;
+											try { s = SA.getAtCell(state, x, y); } catch (e) {}
+											if (s) continue;
+
+											let r = x;
+											while (r + 1 < W) {
+												const n = sim[r + 1 + y * W];
+												if (n <= 0 || n > 1000 || tt[n] !== 15) break;
+												r++;
+											}
+
+											let b = y;
+											while (b + 1 < H) {
+												const n = sim[x + (b + 1) * W];
+												if (n <= 0 || n > 1000 || tt[n] !== 15) break;
+												b++;
+											}
+
+											for (let yy = y; yy <= b; yy++) {
+												for (let xx = x; xx <= r; xx++) {
+													const n = sim[xx + yy * W];
+													if (n <= 0 || n > 1000 || tt[n] !== 15) continue;
+
+													try {
+														TR.removeAt(state, xx, yy);
+													} catch (e) {
+														log("ORPHAN REMOVE ERROR:", xx, yy, e.message);
+													}
+												}
+											}
+
+											x = r;
+											y = b;
+										}
+									}
 							}
-						} catch (e) { log("dobicie kafli error:", e.message); }
+						} catch (e) {
+							log("ORPHAN CLEANUP ERROR:", e.message);
+						}
 					}
 				} catch (e) { log("demolish-dobicie error:", e.message); }
 			}
