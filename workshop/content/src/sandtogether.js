@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.64-beta";
+	const VER = "0.9.65-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2501,8 +2501,9 @@
 	// wyrzucił przy re-renderze); nasz przycisk to osobny fixed element
 	// pozycjonowany po getBoundingClientRect prawdziwych przycisków.
 	// ------------------------------------------------------------------
-	const MENU_LEAF_TEXTS = ["kontynuuj", "continue", "nowa", "new game", "wczytaj", "load game", "opcje", "options", "wyjdź", "exit", "quit"];
-	const MENU_ANCHOR_TEXTS = ["mody", "mods", "mapy", "maps"];
+	// teksty w wielu językach gry (PL/EN/DE/FR/ES) — kotwica pozycji przycisku Multiplayer
+	const MENU_LEAF_TEXTS = ["kontynuuj", "continue", "weiter", "continuer", "continuar", "nowa", "new game", "neu", "wczytaj", "load game", "laden", "charger", "cargar", "opcje", "options", "optionen", "opciones", "wyjdź", "exit", "quit", "beenden", "quitter", "salir"];
+	const MENU_ANCHOR_TEXTS = ["mody", "mods", "mapy", "maps", "karten", "cartes", "mapas"];
 
 	function findMenuLeaf(texts) {
 		const all = document.body.querySelectorAll("div,button,span,a,p");
@@ -2527,7 +2528,17 @@
 			if (ST._lobbyOpen) closeLobby();
 			return;
 		}
-		const anchor = findMenuLeaf(MENU_ANCHOR_TEXTS) || findMenuLeaf(MENU_LEAF_TEXTS);
+		let anchor = findMenuLeaf(MENU_ANCHOR_TEXTS) || findMenuLeaf(MENU_LEAF_TEXTS);
+		// element znaleziony, ale niewidoczny/zerowy (podekran renderuje co innego) = brak kotwicy
+		if (anchor) {
+			const ar = (anchor.closest("button") || anchor.parentElement || anchor).getBoundingClientRect();
+			if (ar.width < 5 || ar.height < 5) anchor = null;
+		}
+		if (anchor) ST._menuAnchorSeen = true;
+		// PODMENU (Wczytaj/Opcje/Mody...) — przyciski menu głównego ZNIKAJĄ z DOM, a fallback pokazywał
+		// nasz przycisk nad podekranem (raport Psychospark89). Jeśli kotwicę już kiedyś widzieliśmy,
+		// jej brak = podmenu → chowamy. Fallback zostaje TYLKO dla nieznanych języków (kotwica nigdy nie znaleziona).
+		if (!anchor && ST._menuAnchorSeen) { if (btn) btn.style.display = "none"; if (ST._lobbyOpen) renderLobby(false); return; }
 		if (!btn) {
 			btn = document.createElement("div");
 			btn.id = "st-mp-btn";

@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-20 (v0.9.65) — Multiplayer button no longer floats over the Load/Options screens (report: Psychospark89)
+
+Sub-screens replace the main-menu buttons in the DOM, which used to trigger the button's fallback position — it now hides whenever its menu anchor disappears (and recognizes the menu in five game languages: EN/PL/DE/FR/ES).
+
 ## 2026-08-20 (v0.9.64) — PR #8 by AlyxiaFox (contributor #6): congestion control for the world sync
 
 The host used to push whatever the sim dirtied straight into Steam's send buffer; the reliable channel is ORDERED, so a client behind on bandwidth replayed history instead of seeing the present (measured up to 60 s behind). Now the client acks each applied batch (10 Hz, on the unordered channel so acks never queue behind world data), the host measures how far behind the slowest player is and throttles itself with an AIMD controller and a byte budget per batch — backlog waits on the host where chunks coalesce, so you get one current state instead of every intermediate frame. The PR also fixed a real long-standing bug: the mirror queue and row hashes were never reset between sessions, so hosting a second time could silently never send chunks the previous session considered delivered. Merged with review; ping/RTT also moved off the ordered channel.
