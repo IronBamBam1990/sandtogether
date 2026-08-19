@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.60-beta";
+	const VER = "0.9.61-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -81,6 +81,10 @@
 			badge_client: (tr) => "● CONNECTED (" + tr + ") — you are a player",
 			chat_joined: (n) => n + " joined",
 			chat_left: (n) => n + " left",
+			lb_nick: "Your nick",
+			lb_pick_save: "📂 Choose a save...", lb_pick_save_d: "load a specific world instead of the last one",
+			lb_new_note: "New map? Close this window and click New Game — hosting stays active, the world is sent to players when you enter it.",
+			host_enter_world_first: "Enter your world first (Continue / Load Game) — it will be sent to players automatically.",
 		},
 		pl: {
 			offline: "offline", btn_host: "Host (Steam)", btn_invite: "Zaproś", btn_host_lan: "Host LAN",
@@ -130,6 +134,10 @@
 			badge_client: (tr) => "● POŁĄCZONY (" + tr + ") — jesteś graczem",
 			chat_joined: (n) => n + " dołączył",
 			chat_left: (n) => n + " wyszedł",
+			lb_nick: "Twój nick",
+			lb_pick_save: "📂 Wybierz save...", lb_pick_save_d: "wczytaj konkretny świat zamiast ostatniego",
+			lb_new_note: "Nowa mapa? Zamknij to okno i kliknij Nowa — hosting zostaje aktywny, świat wyśle się graczom gdy do niego wejdziesz.",
+			host_enter_world_first: "Najpierw wejdź do świata (Kontynuuj / Wczytaj) — graczom wyśle się automatycznie.",
 		},
 	};
 	const t = (key, ...args) => {
@@ -381,12 +389,15 @@
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
+				// własny nick (localStorage) rozgłaszany istniejącym protokołem hello — bez zmian w mostku IPC
+				if (ST._nickCustom) { try { net.send({ t: "hello", nick: ST._nickCustom }); } catch (e) {} }
 				setStatus(t("joined", ev.transport));
 			} else if (ev.kind === "peer-hello" || ev.kind === "peer-connected") {
 				const isNew = !ST.peers.has(ev.id);
 				if (isNew) ST.peers.set(ev.id, { nick: ev.nick || "?", x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
 				if (ev.nick) ST.peers.get(ev.id).nick = ev.nick;
 				if (ev.kind === "peer-hello") addChat("★", t("chat_joined", ev.nick || "?")); // widoczna informacja KTO dołączył
+				if (ST._nickCustom) { try { net.send({ t: "hello", nick: ST._nickCustom }, ev.id); } catch (e) {} } // nowy peer ma znać nasz własny nick
 				setStatus(t("players", ST.peers.size + 1));
 				if (ST.net.role === "host") {
 					enqueueFullWorld(); // nowy gracz -> pełny świat (mirror)
@@ -417,7 +428,8 @@
 		net.onMsg(({ from, msg }) => handleMsg(from, msg));
 		net.status().then((s) => {
 			ST.net.role = s.role; ST.net.transport = s.transport;
-			ST._myNick = s.myNick || null; // nick lokalnego gracza (lista graczy w lobby)
+			try { ST._nickCustom = localStorage.getItem("st_nick") || null; } catch (e) { ST._nickCustom = null; }
+			ST._myNick = ST._nickCustom || s.myNick || null; // własny nick > nick Steam > default (feedback TCentraL: LAN = "Player" na stałe)
 			ST._gameFp = s.gameFp || null; // odcisk buildu gry (guard różnych buildów między graczami)
 			for (const p of s.peers) ST.peers.set(p.id, { nick: p.nick, x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
 			if (s.role === "host") setStatus("HOST (" + s.transport + ") — gracze: " + (s.peers.length + 1));
@@ -525,6 +537,12 @@
 				ST._lastWorldReqT = performance.now();
 				log("world-req od", from, "-> wysyłam save");
 				sendWorld();
+			}
+		} else if (msg.t === "world-wait") {
+			// host jeszcze nie wszedł do świata — czekamy spokojnie, próba world-req nie przepada
+			if (ST.net.role === "client") {
+				ST._worldReqN = Math.max(0, (ST._worldReqN || 0) - 1);
+				setStatus(t("waiting_host_world"), "#fd5");
 			}
 		} else if (msg.t === "world-begin") {
 			// NOWY transfer w trakcie odbioru = restart z przemieszanymi indeksami paczek → burza world-need
@@ -2234,6 +2252,16 @@
 	async function sendWorld() {
 		try {
 			if (ST.net.role === "idle") { setStatus(t("connect_first"), "#f66"); return; }
+			// HOST W MENU (raport TCentraL: Steam-join zanim host wczytał mapę → klient ładował
+			// spekulacyjny "ostatni save" w kółko): świat wysyłamy dopiero gdy host FAKTYCZNIE w nim jest —
+			// auto-send strzeli sam przy wejściu. Klient dostaje world-wait zamiast palić limit world-req.
+			const hostScene = ST.state && ST.state.store && ST.state.store.scene && ST.state.store.scene.active;
+			if (hostScene === 1) {
+				setStatus(t("host_enter_world_first"), "#fd5");
+				log("sendWorld wstrzymany — host w menu; wysyłam world-wait");
+				try { net.send({ t: "world-wait" }); } catch (e) {}
+				return;
+			}
 			const saves = await window.electron.getSaveFiles();
 			if (!saves || !saves.length) { setStatus(t("no_saves"), "#f66"); return; }
 			const ts = (s) => s.timestamp || s.updatedAt || s.savedAt || s.time || s.date || 0;
@@ -2374,19 +2402,27 @@
 			document.body.appendChild(btn);
 		}
 		btn.style.display = "block";
+		// stan połączenia widoczny BEZ otwierania lobby (feedback TCentraL: "no real way to know if
+		// you're connected") — zielona kropka i ramka gdy hostujesz / jesteś połączony
+		const conn = ST.net.role !== "idle";
+		btn.textContent = t("mp_btn") + (conn ? "  ●" : "");
+		btn.style.borderColor = conn ? "#4c8" : "rgba(255,255,255,.14)";
+		btn.style.color = conn ? "#aef5c8" : "#fff";
 		if (anchor) {
 			const src = anchor.closest("button") || anchor.parentElement || anchor;
 			const cs = getComputedStyle(src);
 			ST._gameFont = cs.fontFamily || ST._gameFont; // font gry — lobby też go używa
-			btn.style.font = "700 " + Math.max(17, parseInt(cs.fontSize, 10) || 17) + "px " + cs.fontFamily;
-			btn.style.padding = "8px 26px"; // rozmiar zbliżony do Mody/Mapy (feedback: przycisk był za mały)
+			// stały, DUŻY rozmiar (feedback usera: "bardzo mały, ledwo widoczny" — rozmiar Mody/Mapy był za mały)
+			btn.style.font = "700 20px " + cs.fontFamily;
+			btn.style.padding = "10px 30px";
 			const r = src.getBoundingClientRect();
 			btn.style.left = Math.round(r.left) + "px";
 			btn.style.top = Math.round(r.bottom + 10) + "px";
 			btn.style.bottom = "";
 		} else {
 			btn.style.left = "24px"; btn.style.top = ""; btn.style.bottom = "24px";
-			btn.style.font = "700 17px sans-serif";
+			btn.style.font = "700 20px sans-serif";
+			btn.style.padding = "10px 30px";
 		}
 		if (ST._lobbyOpen) renderLobby(false);
 	}
@@ -2478,6 +2514,21 @@
 			p.appendChild(sub);
 
 			if (view === "start") {
+				// nick gracza (feedback TCentraL: na LAN każdy jest "Player") — zapis w localStorage,
+				// rozgłaszany protokołem hello przy joinie / do nowych peerów
+				const nickRow = document.createElement("div");
+				nickRow.style.cssText = "margin:0 0 8px;font-size:12px;color:#9fb6c9";
+				const nickLbl = document.createElement("span"); nickLbl.textContent = t("lb_nick") + ":  ";
+				const nickIn = lbInput(t("lb_nick"), ST._nickCustom || ST._myNick || "", 150);
+				nickIn.maxLength = 24;
+				nickIn.addEventListener("input", () => {
+					const v = nickIn.value.trim().slice(0, 24);
+					ST._nickCustom = v || null;
+					try { if (v) localStorage.setItem("st_nick", v); else localStorage.removeItem("st_nick"); } catch (e) {}
+					if (v) ST._myNick = v;
+				});
+				nickRow.appendChild(nickLbl); nickRow.appendChild(nickIn);
+				p.appendChild(nickRow);
 				const bSteam = lbBtn(t("btn_host") /* Host (Steam) */, t("lb_host_steam_d"), true);
 				bSteam.onclick = async () => {
 					setStatus(t("creating_lobby"));
@@ -2570,6 +2621,42 @@
 					const play = lbBtn(t("lb_play_last"), t("lb_play_note"), true);
 					play.onclick = loadLatestAndPlay;
 					p.appendChild(play);
+					// wybór KONKRETNEGO save'a (feedback TCentraL: "maybe do: New map option, load map option")
+					const pick = lbBtn(t("lb_pick_save"), t("lb_pick_save_d"), false);
+					const list = document.createElement("div");
+					list.style.cssText = "display:none;max-height:180px;overflow:auto;margin:2px 0 6px;border:1px solid rgba(255,255,255,.1);border-radius:4px";
+					pick.onclick = async () => {
+						if (list.style.display !== "none") { list.style.display = "none"; return; }
+						list.style.display = "block"; list.innerHTML = "";
+						try {
+							const saves = await window.electron.getSaveFiles();
+							const tsv = (s) => s.timestamp || s.updatedAt || s.savedAt || s.time || s.date || 0;
+							(saves || []).sort((a, b) => (tsv(a) < tsv(b) ? 1 : -1));
+							for (const sv of (saves || []).slice(0, 25)) {
+								const row = document.createElement("div");
+								row.style.cssText = "cursor:pointer;padding:5px 10px;border-bottom:1px solid rgba(255,255,255,.06);color:#cfe0ee;font-size:13px";
+								const tv = tsv(sv);
+								row.textContent = (sv.name || sv.id) + (tv > 1e12 ? "   ·   " + new Date(tv).toLocaleString() : "");
+								row.onmouseenter = () => { row.style.background = "#1c3850"; };
+								row.onmouseleave = () => { row.style.background = ""; };
+								row.onclick = async () => {
+									closeLobby();
+									try {
+										log("lobby: wczytuję wybrany save:", sv.name || sv.id);
+										const lr = await ST.FH.game.load(ST.state, sv.id);
+										if (lr && lr.success === false) throw new Error(lr.error || "load failed");
+									} catch (e) { setStatus(t("error", e.message), "#f66"); }
+								};
+								list.appendChild(row);
+							}
+							if (!list.childElementCount) list.textContent = t("no_saves");
+						} catch (e) { list.textContent = "error: " + e.message; }
+					};
+					p.appendChild(pick); p.appendChild(list);
+					const newNote = document.createElement("div");
+					newNote.style.cssText = "font-size:11px;color:#7d95a8;margin:0 0 8px";
+					newNote.textContent = t("lb_new_note");
+					p.appendChild(newNote);
 				} else {
 					const w8 = document.createElement("div");
 					w8.style.cssText = "font-size:12px;color:#9fb6c9;margin:6px 0 10px"; w8.textContent = t("lb_wait_host");

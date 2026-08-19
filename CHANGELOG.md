@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-19 (v0.9.61) — community feedback batch: Linux CRLF guard, host-in-menu fix, player nick, save picker
+
+(1) The Linux installer now heals itself when a download or editor converted it to Windows line endings — the exact crash PsychoSpark hit on CachyOS ("set: pipefail: invalid option name"); it also survives being run with `sh` instead of `bash`. (2) A Steam player joining BEFORE the host loaded a map no longer triggers a speculative world transfer that reloaded the client's map forever (report: TCentraL) — the host now answers "world-wait" until it actually enters a world, and the client shows "waiting for the host to enter a world". (3) You can finally set your NICK (LAN players were all "Player") — a field in the lobby, stored locally, announced over the existing hello protocol. (4) The host lobby gained "📂 Choose a save..." next to "▶ Load last save & PLAY". (5) The menu Multiplayer button is bigger and shows a green connection dot when you're hosting/connected.
+
 ## 2026-08-19 (v0.9.60) — session status you can actually SEE
 
 The panel now always shows a colored role badge — "○ OFFLINE" (red) / "● HOSTING (Steam/LAN)" (green) / "● CONNECTED — you are a player" (blue) — plus a live player list (nick, host marker, mod-version match). Buttons are contextual: offline shows only the ways to connect, a host sees Invite/Send world/Stop, a client sees Resync/Stop — no more wall of nine buttons. Chat logs who joined/left. The host lobby shows the two steps that matter (1. invite, 2. hit PLAY) and hosting errors are surfaced instead of failing silently. The menu Multiplayer button is bigger.

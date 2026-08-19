@@ -4,8 +4,13 @@
 # No Node.js required: uses the game's own Electron binary as the runtime.
 # Optional argument: path to the Sandustry game folder (for exotic setups).
 # ============================================================================
+# CRLF-proof bootstrap (report: PsychoSpark/CachyOS — a download or editor turned LF into CRLF
+# and bash died on "set: pipefail\r"). This single line is safe even WITH CRLF (it ends in a
+# comment, so the stray \r is swallowed) and re-runs a cleaned copy of the script. It also
+# rescues people who run "sh install-linux.sh" — the re-exec always uses bash.
+if [ -z "${ST_DIR:-}" ]; then ST_DIR="$(cd "$(dirname "$0")" && pwd)"; export ST_DIR; tr -d '\r' <"$0" >"/tmp/sandtogether-install-$$.sh"; exec bash "/tmp/sandtogether-install-$$.sh" "$@"; fi # crlf-guard
 set -euo pipefail
-DIR="$(cd "$(dirname "$0")" && pwd)"
+DIR="${ST_DIR:-$(cd "$(dirname "$0")" && pwd)}"
 
 find_game() {
   # classic install, XDG, Flatpak Steam, old symlink — plus extra libraries
