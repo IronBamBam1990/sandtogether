@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-20 (v0.9.64) — PR #8 by AlyxiaFox (contributor #6): congestion control for the world sync
+
+The host used to push whatever the sim dirtied straight into Steam's send buffer; the reliable channel is ORDERED, so a client behind on bandwidth replayed history instead of seeing the present (measured up to 60 s behind). Now the client acks each applied batch (10 Hz, on the unordered channel so acks never queue behind world data), the host measures how far behind the slowest player is and throttles itself with an AIMD controller and a byte budget per batch — backlog waits on the host where chunks coalesce, so you get one current state instead of every intermediate frame. The PR also fixed a real long-standing bug: the mirror queue and row hashes were never reset between sessions, so hosting a second time could silently never send chunks the previous session considered delivered. Merged with review; ping/RTT also moved off the ordered channel.
+
 ## 2026-08-19 (v0.9.63) — instant-kick on join + interleaved world transfers (reports: Akriz, derErste67)
 
 **Instant kick**: joining a host who was still in the MAIN MENU disconnected you within a second. The host was streaming its menu-scene buffers (an old both-in-menu "mirror test mode"), the joining client painted them and marked the mirror as started — which armed the "quit to title = leave session" logic from 0.9.53 and immediately stopped the session. Since the new lobby encourages hosting from the menu, this surfaced as "broken since the Multiplayer button". Fixed on all layers: a host in the menu no longer streams anything, the mirror never paints while you're in the menu (test mode removed), and auto-leave additionally requires that you actually WERE in a world this session. This also explains clients who "mine on their own world" while connected.

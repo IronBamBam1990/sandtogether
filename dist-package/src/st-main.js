@@ -358,7 +358,12 @@ function sendToPeer(peer, obj) {
   try {
     if (peer.kind === 'ws') peer.sock.write(wsEncodeFrame(text, S.role === 'client'));
     else if (peer.kind === 'steam') {
-      const reliable = obj.t !== 'pos';
+      // ping, pong and wcack MUST bypass the reliable channel. Steam's reliable channel is ORDERED, so
+      // neither can overtake a backlog of world packets: the HUD would report send queue depth instead of
+      // RTT, and the mirror ack would feed the congestion controller state from tens of seconds ago,
+      // which defeats the whole point of measuring. Losing one is harmless, ping goes out every 1 s and
+      // wcack 10x per second, and both carry absolute state rather than a delta.
+      const reliable = obj.t !== 'pos' && obj.t !== 'ping' && obj.t !== 'pong' && obj.t !== 'wcack';
       S.steam.networking.sendP2PPacket(BigInt(peer.steamId64), reliable ? S.steam.networking.SendType.Reliable : S.steam.networking.SendType.UnreliableNoDelay, Buffer.from(text, 'utf8'));
     }
   } catch (e) { log('send error to', peer.id, e.message); }
