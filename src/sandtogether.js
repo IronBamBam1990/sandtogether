@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.47-beta";
+	const VER = "0.9.48-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine + Cr0ss0vr";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2412,6 +2412,11 @@
 							log("demolish-dobicie: gra pominęła", leftovers.size, "struktur (kafle QUEUED?) — usuwam przez removeAt");
 							for (const st of leftovers.values()) { try { SA.removeAt(state, st.x, st.y, {}); } catch (e) {} }
 							if (ST.net.role === "host" && ST.peers.size) try { net.send({ t: "st", k: "rm", list: [...leftovers.values()].map(slimStruct) }); } catch (e) {}
+							// removeAt może tylko zakolejkować usunięcie. W tym samym przebiegu getAtCell nadal
+							// widzi strukturę, więc poniższy sweep terenu słusznie nie ruszy jej czerwonych kafli.
+							// Wróć po kolejnych 250 ms, gdy rejestr struktur zdąży się opróżnić. Limit chroni
+							// przed nieskończoną pętlą przy faktycznie nieusuwalnej strukturze.
+							if ((hd.retry || 0) < 3) ST._hostDemolRect = { ...hd, t: performance.now(), retry: (hd.retry || 0) + 1 };
 						}
 						// OSIEROCONE KAFLE ("czerwone klocki"): struktura już NIE istnieje (getAtCell=null — log
 						// "czysto" przy widocznych klockach!), ale komórki-fundament (terrain Block=15/Sliding 16-18)
