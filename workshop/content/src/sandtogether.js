@@ -1790,7 +1790,13 @@
 				const d = msg.d;
 				if (d && d.id != null) {
 					const arr = state.store.drones || (state.store.drones = []);
-					if (!arr.some((x) => x && x.id === d.id)) { arr.push(d); if ((ST._drHDiag = (ST._drHDiag || 0) + 1) <= 20) log("HOST: dron klienta dodany", d.type, "@", d.x, d.y, "(drones=" + arr.length + ")"); }
+					// kolizja id (klient i host mają WŁASNE liczniki nextId!) → nadaj wolne id zamiast cicho dropować
+					if (arr.some((x) => x && x.id === d.id)) {
+						let mx = 0; for (const x of arr) if (x && x.id > mx) mx = x.id;
+						d.id = mx + 1;
+					}
+					arr.push(d);
+					if ((ST._drHDiag = (ST._drHDiag || 0) + 1) <= 20) log("HOST: dron klienta dodany", d.type, "@", d.x, d.y, "id=" + d.id, "(drones=" + arr.length + ")");
 				}
 			} else if (msg.k === "proj") {
 				// klient odpalił broń → dodaj pocisk do store.projectiles hosta → jego sim symuluje lot+eksplozję
@@ -1831,10 +1837,25 @@
 						log("HOST grabPlace @", msg.x, msg.y, "et=" + msg.et, "before=" + before, "after=" + after, (after >= ELEMENTS_MIN && after <= ELEMENTS_MAX) ? "[OK placé]" : "[!! rien après createAt — perdu/occupé]");
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "fireB") {
+				// MITYGACJA (Knight-HD: "flamethrower klienta robi dziury w fundamentach/piramidzie"):
+				// stary replay palił KAŻDĄ komórkę (burnElementAt+createAt) bez waniliowych guardów,
+				// niszcząc TEREN. Teraz: teren (cellId 1..1000) = NIETYKALNY; pusto (0) = tylko płomień;
+				// element = tylko burnElementAt (zapala palne). Knight pracuje nad pełnym fixem — welcome.
 				const el = ST.FH.elements, fi = ST.FH.fire, c = msg.c || [];
+				const shF = state.shared, simF = shF && shF.sim && shF.sim.cellIds;
+				const simF32 = simF ? new Uint32Array(simF.buffer, simF.byteOffset, simF.length) : null;
+				const WF = (shF && shF.mapData && shF.mapData.width) || 0;
 				ST._applyingNet = true;
-				try { for (let i = 0; i + 1 < c.length; i += 2) { const x = c[i], y = c[i + 1]; try { if (fi && fi.burnElementAt) fi.burnElementAt(state, x, y); } catch (e) {} try { if (el && el.createAt) el.createAt(state, x, y, RJ_FIRE); } catch (e) {} } } finally { ST._applyingNet = false; }
-				if (!ST._fireLogged) { ST._fireLogged = true; log("HOST: ogień klienta odtworzony,", c.length / 2, "komórek"); }
+				try {
+					for (let i = 0; i + 1 < c.length; i += 2) {
+						const x = c[i], y = c[i + 1];
+						const cid = simF32 && WF ? simF32[x + y * WF] : 0;
+						if (cid > 0 && cid < ELEMENTS_MIN) continue; // TEREN (fundamenty, skały, piramida) — nie dotykamy
+						if (cid === 0) { try { if (el && el.createAt) el.createAt(state, x, y, RJ_FIRE); } catch (e) {} } // puste powietrze → płomień
+						else { try { if (fi && fi.burnElementAt) fi.burnElementAt(state, x, y); } catch (e) {} } // element → zapal (palne zapłoną, reszta zostaje)
+					}
+				} finally { ST._applyingNet = false; }
+				if (!ST._fireLogged) { ST._fireLogged = true; log("HOST: ogień klienta odtworzony (z ochroną terenu),", c.length / 2, "komórek"); }
 			} else if (msg.k === "cryoB") {
 				const el = ST.FH.elements, c = msg.c || [];
 				ST._applyingNet = true;
