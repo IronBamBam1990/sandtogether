@@ -16,9 +16,9 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.49-beta";
+	const VER = "0.9.50-beta";
 	const AUTHOR = "Kamil Padula";
-	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr";
+	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
 	const RJ_FIRE = 11, RJ_FREEZINGICE = 12; // wartości enuma RJ z obecnego builda (do createAt na hoście)
 	const CHUNK = 40;
@@ -2524,25 +2524,49 @@
 						// zaznaczenia; stare klienty z bboxem anchorów nadal omijają ten krok.
 						if (hd.src !== "client" || hd.cleanOrphans) try {
 							const sh = state.shared || {};
-							const simc = sh.sim && sh.sim.cellIds, tt = sh.sim && sh.sim.terrainType;
+							const simc = sh.sim && sh.sim.cellIds;
+							const tt = sh.sim && sh.sim.terrainType;
 							const TR = ST.FH.terrains;
 							const { W } = worldBuffers(state);
+
 							if (simc && tt && TR && TR.removeAt && W) {
-								const sim32 = new Uint32Array(simc.buffer, simc.byteOffset, simc.length);
+								const sim = new Uint32Array(simc.buffer, simc.byteOffset, simc.length);
+								const H = Math.floor(sim.length / W);
+								// BLOB-EXPAND (pomysł TCentraL, PR #6): od osieroconego kafla rozszerzamy się na całą
+								// przyległą plamę (czerwone klocki częściowo POZA zaznaczeniem też schodzą).
+								// Poprawki po review: (1) typy 15..18 (skosy/schody wróciły — to one były najgorsze),
+								// (2) getAtCell per KAŻDĄ komórkę plamy (plama dotykająca ZDROWEGO malowanego
+								// fundamentu nie może go zjeść), (3) bez mutowania y w środku pętli (gubiło blob-y),
+								// (4) limit ekspansji 64 komórki od seeda (bez maratonu po całej mapie).
+								const isOrphanTile = (xx, yy) => {
+									const n = sim[xx + yy * W];
+									if (n <= 0 || n > 1000) return false;
+									const ty2 = tt[n];
+									if (ty2 < 15 || ty2 > 18) return false;
+									try { if (SA.getAtCell(state, xx, yy)) return false; } catch (e) { return false; }
+									return true;
+								};
 								let cleaned = 0;
-								for (let y = hd.y0; y <= hd.y1; y++) for (let x = hd.x0; x <= hd.x1; x++) {
-									const id = sim32[x + y * W];
-									if (id <= 0 || id > 1000) continue; // 0=pusto, >1000=elementy
-									const ty = tt[id];
-									if (ty < 15 || ty > 18) continue; // tylko Block/SlidingBlock* (kafle budowlane gracza)
-									let alive = null; try { alive = SA.getAtCell(state, x, y); } catch (e) {}
-									if (alive) continue; // żywa struktura — jej kafli nie ruszamy
-									try { TR.removeAt(state, x, y); cleaned++; } catch (e) {}
+								const LIM = 64;
+								for (let y = hd.y0; y <= hd.y1; y++) {
+									for (let x = hd.x0; x <= hd.x1; x++) {
+										if (!isOrphanTile(x, y)) continue;
+										let r = x;
+										while (r + 1 < W && r - x < LIM && isOrphanTile(r + 1, y)) r++;
+										let b = y;
+										while (b + 1 < H && b - y < LIM && isOrphanTile(x, b + 1)) b++;
+										for (let yy = y; yy <= b; yy++) for (let xx = x; xx <= r; xx++) {
+											if (!isOrphanTile(xx, yy)) continue;
+											try { TR.removeAt(state, xx, yy); cleaned++; } catch (e) {}
+										}
+										x = r; // wiersz przeskanowany do r; y zostaje (kolejne wiersze skanuje pętla zewn.)
+									}
 								}
-								if (cleaned) log("demolish-dobicie: usunięto", cleaned, "OSIEROCONYCH kafli fundamentu (czerwone klocki)");
-								// przypadku "czysto" NIE logujemy — każde zwykłe przeciągnięcie demolisherem zaśmiecało log
+								if (cleaned) log("demolish-dobicie: usunięto", cleaned, "OSIEROCONYCH kafli (blob-expand)");
 							}
-						} catch (e) { log("dobicie kafli error:", e.message); }
+						} catch (e) {
+							log("ORPHAN CLEANUP ERROR:", e.message);
+						}
 					}
 				} catch (e) { log("demolish-dobicie error:", e.message); }
 			}

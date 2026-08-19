@@ -15,7 +15,7 @@ const PREVIEW = path.resolve(__dirname, '../workshop/preview.png');
 
 const TITLE = 'SandTogether — Co-op Multiplayer';
 const DESCRIPTION = `[h1]SandTogether — Co-op Multiplayer for Sandustry[/h1]
-[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD, DwoaC, Cr0ss0vr[/b]
+[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL[/b]
 
 Play Sandustry together over the internet — no server, no port forwarding. Connect through Steam friend invites. Up to 4 players.
 
@@ -71,7 +71,7 @@ Both players must run the same mod version (the panel warns in red if they diffe
 This mod patches the game files (the game has no built-in mod loader for Early Access yet). Subscribe, then run [b]install.bat[/b] from this item's folder — [b]once[/b]. From then on the mod auto-updates itself at every game launch, so both players always match. Full instructions in README.md (EN) / INSTRUKCJA.md (PL).
 
 [h2]💛 Thank you — this mod is community-built[/h2]
-Huge thanks to the code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts — a whole pull request!) [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix, tested on two Macs) and [b]Cr0ss0vr[/b] (precise client demolish selection + safe red-tile cleanup).
+Huge thanks to the code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts — a whole pull request!) [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix, tested on two Macs) [b]Cr0ss0vr[/b] (precise client demolish selection + safe red-tile cleanup) and [b]TCentraL[/b] (blob-expanding red-tile cleanup — after being our sharpest tester, he sent code).
 
 And to the testers whose precise bug reports shaped almost every release: [b]TCentraL[/b], [b]Warlow[/b], [b]derErste67[/b], [b]NanYu_sad.[/b], [b]ЗаКеЛьМан[/b], [b]星灵[/b], [b]Lofar666[/b], [b]Bobulator333[/b], [b]thatsmaik[/b], [b]uolkx[/b], [b]MIXUIL[/b], [b]Justin[/b], [b]Hooye!![/b], [b]tony.s.jennette[/b], [b]Sprut[/b] — and everyone else who reported, tested and played. A short description + your log file (%APPDATA%\\Sandustry\\logs\\main.log) is the fastest route to a fix.
 

@@ -2532,47 +2532,37 @@
 							if (simc && tt && TR && TR.removeAt && W) {
 								const sim = new Uint32Array(simc.buffer, simc.byteOffset, simc.length);
 								const H = Math.floor(sim.length / W);
-
-									for (let y = hd.y0; y <= hd.y1; y++) {
-										for (let x = hd.x0; x <= hd.x1; x++) {
-											const id = sim[x + y * W];
-											if (id <= 0 || id > 1000 || tt[id] !== 15) continue;
-
-											let s = null;
-											try { s = SA.getAtCell(state, x, y); } catch (e) {}
-											if (s) continue;
-
-											let r = x;
-											while (r + 1 < W) {
-												const n = sim[r + 1 + y * W];
-												if (n <= 0 || n > 1000 || tt[n] !== 15) break;
-												r++;
-											}
-
-											let b = y;
-											while (b + 1 < H) {
-												const n = sim[x + (b + 1) * W];
-												if (n <= 0 || n > 1000 || tt[n] !== 15) break;
-												b++;
-											}
-
-											for (let yy = y; yy <= b; yy++) {
-												for (let xx = x; xx <= r; xx++) {
-													const n = sim[xx + yy * W];
-													if (n <= 0 || n > 1000 || tt[n] !== 15) continue;
-
-													try {
-														TR.removeAt(state, xx, yy);
-													} catch (e) {
-														log("ORPHAN REMOVE ERROR:", xx, yy, e.message);
-													}
-												}
-											}
-
-											x = r;
-											y = b;
+								// BLOB-EXPAND (pomysł TCentraL, PR #6): od osieroconego kafla rozszerzamy się na całą
+								// przyległą plamę (czerwone klocki częściowo POZA zaznaczeniem też schodzą).
+								// Poprawki po review: (1) typy 15..18 (skosy/schody wróciły — to one były najgorsze),
+								// (2) getAtCell per KAŻDĄ komórkę plamy (plama dotykająca ZDROWEGO malowanego
+								// fundamentu nie może go zjeść), (3) bez mutowania y w środku pętli (gubiło blob-y),
+								// (4) limit ekspansji 64 komórki od seeda (bez maratonu po całej mapie).
+								const isOrphanTile = (xx, yy) => {
+									const n = sim[xx + yy * W];
+									if (n <= 0 || n > 1000) return false;
+									const ty2 = tt[n];
+									if (ty2 < 15 || ty2 > 18) return false;
+									try { if (SA.getAtCell(state, xx, yy)) return false; } catch (e) { return false; }
+									return true;
+								};
+								let cleaned = 0;
+								const LIM = 64;
+								for (let y = hd.y0; y <= hd.y1; y++) {
+									for (let x = hd.x0; x <= hd.x1; x++) {
+										if (!isOrphanTile(x, y)) continue;
+										let r = x;
+										while (r + 1 < W && r - x < LIM && isOrphanTile(r + 1, y)) r++;
+										let b = y;
+										while (b + 1 < H && b - y < LIM && isOrphanTile(x, b + 1)) b++;
+										for (let yy = y; yy <= b; yy++) for (let xx = x; xx <= r; xx++) {
+											if (!isOrphanTile(xx, yy)) continue;
+											try { TR.removeAt(state, xx, yy); cleaned++; } catch (e) {}
 										}
+										x = r; // wiersz przeskanowany do r; y zostaje (kolejne wiersze skanuje pętla zewn.)
 									}
+								}
+								if (cleaned) log("demolish-dobicie: usunięto", cleaned, "OSIEROCONYCH kafli (blob-expand)");
 							}
 						} catch (e) {
 							log("ORPHAN CLEANUP ERROR:", e.message);
