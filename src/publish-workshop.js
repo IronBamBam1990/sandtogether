@@ -15,7 +15,7 @@ const PREVIEW = path.resolve(__dirname, '../workshop/preview.png');
 
 const TITLE = 'SandTogether — Co-op Multiplayer';
 const DESCRIPTION = `[h1]SandTogether — Co-op Multiplayer for Sandustry[/h1]
-[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD, DwoaC[/b]
+[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD, DwoaC, Cr0ss0vr[/b]
 
 Play Sandustry together over the internet — no server, no port forwarding. Connect through Steam friend invites. Up to 4 players.
 
@@ -71,7 +71,7 @@ Both players must run the same mod version (the panel warns in red if they diffe
 This mod patches the game files (the game has no built-in mod loader for Early Access yet). Subscribe, then run [b]install.bat[/b] from this item's folder — [b]once[/b]. From then on the mod auto-updates itself at every game launch, so both players always match. Full instructions in README.md (EN) / INSTRUKCJA.md (PL).
 
 [h2]💛 Thank you — this mod is community-built[/h2]
-Huge thanks to the code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts — a whole pull request!) and [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix, tested on two Macs).
+Huge thanks to the code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts — a whole pull request!) [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix, tested on two Macs) and [b]Cr0ss0vr[/b] (precise client demolish selection + safe red-tile cleanup).
 
 And to the testers whose precise bug reports shaped almost every release: [b]TCentraL[/b], [b]Warlow[/b], [b]derErste67[/b], [b]NanYu_sad.[/b], [b]ЗаКеЛьМан[/b], [b]星灵[/b], [b]Lofar666[/b], [b]Bobulator333[/b], [b]thatsmaik[/b], [b]uolkx[/b], [b]MIXUIL[/b], [b]Justin[/b], [b]Hooye!![/b], [b]tony.s.jennette[/b], [b]Sprut[/b] — and everyone else who reported, tested and played. A short description + your log file (%APPDATA%\\Sandustry\\logs\\main.log) is the fastest route to a fix.
 
@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'Description update: derErste67 added to the thank-you section (two precise grabber reports fixed same-hour in 0.9.43/0.9.44) and a clarification for Mac players: the macOS installer is named install.command (it replaced the briefly-announced install-macos.command — thanks tony.s.jennette for flagging the confusion). Mod files unchanged since v0.9.44-beta.',
+    changeNote: 'v0.9.46-beta — big catch-up release after the Workshop content freeze (Steam rate-limited our update cadence; the Workshop was serving 0.9.36 files while newer publishes silently failed). Everything since then, consolidated: team chat, per-player memory, machine settings sync, row-delta streaming (2-10x less bandwidth), AUTO-UPDATE (install once, ever), macOS support by DwoaC (installer + Steam-invite fix), research FULLY shared (buildings/items/map for the whole team), grabber research gates + single-type tank, and Cr0ss0vr's precise client-demolish selection with safe red-tile cleanup (new contributor - thank you!). Both players: re-run the installer once if the panel shows an old version; auto-update handles the rest.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

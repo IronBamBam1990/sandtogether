@@ -16,9 +16,9 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.48-beta";
+	const VER = "0.9.46-beta";
 	const AUTHOR = "Kamil Padula";
-	const CONTRIBUTORS = "dotNine + Cr0ss0vr";
+	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
 	const RJ_FIRE = 11, RJ_FREEZINGICE = 12; // wartości enuma RJ z obecnego builda (do createAt na hoście)
 	const CHUNK = 40;

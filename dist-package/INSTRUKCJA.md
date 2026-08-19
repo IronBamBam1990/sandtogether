@@ -1,6 +1,6 @@
 # SandTogether — coop mod dla Sandustry (v0.9.39-beta)
 
-**Autor: Kamil Padula** · Współtwórcy: **dotNine**, **Knight-HD**
+**Autor: Kamil Padula** · Współtwórcy: **dotNine**, **Knight-HD**, **DwoaC**, **Cr0ss0vr**
 
 Mod dodaje pełny multiplayer coop do Sandustry — jeden wspólny żywy świat przez
 zaproszenia Steam (lub LAN), do 4 graczy. Osiągnięcia Steam działają normalnie.

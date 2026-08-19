@@ -1,6 +1,6 @@
 # SandTogether — co-op multiplayer mod for Sandustry (v0.9.39-beta)
 
-**Author: Kamil Padula** · Contributors: **dotNine**, **Knight-HD**, **DwoaC**
+**Author: Kamil Padula** · Contributors: **dotNine**, **Knight-HD**, **DwoaC**, **Cr0ss0vr**
 
 SandTogether adds full co-op multiplayer to Sandustry — one shared live world over
 Steam friend invites (or LAN), up to 4 players. Steam achievements keep working.
