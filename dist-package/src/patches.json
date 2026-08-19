@@ -57,6 +57,10 @@
         {
           "anchor": "E=(e,t)=>{e.store.drones.push(t)}",
           "patched": "E=(e,t)=>{window.SandTogether&&window.SandTogether._drone&&window.SandTogether._drone(e,t);e.store.drones.push(t)}"
+        },
+        {
+          "anchor": "M=(e,t)=>{e.store.drones.push(t)}",
+          "patched": "M=(e,t)=>{window.SandTogether&&window.SandTogether._drone&&window.SandTogether._drone(e,t);e.store.drones.push(t)}"
         }
       ]
     },
