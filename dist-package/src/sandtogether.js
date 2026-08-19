@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.51-beta";
+	const VER = "0.9.52-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1197,7 +1197,15 @@
 			if (msg.e !== null && arr(sh.energy)) arr(sh.energy)[0] = msg.e;
 			if (msg.p !== null && arr(sh.productionPoints)) arr(sh.productionPoints)[0] = msg.p;
 			if (msg.c && arr(sh.conveyorBeltsAnimationIndex)) { const c = arr(sh.conveyorBeltsAnimationIndex); for (let i = 0; i < Math.min(c.length, msg.c.length); i++) c[i] = msg.c[i]; }
-			if (msg.st) state.store.mods = msg.st;
+			if (msg.st) {
+				// store.mods = postęp fabuły/kolekcje (drużynowe) ALE też preferencje PER-GRACZ.
+				// Fix TCentraL: "shake u klienta działa tylko gdy host ma Shaking włączone" — przełącznik
+				// żyje w mods.grabberSizeScroll i był nadpisywany stanem HOSTA co 1s. Lokalne preferencje
+				// zachowujemy przy nadpisie (lista rozszerzalna, gdyby gra trzymała tu więcej ustawień UI).
+				const prevMods = state.store.mods || {};
+				state.store.mods = msg.st;
+				for (const k of ["grabberSizeScroll"]) if (prevMods[k] !== undefined) state.store.mods[k] = prevMods[k];
+			}
 			if (msg.gl) state.store.gloom = msg.gl;
 			if (msg.fp) { const a = fpArr(state); if (a) { const src = msg.fp; for (let i = 0; i < Math.min(a.length, src.length); i++) { try { Atomics.store(a, i, src[i]); } catch (e) { a[i] = src[i]; } } } }
 			// wspólna pula ulepszeń/tech (fix G2): merge poziomów (NIE podmiana obiektów — gra trzyma referencje)
