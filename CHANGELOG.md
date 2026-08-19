@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-19 (v0.9.60) — session status you can actually SEE
+
+The panel now always shows a colored role badge — "○ OFFLINE" (red) / "● HOSTING (Steam/LAN)" (green) / "● CONNECTED — you are a player" (blue) — plus a live player list (nick, host marker, mod-version match). Buttons are contextual: offline shows only the ways to connect, a host sees Invite/Send world/Stop, a client sees Resync/Stop — no more wall of nine buttons. Chat logs who joined/left. The host lobby shows the two steps that matter (1. invite, 2. hit PLAY) and hosting errors are surfaced instead of failing silently. The menu Multiplayer button is bigger.
+
 ## 2026-08-19 (v0.9.59) — MULTIPLAYER button in the main menu + a real lobby; reload-loop hotfix
 
 **New UI**: the main menu now has a proper **Multiplayer** button (styled like the game's own menu, placed under Mods/Maps). It opens a full-screen lobby: Host (Steam) / Host (LAN) / Join LAN (ip+port) / Join by Lobby ID — each with a description; when hosting you get an invite button, a masked lobby id (click = copy), a live player list (nick + mod version) and a one-click **"Load last save & PLAY"** — the world then sends itself to joined players automatically. The corner panel stays for in-game status/chat.

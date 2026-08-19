@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.59-beta";
+	const VER = "0.9.60-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -75,6 +75,12 @@
 			lb_play_note: "Your world is sent to joined players automatically. You can also just use Continue / Load Game.",
 			lb_wait_host: "Waiting for the host's world — it downloads and loads automatically.",
 			lb_hint: "Tip: a Steam invite can be accepted at ANY time — everything else happens automatically.",
+			lb_steps: "1) Invite friends   2) Hit PLAY — they will join your map automatically",
+			badge_offline: "○ OFFLINE — not connected",
+			badge_host: (tr) => "● HOSTING (" + tr + ")",
+			badge_client: (tr) => "● CONNECTED (" + tr + ") — you are a player",
+			chat_joined: (n) => n + " joined",
+			chat_left: (n) => n + " left",
 		},
 		pl: {
 			offline: "offline", btn_host: "Host (Steam)", btn_invite: "Zaproś", btn_host_lan: "Host LAN",
@@ -118,6 +124,12 @@
 			lb_play_note: "Twój świat wyśle się dołączonym graczom automatycznie. Możesz też po prostu użyć Kontynuuj / Wczytaj.",
 			lb_wait_host: "Czekam na świat hosta — pobierze się i wczyta automatycznie.",
 			lb_hint: "Tip: zaproszenie Steam możesz przyjąć w KAŻDEJ chwili — reszta dzieje się sama.",
+			lb_steps: "1) Zaproś znajomych   2) Wciśnij GRAJ — dołączą na Twoją mapę automatycznie",
+			badge_offline: "○ OFFLINE — nie połączono",
+			badge_host: (tr) => "● HOSTUJESZ (" + tr + ")",
+			badge_client: (tr) => "● POŁĄCZONY (" + tr + ") — jesteś graczem",
+			chat_joined: (n) => n + " dołączył",
+			chat_left: (n) => n + " wyszedł",
 		},
 	};
 	const t = (key, ...args) => {
@@ -371,8 +383,10 @@
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
 				setStatus(t("joined", ev.transport));
 			} else if (ev.kind === "peer-hello" || ev.kind === "peer-connected") {
-				if (!ST.peers.has(ev.id)) ST.peers.set(ev.id, { nick: ev.nick || "?", x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
+				const isNew = !ST.peers.has(ev.id);
+				if (isNew) ST.peers.set(ev.id, { nick: ev.nick || "?", x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
 				if (ev.nick) ST.peers.get(ev.id).nick = ev.nick;
+				if (ev.kind === "peer-hello") addChat("★", t("chat_joined", ev.nick || "?")); // widoczna informacja KTO dołączył
 				setStatus(t("players", ST.peers.size + 1));
 				if (ST.net.role === "host") {
 					enqueueFullWorld(); // nowy gracz -> pełny świat (mirror)
@@ -382,6 +396,8 @@
 				}
 			} else if (ev.kind === "peer-disconnected") {
 				if (ST.state) profileSave(ST.state); // utrwal profil PRZED ewentualną zmianą stanu (G7-lite)
+				const gone = ST.peers.get(ev.id);
+				if (gone) addChat("★", t("chat_left", gone.nick || "?"));
 				ST.peers.delete(ev.id); removePeerPuppet(ev.id);
 				setStatus(t("player_left", ST.peers.size + 1), "#fa5");
 				// KLIENT ZOSTAJE ZAPAUZOWANY — ciche odpauzowanie tworzyło rozwidlony świat (gracz "grał dalej"
@@ -395,6 +411,8 @@
 			} else if (ev.kind === "reconnecting") { setStatus(t("reconnecting", ev.attempt), "#fd5");
 			} else if (ev.kind === "version-mismatch") setStatus(t("ver_mismatch"), "#f66");
 			else if (ev.kind === "error") setStatus(t("error", ev.message), "#f66");
+			updatePanel(); // badge/przyciski/lista graczy odzwierciedlają KAŻDĄ zmianę stanu sieci
+			if (ST._lobbyOpen) renderLobby(false);
 		});
 		net.onMsg(({ from, msg }) => handleMsg(from, msg));
 		net.status().then((s) => {
@@ -2081,18 +2099,24 @@
 			'<span id="st-collapse" style="color:#888;font-size:14px;line-height:1">▾</span>' +
 			"</div>" +
 			'<div id="st-body">' +
-			'<div id="st-status" style="margin:4px 0;color:#aaa">' + t("offline") + "</div>" +
+			// BADGE ROLI: zawsze widoczne, kolorowe "czy hostuję / czy jestem połączony" (feedback usera:
+			// "nie pisze tam czy hostuje gre czy nie")
+			'<div id="st-badge" style="margin:4px 0 2px;font-weight:bold;font-size:12px;color:#f66">' + t("badge_offline") + "</div>" +
+			'<div id="st-status" style="margin:2px 0;color:#aaa">' + t("offline") + "</div>" +
 			'<div id="st-sync" style="margin:2px 0;color:#7af;font-size:10px"></div>' +
 			'<div id="st-ping" style="margin:2px 0;color:#fc7;font-size:10px"></div>' +
 			'<div id="st-lobbyid" style="margin:2px 0;color:#9f9;font-size:10px;display:none"></div>' +
-			'<div id="st-buttons">' +
-			'<button id="st-host">' + t("btn_host") + "</button> " +
-			'<button id="st-invite" style="display:none">' + t("btn_invite") + "</button><br>" +
-			'<button id="st-host-lan">' + t("btn_host_lan") + "</button> " +
-			'<button id="st-join-lan">' + t("btn_join_lan") + "</button> " +
-			'<button id="st-stop">' + t("btn_stop") + "</button><br>" +
-			'<button id="st-send-world">' + t("btn_send_world") + "</button> " +
-			'<button id="st-resync">' + t("btn_resync") + "</button><br>" +
+			// LISTA GRACZY: kto jest w sesji (nick + zgodność wersji moda)
+			'<div id="st-players" style="margin:3px 0;display:none;font-size:11px;line-height:1.5"></div>' +
+			// przyciski KONTEKSTOWE — updatePanel() pokazuje tylko sensowne dla aktualnej roli
+			'<div id="st-buttons" style="display:flex;flex-wrap:wrap;gap:1px">' +
+			'<button id="st-host">' + t("btn_host") + "</button>" +
+			'<button id="st-invite" style="display:none">' + t("btn_invite") + "</button>" +
+			'<button id="st-host-lan">' + t("btn_host_lan") + "</button>" +
+			'<button id="st-join-lan">' + t("btn_join_lan") + "</button>" +
+			'<button id="st-stop">' + t("btn_stop") + "</button>" +
+			'<button id="st-send-world">' + t("btn_send_world") + "</button>" +
+			'<button id="st-resync">' + t("btn_resync") + "</button>" +
 			'<button id="st-join-id">' + t("btn_join_id") + "</button>" +
 			// Wiersz z polem IP dla Join LAN — Electron/Chromium NIE obsługuje window.prompt(),
 			// więc adres wpisuje się tu, w panelu (nie przez dialog przeglądarki).
@@ -2116,6 +2140,7 @@
 			"</div>";
 		document.body.appendChild(hud);
 		for (const b of hud.querySelectorAll("button")) b.style.cssText = "background:#222;color:#ddd;border:1px solid #555;border-radius:3px;font:11px monospace;cursor:pointer;margin:1px;padding:2px 6px";
+		updatePanel(); setInterval(updatePanel, 1000); // badge/przyciski/gracze zawsze aktualne
 		hud.querySelector("#st-host").onclick = async () => { setStatus(t("creating_lobby")); const r = await net.hostSteam(); if (!r.ok) setStatus(t("error", r.error), "#f66"); };
 		hud.querySelector("#st-invite").onclick = () => net.invite();
 		hud.querySelector("#st-host-lan").onclick = async () => { const r = await net.hostWs(27777); if (!r.ok) setStatus(t("error", r.error), "#f66"); };
@@ -2255,6 +2280,55 @@
 	}
 
 	// ------------------------------------------------------------------
+	// Panel: badge roli + kontekstowe przyciski + lista graczy.
+	// Stan sesji musi być widoczny NA OKO (feedback usera: "overlay nie pokazuje
+	// żadnych informacji, nie pisze czy hostuję").
+	// ------------------------------------------------------------------
+	function updatePanel() {
+		const hud = document.getElementById("st-hud"); if (!hud) return;
+		const q = (id) => hud.querySelector(id);
+		const role = ST.net.role;
+		const trName = ST.net.transport === "steam" ? "Steam" : "LAN";
+		const badge = q("#st-badge");
+		if (badge) {
+			if (role === "host") { badge.textContent = t("badge_host", trName); badge.style.color = "#5f5"; }
+			else if (role === "client") { badge.textContent = t("badge_client", trName); badge.style.color = "#6cf"; }
+			else { badge.textContent = t("badge_offline"); badge.style.color = "#f66"; }
+		}
+		const show = (id, on) => { const el = q(id); if (el) el.style.display = on ? "" : "none"; };
+		show("#st-host", role === "idle");
+		show("#st-host-lan", role === "idle");
+		show("#st-join-lan", role === "idle");
+		show("#st-join-id", role === "idle");
+		show("#st-invite", role === "host" && ST.net.transport === "steam");
+		show("#st-send-world", role === "host");
+		show("#st-resync", role === "client");
+		show("#st-stop", role !== "idle");
+		if (role !== "idle") show("#st-lan-row", false);
+		const pl = q("#st-players");
+		if (pl) {
+			if (role === "idle") { pl.style.display = "none"; pl.innerHTML = ""; }
+			else {
+				pl.style.display = "";
+				pl.innerHTML = "";
+				const mk = (dotColor, nick, info) => {
+					const r = document.createElement("div");
+					const d = document.createElement("span"); d.textContent = "● "; d.style.color = dotColor;
+					const n = document.createElement("span"); n.textContent = nick; n.style.color = "#fff";
+					const i = document.createElement("span"); i.textContent = info ? "  " + info : ""; i.style.color = "#889";
+					r.appendChild(d); r.appendChild(n); r.appendChild(i);
+					pl.appendChild(r);
+				};
+				mk("#5f5", ST._myNick || "Player", "(" + t("lb_you") + (role === "host" ? " · host)" : ")"));
+				for (const [, pr] of ST.peers) {
+					const ok = !pr.modVer || pr.modVer === VER;
+					mk(ok ? "#5f5" : "#f66", pr.nick || "?", ok ? "" : pr.modVer);
+				}
+			}
+		}
+	}
+
+	// ------------------------------------------------------------------
 	// Menu główne: przycisk MULTIPLAYER + pełnoekranowe lobby.
 	// Menu gry to React+Tailwind w DOM — NIE dotykamy jego drzewa (React by nas
 	// wyrzucił przy re-renderze); nasz przycisk to osobny fixed element
@@ -2304,7 +2378,8 @@
 			const src = anchor.closest("button") || anchor.parentElement || anchor;
 			const cs = getComputedStyle(src);
 			ST._gameFont = cs.fontFamily || ST._gameFont; // font gry — lobby też go używa
-			btn.style.font = "700 " + Math.max(15, parseInt(cs.fontSize, 10) || 17) + "px " + cs.fontFamily;
+			btn.style.font = "700 " + Math.max(17, parseInt(cs.fontSize, 10) || 17) + "px " + cs.fontFamily;
+			btn.style.padding = "8px 26px"; // rozmiar zbliżony do Mody/Mapy (feedback: przycisk był za mały)
 			const r = src.getBoundingClientRect();
 			btn.style.left = Math.round(r.left) + "px";
 			btn.style.top = Math.round(r.bottom + 10) + "px";
@@ -2404,10 +2479,19 @@
 
 			if (view === "start") {
 				const bSteam = lbBtn(t("btn_host") /* Host (Steam) */, t("lb_host_steam_d"), true);
-				bSteam.onclick = async () => { setStatus(t("creating_lobby")); const r = await net.hostSteam(); if (!r.ok) setStatus(t("error", r.error), "#f66"); renderLobby(true); };
+				bSteam.onclick = async () => {
+					setStatus(t("creating_lobby"));
+					try { const r = await net.hostSteam(); if (!r.ok) setStatus(t("error", r.error), "#f66"); }
+					catch (e) { setStatus(t("error", e.message), "#f66"); log("lobby hostSteam error:", e.message); }
+					renderLobby(true);
+				};
 				p.appendChild(bSteam);
 				const bLan = lbBtn(t("btn_host_lan"), t("lb_host_lan_d"), false);
-				bLan.onclick = async () => { const r = await net.hostWs(27777); if (!r.ok) setStatus(t("error", r.error), "#f66"); renderLobby(true); };
+				bLan.onclick = async () => {
+					try { const r = await net.hostWs(27777); if (!r.ok) setStatus(t("error", r.error), "#f66"); }
+					catch (e) { setStatus(t("error", e.message), "#f66"); log("lobby hostWs error:", e.message); }
+					renderLobby(true);
+				};
 				p.appendChild(bLan);
 				// Dołącz LAN: przycisk + pola adresu
 				const bJoin = lbBtn(t("btn_join_lan"), t("lb_join_lan_d"), false);
@@ -2448,7 +2532,18 @@
 				hint.style.cssText = "margin-top:10px;font-size:11px;color:#7d95a8"; hint.textContent = t("lb_hint");
 				p.appendChild(hint);
 			} else {
-				// LOBBY: status + lobby id + zaproś + lista graczy + świat + rozłącz
+				// LOBBY: badge roli + status + lobby id + zaproś + lista graczy + świat + rozłącz
+				const badge = document.createElement("div");
+				const trName = ST.net.transport === "steam" ? "Steam" : "LAN";
+				badge.style.cssText = "font-weight:800;font-size:15px;margin:2px 0 4px;color:" + (ST.net.role === "host" ? "#5f5" : "#6cf");
+				badge.textContent = ST.net.role === "host" ? t("badge_host", trName) : t("badge_client", trName);
+				p.appendChild(badge);
+				if (ST.net.role === "host") {
+					const steps = document.createElement("div");
+					steps.style.cssText = "font-size:12px;color:#ffd27a;margin:0 0 6px";
+					steps.textContent = t("lb_steps");
+					p.appendChild(steps);
+				}
 				const st2 = document.createElement("div");
 				st2.id = "st-lb-status"; st2.style.cssText = "font-size:12px;color:#ffd27a;margin:2px 0 8px";
 				p.appendChild(st2);
