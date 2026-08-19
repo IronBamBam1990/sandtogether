@@ -1651,7 +1651,10 @@
 		// Pociski są symulowane AUTORYTATYWNIE po stronie hosta (patrz ST._proj) → NIE forwardujemy kopań
 		// z kontekstu pocisku (_projCtx), inaczej podwójne dziury (pocisk klienta + pocisk hosta).
 		if (ST._projCtx) return true; // pomiń: eksplozję/dziurę zrobi pocisk hosta
-		try { net.send({ t: "act", k: "dig", x, y, m: mask, v: vel, d: dmg }); } catch (e) {}
+		try {
+			net.send({ t: "act", k: "dig", x, y, m: mask, v: vel, d: dmg });
+			if (!ST._digFwdLogged) { ST._digFwdLogged = true; log("DIG: pierwszy forward do hosta @", x, y, "(host powinien zalogować 'pierwsze kopanie klienta odtworzone')"); }
+		} catch (e) {}
 		return true; // pomiń lokalne wykonanie (i tak zapauzowane)
 	};
 	// _drone (patch bundle na E=deploy): klient wdraża drona LOKALNIE → sync hosta nadpisuje store.drones →
