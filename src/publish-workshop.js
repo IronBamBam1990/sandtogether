@@ -24,7 +24,7 @@ Sandustry cannot auto-load this kind of mod yet, so after subscribing you run th
 [olist]
 [*] Subscribe (you already did) and let Steam finish downloading.
 [*] Open the mod folder. In Steam: right-click Sandustry → Manage → Browse local files, go up one level, then open: steamapps\\workshop\\content\\2764460\\3784750764\\  (or just search your PC for "SandTogether")
-[*] [b]Windows:[/b] right-click [b]install.bat[/b] → Run. [b]macOS:[/b] double-click [b]install.command[/b] (or run it in Terminal; no dependencies — it uses the game's own engine), then launch via [b]SandTogether-Launch.command[/b] or Steam. The installer finds your game and installs the mod automatically.
+[*] [b]Windows:[/b] right-click [b]install.bat[/b] → Run. [b]macOS:[/b] double-click [b]install.command[/b] (or run it in Terminal; no dependencies — it uses the game's own engine), then launch via [b]SandTogether-Launch.command[/b] or Steam. [b]Linux (experimental):[/b] in a terminal run [b]bash install-linux.sh[/b]. The installer finds your game and installs the mod automatically.
 [*] Launch Sandustry from Steam. A [b]SandTogether[/b] panel appears in the top-right corner.
 [/olist]
 That's it — [b]forever[/b]. From v0.9.39 the mod checks the Workshop folder at every launch and installs newer versions by itself (the game restarts once when it does). Both players are always on the same version automatically.
@@ -45,7 +45,7 @@ That's it — [b]forever[/b]. From v0.9.39 the mod checks the Workshop folder at
 [*] Per-player memory: rejoin a world and you're back where you left off, with your inventory
 [*] Steam achievements keep working; the panel warns in red on mod-version or game-build mismatch
 [*] Bilingual UI (English / Polski)
-[*] Windows + macOS (macOS port by DwoaC, LAN co-op verified on Apple Silicon; Steam invites got a fix in 0.9.41 — Mac feedback welcome! Note: the installer is named [b]install.command[/b] — it replaced the briefly-announced install-macos.command)
+[*] Windows + macOS + Linux (macOS port by DwoaC, LAN co-op verified on Apple Silicon; Steam invites got a fix in 0.9.41 — Mac feedback welcome! Note: the installer is named [b]install.command[/b] — it replaced the briefly-announced install-macos.command. Linux is NEW in 0.9.57 and experimental: [b]bash install-linux.sh[/b], testers welcome!)
 [/list]
 
 [h2]How to play (Steam)[/h2]
@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.54-beta — two quality fixes: (1) Quitting to the title screen as the joining player now cleanly LEAVES the co-op session (your per-world position and inventory are saved first, so rejoining puts you right back) — suggested by tony.s.jennette. (2) GRABBER REFUND: when the host cannot place your element (cell occupied), it is returned to your tank instead of silently vanishing — the last known way to lose items with the grabber. Auto-updates at next launch.',
+    changeNote: 'v0.9.55 - v0.9.57 — (1) Join LAN now has separate IP and PORT fields; pasting ip:port auto-splits (QoL by TCentraL). (2) The augment/lab screen no longer LOCKS the joining player until the host picks — the choice stays team-shared, but now EITHER player can make it; first pick wins and closes the screen for everyone (report: TCentraL). (3) NEW: experimental LINUX installer — run bash install-linux.sh from this folder once (no Node.js needed, it uses the game engine itself; requested by Psychospark — Linux testers welcome!). Windows/macOS players: auto-updates at next launch as usual.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

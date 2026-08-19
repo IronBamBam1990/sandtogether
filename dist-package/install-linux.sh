@@ -37,7 +37,7 @@ find_bin() {
   for f in "$g"/*; do
     [ -f "$f" ] && [ -x "$f" ] || continue
     b="$(basename "$f")"
-    case "$b" in *.so|*.so.*|*crashpad*|chrome-sandbox|*.sh|*.dat|*.pak) continue ;; esac
+    case "$b" in *.so|*.so.*|*crashpad*|chrome-sandbox|*.sh|*.dat|*.pak|*.exe|*.dll) continue ;; esac
     echo "$f"; return
   done
 }
@@ -50,13 +50,19 @@ if [ -z "${GAME:-}" ] || [ ! -d "$GAME/resources" ]; then
 fi
 
 BIN="$(find_bin "$GAME")"
-if [ -z "${BIN:-}" ]; then
-  echo "ERROR: could not find the game executable inside: $GAME"
-  echo "Send a screenshot of 'ls -l' of that folder to the mod author for help."
+echo "=== SandTogether installer (Linux) ==="
+echo "Game: $GAME"
+if [ -n "${BIN:-}" ]; then
+  echo "Runtime: $BIN (the game's own Electron)"
+  ELECTRON_RUN_AS_NODE=1 "$BIN" "$DIR/install.js" "$GAME"
+elif command -v node >/dev/null 2>&1; then
+  # No Linux game binary (e.g. playing the Windows build through Proton) —
+  # fall back to system Node. The patched game still runs fine under Proton.
+  echo "Runtime: system node ($(command -v node)) — no native game binary found (Proton?)"
+  node "$DIR/install.js" "$GAME"
+else
+  echo "ERROR: no game executable found in $GAME and no 'node' on this system."
+  echo "Install Node.js (e.g. 'sudo apt install nodejs') and re-run, or send"
+  echo "a screenshot of 'ls -l' of that folder to the mod author for help."
   exit 1
 fi
-
-echo "=== SandTogether installer (Linux) ==="
-echo "Game:   $GAME"
-echo "Binary: $BIN"
-ELECTRON_RUN_AS_NODE=1 "$BIN" "$DIR/install.js" "$GAME"
