@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.48-beta";
+	const VER = "0.9.49-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -715,23 +715,32 @@
 		const myScene = state.store.scene && state.store.scene.active;
 		// wyjątek: oba w menu (scene 1) = tryb testowy lustra, mimo różnych worldId
 		const menuTest = msg.scene === 1 && myScene === 1;
+		// KLIENT W MENU (fix tony: "menu główne zamienia się w czerwone bloki"): lustro hosta NIE MOŻE
+		// malować po scenie menu — dane świata lądowały w buforach sceny menu jako czerwone kafle.
+		if (myScene === 1 && !menuTest) return;
 		if (msg.wid && myWid && msg.wid !== myWid && !menuTest) {
 			// Zaufanie: silnik nadaje wczytanemu światu INNY lokalny worldId niż host używa w "wc", mimo że to
 			// DOKŁADNIE ten sam save (fix "REJECT world" → miroir rejeté → reconcile kasował struktury klienta).
 			// Ufamy gdy: (a) już zaufany, (b) okno po auto-load, LUB (c) dostaliśmy świat OD tego hosta (world-begin)
 			// i OBOJE jesteśmy w grze (scene≠1) — czyli klient faktycznie wczytał save hosta (auto- lub ręcznie).
 			const bothInWorld = msg.scene !== 1 && myScene !== 1;
-			// _lastGoodWid: wid hosta zaufany w POPRZEDNIEJ sesji (przetrwa reconnect) — ten sam wid
-			// = dokładnie ten sam świat, który już mamy wczytany → rejoin BEZ ponownego transferu (fix G8-lite)
-			const trusting = ST._trustedWid === msg.wid || (ST._pendingTrustUntil && performance.now() < ST._pendingTrustUntil) || (ST._gotHostWorld && bothInWorld) || (ST._lastGoodWid === msg.wid && bothInWorld);
+			// ZAUFANIE SPAROWANE (fix tony: "wczytanie innego świata dodaje go jako czerwone bloki"):
+			// zaufanie wiąże wid HOSTA z widem ŚWIATA KLIENTA w momencie zaufania (_trustedMyWid).
+			// Klient wczytuje INNY świat → para nie pasuje → REJECT (lustro nie maluje po cudzym save'ie).
+			// _gotHostWorld jest JEDNORAZOWE (konsumowane przy pierwszej akceptacji).
+			const trusting = (ST._trustedWid === msg.wid && ST._trustedMyWid === myWid)
+				|| (ST._pendingTrustUntil && performance.now() < ST._pendingTrustUntil)
+				|| (ST._gotHostWorld && bothInWorld)
+				|| (ST._lastGoodWid === msg.wid && ST._lastGoodMyWid === myWid && bothInWorld);
 			if (!trusting) {
 				setStatus(t("other_world"), "#f66");
 				if (!ST.wsx.mismatchLogged) { ST.wsx.mismatchLogged = true; log("REJECT world: worldId host=" + msg.wid + " me=" + myWid + " scene h/c=" + msg.scene + "/" + myScene); }
 				return;
 			}
 			if (ST._trustedWid !== msg.wid) log("worldId różni się po auto-load, ale ufam (świeżo odebrany od hosta):", msg.wid);
-			ST._trustedWid = msg.wid; ST._pendingTrustUntil = 0;
-			ST._lastGoodWid = msg.wid; // pamięć przez reconnect (celowo NIE czyszczona przy joined/stopped)
+			ST._trustedWid = msg.wid; ST._trustedMyWid = myWid; ST._pendingTrustUntil = 0;
+			ST._gotHostWorld = false; // jednorazowe — od teraz rządzi para (hostWid, myWid)
+			ST._lastGoodWid = msg.wid; ST._lastGoodMyWid = myWid; // pamięć przez reconnect (celowo NIE czyszczona przy joined/stopped)
 		}
 		const { map, wall, shadow, W, H } = worldBuffers(state);
 		if (!map || W !== msg.W || H !== msg.H) {
@@ -872,7 +881,7 @@
 				else net.send({ t: "act", k: "move", from, to });
 			});
 			ST.FH.events.on(state, "worldItem:pickedUp", (st, data) => {
-				if (ST._applyingNet || ST.net.role !== "client" || !data || !data.item) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data || !data.item) return;
 				ST._pickedPending.set(data.item.id, performance.now());
 				net.send({ t: "act", k: "pickup", id: data.item.id });
 			});
@@ -881,7 +890,7 @@
 			ST.FH.events.on(state, "grabber:elementPickedUp", (st, data) => {
 				// DIAG inconditionnel: le pick fire-t-il côté client, avec quel elementType ?
 				if ((ST._pickDiag = (ST._pickDiag || 0) + 1) <= 80) log("GRAB pickEvent fired: role=" + ST.net.role, "et=" + (data && data.elementType), "@", data && data.x, data && data.y, "applyingNet=" + ST._applyingNet);
-				if (ST._applyingNet || ST.net.role !== "client" || !data) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data) return;
 				if (!validElement(data.elementType)) { if ((ST._pickDiag3 = (ST._pickDiag3 || 0) + 1) <= 20) log("GRAB pick REJETÉ: elementType invalide =", data.elementType); return; }
 				net.send({ t: "act", k: "grabPick", x: data.x, y: data.y, et: data.elementType });
 				// KLUCZ: usuwamy komórkę lokalnie OD RAZU. Zapis grabbera do świata idzie przez odroczoną
@@ -892,7 +901,7 @@
 				grabClearLocal(state, data.x, data.y);
 			});
 			ST.FH.events.on(state, "grabber:elementPlaced", (st, data) => {
-				if (ST._applyingNet || ST.net.role !== "client" || !data) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data) return;
 				// Reszta ODŁOŻENIA z pustego/hors-bornes slotu tanku (T[o+2] undefined u zdesync. klienta):
 				// elementType == null/0 → JSON gubi pole → host createAt(...,undefined) = crash "reading 'type'"
 				// + "element utracony" (912×/sesję w logach). Forwardujemy TYLKO prawdziwe typy elementów.
@@ -918,45 +927,45 @@
 				return cost;
 			};
 			ST.FH.events.on(state, "upgrade:purchased", (st, data) => {
-				if (ST._applyingNet || ST.net.role !== "client" || !data) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data) return;
 				net.send({ t: "act", k: "upg", it: data.itemId, ug: data.upgradeId, lv: data.level, cost: resCostDiff() });
 				log("CLIENT upgrade →", data.itemId + "." + data.upgradeId, "lvl", data.level);
 			});
 			ST.FH.events.on(state, "tech:unlocked", (st, data) => {
-				if (ST._applyingNet || ST.net.role !== "client" || !data) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data) return;
 				net.send({ t: "act", k: "tech", id: data.techId, cost: resCostDiff() });
 				log("CLIENT tech →", data.techId);
 			});
 			// FABUŁA (fix G6): krok wyzwolony pozycją/akcją KLIENTA mutuje tylko jego lokalny storage
 			// (storyProgression.completedSteps) i po 1s host go nadpisywał. Forward → host dopisuje krok.
 			ST.FH.events.on(state, "story:stepCompleted", (st, data) => {
-				if (ST._applyingNet || ST.net.role !== "client" || !data || !data.stepId) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data || !data.stepId) return;
 				net.send({ t: "act", k: "story", id: data.stepId });
 				log("CLIENT story step →", data.stepId);
 			});
 			// KOLEKCJE critterów (fix G6): found/available/bilety żyją w store.creatures/conservatory,
 			// nadpisywanych przez hosta — zbiór klienta cofał się w 100ms. Forward → host dolicza.
 			ST.FH.events.on(state, "entity:collected", (st, data) => {
-				if (ST._applyingNet || ST.net.role !== "client" || !data || !data.typeId) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data || !data.typeId) return;
 				net.send({ t: "act", k: "collect", ty: data.typeId, eid: data.entityId });
 				log("CLIENT collect →", data.typeId, "(id " + data.entityId + ")");
 			});
 			// SYGNAŁY (fix G5): link/unlink klienta mutuje storage "signals" nadpisywany przez hosta →
 			// automatyka klienta znikała po 1s. Forward zmian → host wykonuje FH.signals.link/unlink.
 			ST.FH.events.on(state, "signals:userChanged", (st, data) => {
-				if (ST._applyingNet || ST.net.role !== "client" || !data || !data.changes) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data || !data.changes) return;
 				const ch = data.changes.map((c) => ({ a: c.action, f: c.from && { x: c.from.x, y: c.from.y }, t: c.to && { x: c.to.x, y: c.to.y } })).filter((c) => c.a && c.f && c.t);
 				if (ch.length) { net.send({ t: "act", k: "sig", ch }); log("CLIENT signals →", ch.length, "zmian"); }
 			});
 			// przycisk sygnałowy: toggle stanu przez klienta
 			ST.FH.events.on(state, "signalButton:pressed", (st, data) => {
-				if (ST._applyingNet || ST.net.role !== "client" || !data || !data.structure) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data || !data.structure) return;
 				const s = data.structure;
 				net.send({ t: "act", k: "sbtn", x: s.x, y: s.y, on: !!(s.data && s.data.on) });
 			});
 			// COPY-PASTE blueprintów (fix G5): wklejone struktury klienta były lokalne → reconcile je kasował
 			ST.FH.events.on(state, "structures:pasted", (st, data) => {
-				if (ST._applyingNet || ST.net.role !== "client" || !data || !data.structures) return;
+				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data || !data.structures) return;
 				const list = data.structures.map(slimStruct);
 				let links = null;
 				try { if (data.signalLinks) links = JSON.parse(JSON.stringify(data.signalLinks)); } catch (e) {}
@@ -1212,6 +1221,7 @@
 					let realU = false;
 					try {
 						realU = techUnlock(state, k);
+						if (realU) state.store.player.tech[k] = true; // flaga node'a jawnie (fix podwójnego zakupu)
 						if (!realU) { state.store.player.tech[k] = true; try { ST.FH.events.emit(state, "tech:unlocked", { techId: k, suppressMusic: true }); } catch (e) {} }
 					} finally { ST._applyingNet = false; }
 					log("SYNC: tech od drużyny odblokowany:", k, realU ? "(REAL)" : "(FALLBACK flaga — patch _techMod nie pasuje!)");
@@ -1328,7 +1338,7 @@
 	// VACUUM — klient wysyła intencję, host zbiera elementy, typy wracają do zbiorników
 	// ------------------------------------------------------------------
 	ST._vac = (state, item, cell, vel) => {
-		if (!isClientSync()) return false; // host/offline: normalnie
+		if (!isClientSync() || !ST.wsx.paused) return false; // host/offline/poza lustrem: normalnie
 		const now = performance.now();
 		if (now - ST._lastVac > 120) {
 			ST._lastVac = now;
@@ -1505,7 +1515,7 @@
 	// WŁASNYCH pocisków klienta (flaga _projCtx; zdalne pociski nie trafiają do store).
 	// DN wywoływane przez stworki/drony NIE jest forwardowane (host liczy je sam).
 	ST._dig = (state, x, y, mask, vel, dmg, opts) => {
-		if (!isClientSync()) return false; // host/offline: kop normalnie
+		if (!isClientSync() || !ST.wsx.paused) return false; // host/offline/poza lustrem: kop normalnie
 		// Pociski są symulowane AUTORYTATYWNIE po stronie hosta (patrz ST._proj) → NIE forwardujemy kopań
 		// z kontekstu pocisku (_projCtx), inaczej podwójne dziury (pocisk klienta + pocisk hosta).
 		if (ST._projCtx) return true; // pomiń: eksplozję/dziurę zrobi pocisk hosta
@@ -1515,14 +1525,14 @@
 	// _drone (patch bundle na E=deploy): klient wdraża drona LOKALNIE → sync hosta nadpisuje store.drones →
 	// dron znika. Forwardujemy drona do hosta, host dodaje go autorytatywnie (jego sim go "ożywia").
 	ST._drone = (state, drone) => {
-		if (!isClientSync() || ST._applyingNet) return;
+		if (!isClientSync() || !ST.wsx.paused || ST._applyingNet) return;
 		try { net.send({ t: "act", k: "drone", d: drone }); if ((ST._drDiag = (ST._drDiag || 0) + 1) <= 20) { let _dd = ""; try { _dd = JSON.stringify(drone && drone.data).slice(0, 300); } catch (e) {} log("CLIENT forward drone:", drone && drone.type, "@", drone && drone.x, drone && drone.y, "data=", _dd); } } catch (e) {}
 	};
 	// _proj (patch bundle na projectiles.push): klient odpala broń → pocisk lokalny (sim w pauzie = martwy,
 	// eksplozja nie działa). Forwardujemy pocisk do hosta; host wrzuca go do store.projectiles → jego sim
 	// symuluje lot+eksplozję+dmg autorytatywnie, wynik wraca lustrem/strumieniem encji. (rocket/fusil)
 	ST._proj = (state, proj) => {
-		if (!isClientSync() || ST._applyingNet) return;
+		if (!isClientSync() || !ST.wsx.paused || ST._applyingNet) return;
 		try { net.send({ t: "act", k: "proj", p: proj }); if ((ST._prDiag = (ST._prDiag || 0) + 1) <= 20) log("CLIENT forward proj:", proj && proj.type, "@", proj && Math.round(proj.x), proj && Math.round(proj.y)); } catch (e) {}
 	};
 	// _setCell (patch B/Gz): KLIENT nigdy nie pisze komórek lokalnie (host-autorytatywnie).
@@ -1542,7 +1552,7 @@
 	// Host/offline: return false → normalne stawianie lokalne. buildOne/SA.build NIE przechodzi przez ten
 	// hook (to niżej-poziomowe API), więc aplikacja struktur z sieci i budowanie hosta się nie zapętlają.
 	ST._place = (state, structureType, x, y, data) => {
-		if (!isClientSync()) return false; // host/offline: stawiaj normalnie
+		if (!isClientSync() || !ST.wsx.paused) return false; // host/offline/poza lustrem: stawiaj normalnie
 		// KLUCZOWE: gdy MOD sam stawia strukturę z sieci (applyNetStructs/applySnapshot → buildOne → SA.build,
 		// które PRZECHODZI przez building:place!), NIE przechwytuj — inaczej anulujemy własny render potwierdzonej
 		// struktury i klient NIE WIDZI ŻADNEJ budowli (ani swojej, ani hosta). (regresja przy przejściu na patch bundle)
@@ -1676,6 +1686,7 @@
 						deductCosts(state, msg.cost);
 						// PEŁNY unlock (budynki/itemy/mapa + własny emit tech:unlocked); fallback = goła flaga
 						const real = techUnlock(state, msg.id);
+						if (real) state.store.player.tech[msg.id] = true; // unlockTech nie stawia flagi node'a → tech tree pokazywał "niekupione" (Warlow: podwójny zakup)
 						if (!real) {
 							state.store.player.tech[msg.id] = true;
 							try { ST.FH.events.emit(state, "tech:unlocked", { techId: msg.id, suppressMusic: true }); } catch (e) {}
@@ -1926,7 +1937,9 @@
 		if (!ST._hud) return;
 		const el = ST._hud.querySelector("#st-lobbyid");
 		if (!el) return;
-		if (ST.net.lobbyId) { el.textContent = "Lobby ID: " + ST.net.lobbyId + " 📋"; el.style.display = "block"; }
+		// STREAMER-SAFE (MFeltmann): ID zamaskowane na ekranie — klik kopiuje PEŁNE id do schowka
+		// bez pokazywania go (widzowie streamu nie wejdą do lobby z podglądu).
+		if (ST.net.lobbyId) { el.textContent = "Lobby ID: ●●●●●●…" + String(ST.net.lobbyId).slice(-3) + " 📋 (click = copy)"; el.style.display = "block"; }
 		else el.style.display = "none";
 	}
 	function updatePingDisplay() {
@@ -2483,7 +2496,7 @@
 		// Działa dla HOSTA I SOLO (zacięte klocki siedzą w save'ie — muszą być czyszczalne bez sesji).
 		{
 			const hd = ST._hostDemolRect;
-			if (hd && performance.now() - hd.t > 250) {
+			if (hd && performance.now() - hd.t > 400) {
 				ST._hostDemolRect = null;
 				try {
 					const SA = structNs();
@@ -2500,7 +2513,7 @@
 							// widzi strukturę, więc poniższy sweep terenu słusznie nie ruszy jej czerwonych kafli.
 							// Wróć po kolejnych 250 ms, gdy rejestr struktur zdąży się opróżnić. Limit chroni
 							// przed nieskończoną pętlą przy faktycznie nieusuwalnej strukturze.
-							if ((hd.retry || 0) < 3) ST._hostDemolRect = { ...hd, t: performance.now(), retry: (hd.retry || 0) + 1 };
+							if ((hd.retry || 0) < 6) ST._hostDemolRect = { ...hd, t: performance.now(), retry: (hd.retry || 0) + 1 };
 						}
 						// OSIEROCONE KAFLE ("czerwone klocki"): struktura już NIE istnieje (getAtCell=null — log
 						// "czysto" przy widocznych klockach!), ale komórki-fundament (terrain Block=15/Sliding 16-18)
@@ -2555,6 +2568,17 @@
 			if (!ST.wsx.everApplied && !ST.wsx.mismatchLogged && ST.peers.size > 0 && now - (ST._waitHintT || 0) > 3000) {
 				ST._waitHintT = now;
 				setStatus(t("waiting_world"), "#fd5");
+			}
+			// ZMIANA ŚWIATA u klienta (menu/inny save) → wyczyść stan narzędzi związany z poprzednim światem
+			// (fix tony: "infinite items" — stary _grabTool/tank z poprzedniego świata + ruchy myszy = spam grabPlace)
+			const curWid = state.store.meta && state.store.meta.worldId;
+			if (ST._curWid !== curWid) {
+				ST._curWid = curWid;
+				ST._grabTool = null;
+				ST._grabbedCells.clear(); ST._placedCells.clear();
+				ST._fireQ = []; ST._cryoQ = []; ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = [];
+				if (ST._dataSeen) ST._dataSeen.clear();
+				if (ST._dataEdited) ST._dataEdited.clear();
 			}
 			// profil klienta (G7-lite): zapis co 10s (pozycja+ekwipunek per świat hosta)
 			if (now - (ST._profT || 0) > 10000) { ST._profT = now; profileSave(state); }
