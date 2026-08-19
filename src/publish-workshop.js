@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.46-beta — big catch-up release after the Workshop content freeze (Steam rate-limited our update cadence; the Workshop was serving 0.9.36 files while newer publishes silently failed). Everything since then, consolidated: team chat, per-player memory, machine settings sync, row-delta streaming (2-10x less bandwidth), AUTO-UPDATE (install once, ever), macOS support by DwoaC (installer + Steam-invite fix), research FULLY shared (buildings/items/map for the whole team), grabber research gates + single-type tank, and Cr0ss0vr's precise client-demolish selection with safe red-tile cleanup (new contributor - thank you!). Both players: re-run the installer once if the panel shows an old version; auto-update handles the rest.',
+    changeNote: 'v0.9.46-beta — big catch-up release after the Workshop content freeze (Steam rate-limited our update cadence; the Workshop was serving 0.9.36 files while newer publishes silently failed). Everything since then, consolidated: team chat, per-player memory, machine settings sync, row-delta streaming (2-10x less bandwidth), AUTO-UPDATE (install once, ever), macOS support by DwoaC (installer + Steam-invite fix), research FULLY shared (buildings/items/map for the whole team), grabber research gates + single-type tank, and precise client-demolish selection with safe red-tile cleanup by new contributor Cr0ss0vr — thank you! Both players: re-run the installer once if the panel shows an old version; auto-update handles the rest.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
