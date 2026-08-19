@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.50-beta — RED-TILE CLEANUP, FINAL FORM (by TCentraL — our sharpest tester just became contributor #5!). The orphan cleanup now BLOB-EXPANDS: drag the demolisher over any part of a stuck red patch and the whole contiguous patch disappears, even the parts outside your selection. Hardened in review: sloped/stair tiles included, healthy painted foundations are protected by a per-cell live-structure check, and expansion is capped. Auto-updates at next launch.',
+    changeNote: 'v0.9.52-beta — TCentraL triple-header (all found within one hour of testing): (1) MANUAL WET-SAND SHAKING fully works as the joining player — gold appears in the tank AND the residue spawns into the world (it was silently dropped), with the factory process counted for team progression. (2) Picked-up items land in the correct picker slots (spatially, like vanilla) instead of piling top-left. (3) Your Shaking toggle is YOURS — it was being overwritten by the host setting every second (it lives next to team story data; per-player preferences now survive the stream). Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
