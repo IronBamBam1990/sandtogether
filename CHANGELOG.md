@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-19 (v0.9.58) — big-map join & freeze fixes (live report: TCentraL)
+
+Joining a host on a BIG map could freeze the game and strand the client on "Waiting for host's world". Three structural fixes: (1) AUTO-RESYNC — the initial full-world stream used to be sent while the client was still in the menu (where the mirror must drop it), and the host's row-hashes considered it delivered, leaving stale holes until a manual Resync; the client now automatically requests a full resync the moment the mirror starts applying. (2) The world mirror no longer writes into the game's buffers WHILE the host's save is being loaded (a race with the engine's loader — the likely freeze). (3) Self-healing save transfer: a client that never receives the world save (e.g. after a reconnect, when the host's auto-send doesn't re-fire) now actively requests it every 10 s. Plus much better console diagnostics around the whole transfer path.
+
 ## 2026-08-19 (v0.9.52 – v0.9.57) — live-session fixes, QoL, augments, Linux installer
 
 **0.9.52**: Shaking works for the joiner regardless of the host's own toggle (report: TCentraL) — the toggle lives in `mods.grabberSizeScroll`, which the host's 1 Hz mods stream was overwriting; per-player preferences are now preserved when applying the stream (all 8 shared-storage keys audited — the rest are legitimately team-shared).

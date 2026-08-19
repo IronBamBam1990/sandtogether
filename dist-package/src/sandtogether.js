@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.57-beta";
+	const VER = "0.9.58-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -474,10 +474,18 @@
 			// REFUND odkładania (R5): host nie zdołał położyć elementu (komórka zajęta) → oddaj do tanku
 			if (ST.net.role === "client" && typeof msg.et === "number" && msg.et > 0) clientFillGrabTank([msg.et], null);
 		} else if (msg.t === "resync") {
-			if (ST.net.role === "host") { enqueueFullWorld(); ST._lastSnap = 0; }
+			if (ST.net.role === "host") { log("resync od", from, "-> pełny świat do kolejki"); enqueueFullWorld(); ST._lastSnap = 0; }
+		} else if (msg.t === "world-req") {
+			// klient prosi o SAVE (self-healing: reconnect / auto-send nie zadziałał) — rate-limit 15 s
+			if (ST.net.role === "host" && performance.now() - (ST._lastWorldReqT || 0) > 15000) {
+				ST._lastWorldReqT = performance.now();
+				log("world-req od", from, "-> wysyłam save");
+				sendWorld();
+			}
 		} else if (msg.t === "world-begin") {
 			ST._gotHostWorld = true; // otrzymaliśmy świat OD hosta → ufamy jego worldId gdy oboje w grze (patrz applyWorldBatch)
 			ST._worldRx = { name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false };
+			log("world-begin:", msg.name, "-", msg.chunks, "paczek,", Math.round((msg.size || 0) / 1024), "KB");
 			setStatus(t("receiving", 0, msg.chunks), "#ff5");
 			scheduleRxCheck();
 		} else if (msg.t === "world-chunk" && ST._worldRx) {
@@ -515,7 +523,10 @@
 				const saveId = r && r.metaData && r.metaData.id;
 				if (saveId && ST.FH && ST.FH.game && typeof ST.FH.game.load === "function" && ST.state) {
 					try {
+						ST._loadingWorld = true; // lustro NIE pisze po buforach w trakcie load (fix freeze na dużej mapie)
+						const t0 = performance.now();
 						const lr = await ST.FH.game.load(ST.state, saveId);
+						log("auto-load save'a hosta zakończony w", Math.round(performance.now() - t0), "ms");
 						if (lr && lr.success === false) throw new Error(lr.error || "load success:false");
 						// silnik może nadać wczytanemu światu NOWY lokalny worldId mimo identycznej treści —
 						// okno zaufania, żeby kolejne "wc" (mirror) nie były odrzucane jako "inny świat"
@@ -523,6 +534,7 @@
 						setStatus(t("world_imported_loaded", rx.name), "#5f5");
 						return;
 					} catch (e) { log("auto-load nie powiódł się, fallback na ręczne Load Game:", e.message); }
+					finally { ST._loadingWorld = false; }
 				}
 				setStatus(t("world_imported", rx.name), "#5f5");
 			}).catch((e) => setStatus(t("import_err", e.message), "#f66"));
@@ -723,6 +735,10 @@
 		// KLIENT W MENU (fix tony: "menu główne zamienia się w czerwone bloki"): lustro hosta NIE MOŻE
 		// malować po scenie menu — dane świata lądowały w buforach sceny menu jako czerwone kafle.
 		if (myScene === 1 && !menuTest) return;
+		// ŁADOWANIE ŚWIATA W TOKU (fix TCentraL "big map freeze"): pisanie po buforach świata
+		// w TRAKCIE FH.game.load = wyścig z silnikiem wczytującym save (zwiecha/korupcja).
+		// Dropujemy — AUTO-RESYNC po starcie lustra i tak dośle pełny świat.
+		if (ST._loadingWorld) return;
 		if (msg.wid && myWid && msg.wid !== myWid && !menuTest) {
 			// Zaufanie: silnik nadaje wczytanemu światu INNY lokalny worldId niż host używa w "wc", mimo że to
 			// DOKŁADNIE ten sam save (fix "REJECT world" → miroir rejeté → reconcile kasował struktury klienta).
@@ -810,6 +826,10 @@
 		if (applied > 0 && !w.everApplied) {
 			w.everApplied = true; log("Pierwsze paczki świata zastosowane — lustro działa"); setStatus(t("players", ST.peers.size + 1));
 			profileRestore(state, msg.wid || ST._trustedWid); // wróć tam, gdzie skończyłeś w TYM świecie (G7-lite)
+			// AUTO-RESYNC (fix TCentraL "big map"): initial flood (enqueueFullWorld po peer-hello) leciał
+			// gdy klient był jeszcze w MENU/loadzie i był DROPOWANY, a rowH hosta uważa go za dostarczony
+			// → bez tego stale dziury w świecie aż do ręcznego Resync. Raz na sesję, przy starcie lustra.
+			try { net.send({ t: "resync" }); log("AUTO-RESYNC: proszę hosta o pełny świat (paczki sprzed wejścia do świata były dropowane)"); } catch (e) {}
 		}
 		w.applyBytes += msg.d.length * 0.75; w.applyCount += applied;
 		const now = performance.now();
@@ -2159,8 +2179,10 @@
 			saves.sort((a, b) => (ts(a) > ts(b) ? 1 : -1));
 			const save = saves[saves.length - 1];
 			setStatus(t("exporting", save.name || save.id), "#ff5");
+			const t0 = performance.now();
 			const res = await window.electron.exportSave(save.id);
-			if (!res || !res.success) { setStatus(t("export_err", res && res.error), "#f66"); return; }
+			if (!res || !res.success) { setStatus(t("export_err", res && res.error), "#f66"); log("sendWorld: exportSave FAILED:", res && res.error); return; }
+			log("sendWorld: eksport", save.name || save.id, "w", Math.round(performance.now() - t0), "ms");
 			const bytes = new Uint8Array(res.data.data || res.data);
 			const b64 = b64enc(bytes);
 			const CH = 49152; // 48 KB/paczkę — bezpiecznie pod limitami Steam P2P
@@ -2662,7 +2684,13 @@
 			// Podpowiedź: połączony, ale host nie wysłał jeszcze świata (brak paczek do odrzucenia = gracz widzi "nic")
 			if (!ST.wsx.everApplied && !ST.wsx.mismatchLogged && ST.peers.size > 0 && now - (ST._waitHintT || 0) > 3000) {
 				ST._waitHintT = now;
-				setStatus(t("waiting_world"), "#fd5");
+				if (!ST._worldRx) setStatus(t("waiting_world"), "#fd5"); // nie nadpisuj "Receiving world x/y"
+			}
+			// SELF-HEALING (fix TCentraL reconnect na dużej mapie): brak world-begin mimo połączenia
+			// (auto-send hosta nie zadziałał / zgubiony) → klient AKTYWNIE prosi o save co 10 s.
+			if (!ST._gotHostWorld && !ST._worldRx && !ST.wsx.everApplied && ST.peers.size > 0 && now - (ST._worldReqT || 0) > 10000) {
+				ST._worldReqT = now;
+				try { net.send({ t: "world-req" }); log("world-req: nie dostałem world-begin — proszę hosta o save"); } catch (e) {}
 			}
 			// POWRÓT DO MENU TYTUŁOWEGO = wyjście z sesji (sugestia tony.s.jennette): po tym jak lustro
 			// już działało (everApplied), scena 1 oznacza świadome wyjście ze świata — rozłączamy czysto

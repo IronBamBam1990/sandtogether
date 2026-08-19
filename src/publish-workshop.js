@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.55 - v0.9.57 — (1) Join LAN now has separate IP and PORT fields; pasting ip:port auto-splits (QoL by TCentraL). (2) The augment/lab screen no longer LOCKS the joining player until the host picks — the choice stays team-shared, but now EITHER player can make it; first pick wins and closes the screen for everyone (report: TCentraL). (3) NEW: experimental LINUX installer — run bash install-linux.sh from this folder once (no Node.js needed, it uses the game engine itself; requested by Psychospark — Linux testers welcome!). Windows/macOS players: auto-updates at next launch as usual.',
+    changeNote: 'v0.9.58-beta — BIG MAP join & freeze fixes (live report by TCentraL): (1) AUTO-RESYNC — the initial world stream was sent while the joining player was still in the menu and silently dropped, leaving stale holes until a manual Resync; the client now requests a full resync automatically when the mirror starts. (2) The mirror no longer writes into the game while the host save is LOADING (race with the engine loader — the likely freeze). (3) A client that never receives the host world (e.g. after reconnect) now actively re-requests it every 10 s instead of waiting forever. Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
