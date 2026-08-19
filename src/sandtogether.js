@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.50-beta";
+	const VER = "0.9.51-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -341,7 +341,7 @@
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; // nowa sesja klienta
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
-				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
+				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
 				setStatus(t("joined", ev.transport));
 			} else if (ev.kind === "peer-hello" || ev.kind === "peer-connected") {
 				if (!ST.peers.has(ev.id)) ST.peers.set(ev.id, { nick: ev.nick || "?", x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
@@ -362,7 +362,7 @@
 			} else if (ev.kind === "stopped") {
 				if (ST.state) profileSave(ST.state); // przed resetem roli (isClientSync jeszcze true)
 				ST.net.role = "idle"; ST.peers.clear(); removeAllPeerPuppets(); setStatus(t("offline"), "#aaa"); showInviteButton(false); ST.net.lobbyId = null; updateLobbyIdDisplay(); updatePingDisplay();
-				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = [];
+				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = [];
 				ST._gotHostWorld = false;
 				setClientPaused(false);
 			} else if (ev.kind === "reconnecting") { setStatus(t("reconnecting", ev.attempt), "#fd5");
@@ -467,7 +467,7 @@
 		} else if (msg.t === "vacres") {
 			if (ST.net.role === "client") clientFillTanks(msg.types || []);
 		} else if (msg.t === "grabres") {
-			if (ST.net.role === "client") clientFillGrabTank(msg.types || []);
+			if (ST.net.role === "client") clientFillGrabTank(msg.types || [], msg.offs || null);
 		} else if (msg.t === "resync") {
 			if (ST.net.role === "host") { enqueueFullWorld(); ST._lastSnap = 0; }
 		} else if (msg.t === "world-begin") {
@@ -1395,7 +1395,7 @@
 		const getInfo = el.getInfoAtPos;
 		const removeAt = el.removeAt;
 		if (!getInfo || !removeAt) { if (!ST._grabApiWarned) { ST._grabApiWarned = true; log("BŁĄD grabH: brak getInfoAtPos/removeAt — el:", Object.keys(el).join(",")); } return; }
-		const types = [];
+		const types = [], offs = [];
 		// cap = wolne sloty tanku klienta (msg.f); stary klient bez f → ostrożne 8. Nigdy >48.
 		const cap = Math.max(1, Math.min(48, typeof msg.f === "number" ? msg.f : 8));
 		// BRAMKA NAUKOWA (fix derErste67: klient zbierał wodę bez badania): vanilla grabber wymaga
@@ -1425,21 +1425,35 @@
 					removeAt(state, x, y);
 					markCellDirty(state, x, y);
 					types.push(info.elementType);
+					offs.push(dx, dy); // pozycja wzgl. kursora → klient mapuje na właściwy slot siatki tanku
 					taken++;
 				} catch (e) {}
 			}
-		if (types.length) { net.send({ t: "grabres", types }, fromId); if ((ST._grabHostDiag = (ST._grabHostDiag || 0) + 1) <= 40) log("HOST grabH @", msg.x, msg.y, "→ zebrano", types.length, "elementów" + (gateSkipped ? " (pominięto " + gateSkipped + " płynów — brak waterGrab)" : "")); }
+		if (types.length) { net.send({ t: "grabres", types, offs }, fromId); if ((ST._grabHostDiag = (ST._grabHostDiag || 0) + 1) <= 40) log("HOST grabH @", msg.x, msg.y, "→ zebrano", types.length, "elementów" + (gateSkipped ? " (pominięto " + gateSkipped + " płynów — brak waterGrab)" : "")); }
 		else if (gateSkipped && (ST._grabGateDiag = (ST._grabGateDiag || 0) + 1) <= 10) log("HOST grabH: 0 zebranych,", gateSkipped, "płynów zablokowanych (brak badania waterGrab)");
 	}
 	// KLIENT: wypełnij tank grabbera (matrix) typami zebranymi przez hosta. B[0]=locked type, B[1]=count, B[2..]=sloty.
-	function clientFillGrabTank(types) {
+	function clientFillGrabTank(types, offs) {
 		const tool = ST._grabTool;
 		const B = tool && tool.data && tool.data.matrix;
 		if (!B || !types || !types.length) return;
+		// SLOT WG POZYCJI (fix TCentraL: itemy lądowały w lewym-górnym rogu pickera): siatka tanku jest
+		// przestrzenna — slot odpowiada pozycji komórki względem kursora (vanilla: A = w + t*v). Host
+		// przysyła offsety (dx,dy); slot = (dx+mid) + (dy+mid)*v. Zajęty/poza siatką → pierwszy wolny.
+		const v = Math.max(1, Math.round(Math.sqrt(B.length - 2)));
+		const mid = v >> 1;
 		let filledAny = false;
-		for (const ty of types) {
+		for (let ti2 = 0; ti2 < types.length; ti2++) {
+			const ty = types[ti2];
 			let filled = false;
-			for (let i = 2; i < B.length; i++) { if (B[i] === 0) { B[i] = ty; B[1] = (B[1] || 0) + 1; if (!B[0]) B[0] = ty; filled = true; filledAny = true; break; } }
+			if (offs && offs.length >= (ti2 + 1) * 2) {
+				const col = offs[ti2 * 2] + mid, row = offs[ti2 * 2 + 1] + mid;
+				if (col >= 0 && col < v && row >= 0 && row < v) {
+					const idx = 2 + col + row * v;
+					if (idx < B.length && B[idx] === 0) { B[idx] = ty; B[1] = (B[1] || 0) + 1; if (!B[0]) B[0] = ty; filled = true; filledAny = true; }
+				}
+			}
+			if (!filled) for (let i = 2; i < B.length; i++) { if (B[i] === 0) { B[i] = ty; B[1] = (B[1] || 0) + 1; if (!B[0]) B[0] = ty; filled = true; filledAny = true; break; } }
 			if (!filled) break; // tank pełny
 		}
 		if (filledAny && (ST._grabFillDiag = (ST._grabFillDiag || 0) + 1) <= 20) log("CLIENT tank grabbera wypełniony:", types.length, "typów, count=" + B[1]);
@@ -1455,7 +1469,11 @@
 	ST._cryo = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._cryoQ.length < 2000) ST._cryoQ.push(x, y); };
 	// volcanizer (lawa) + caulkBlaster (spray/usuwanie caulku): ten sam wzorzec co cryo — sekwencja
 	// przed Lu (lokalne Lu i tak dropowane u klienta), batch co 60ms, host odtwarza z guardami.
-	ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = [];
+	ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = [];
+	// manualny SHAKE grabbera (fix TCentraL: "gold powstaje, residue znika"): tank mutuje się lokalnie
+	// (złoto w tanku ✓), ale residue leci DO ŚWIATA przez Lu (dropowane u klienta) + recordProcess
+	// bije tylko lokalny licznik. Forward per przetworzony slot → host tworzy residue i liczy proces.
+	ST._shakeRes = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._shakeQ.length < 2000) ST._shakeQ.push(x, y); };
 	ST._volc = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._volcQ.length < 2000) ST._volcQ.push(x, y); };
 	ST._caulk = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._caulkQ.length < 2000) ST._caulkQ.push(x, y); };
 	ST._caulkRm = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._caulkRmQ.length < 2000) ST._caulkRmQ.push(x, y); };
@@ -1873,6 +1891,17 @@
 					}
 				} finally { ST._applyingNet = false; }
 				if (!ST._fireLogged) { ST._fireLogged = true; log("HOST: ogień klienta odtworzony (z ochroną terenu),", c.length / 2, "komórek"); }
+			} else if (msg.k === "shakeB") {
+				// shake klienta: residue do świata (tylko puste komórki) + licznik procesu ShakeWetSand
+				const elS = ST.FH.elements, cS = msg.c || [];
+				ST._applyingNet = true;
+				try {
+					for (let i = 0; i + 1 < cS.length; i += 2) {
+						try { if (ST.FH.factory && ST.FH.factory.recordProcess) ST.FH.factory.recordProcess(state, 0 /* ShakeWetSand */); } catch (e) {}
+						try { if (ST.FH.world && ST.FH.world.isCellEmpty && ST.FH.world.isCellEmpty(state, cS[i], cS[i + 1]) && elS && elS.createAt) elS.createAt(state, cS[i], cS[i + 1], 6 /* RJ.Residue */); } catch (e) {}
+					}
+				} finally { ST._applyingNet = false; }
+				if (!ST._shakeLogged) { ST._shakeLogged = true; log("HOST: shake klienta odtworzony (residue+proces),", cS.length / 2, "slotów"); }
 			} else if (msg.k === "volcB") {
 				// lawa volcanizera klienta: TYLKO w puste komórki (jak vanilla isCellEmpty) — teren nietykalny
 				const elV = ST.FH.elements, cV = msg.c || [];
@@ -2588,6 +2617,7 @@
 			if (ST._volcQ.length && now - (ST._lastVolcB || 0) > 60) { ST._lastVolcB = now; try { net.send({ t: "act", k: "volcB", c: ST._volcQ }); } catch (e) {} ST._volcQ = []; }
 			if (ST._caulkQ.length && now - (ST._lastCaulkB || 0) > 60) { ST._lastCaulkB = now; try { net.send({ t: "act", k: "caulkB", c: ST._caulkQ }); } catch (e) {} ST._caulkQ = []; }
 			if (ST._caulkRmQ.length && now - (ST._lastCaulkRmB || 0) > 60) { ST._lastCaulkRmB = now; try { net.send({ t: "act", k: "caulkRmB", c: ST._caulkRmQ }); } catch (e) {} ST._caulkRmQ = []; }
+			if (ST._shakeQ.length && now - (ST._lastShakeB || 0) > 60) { ST._lastShakeB = now; try { net.send({ t: "act", k: "shakeB", c: ST._shakeQ }); } catch (e) {} ST._shakeQ = []; }
 			// Podpowiedź: połączony, ale host nie wysłał jeszcze świata (brak paczek do odrzucenia = gracz widzi "nic")
 			if (!ST.wsx.everApplied && !ST.wsx.mismatchLogged && ST.peers.size > 0 && now - (ST._waitHintT || 0) > 3000) {
 				ST._waitHintT = now;
@@ -2600,7 +2630,7 @@
 				ST._curWid = curWid;
 				ST._grabTool = null;
 				ST._grabbedCells.clear(); ST._placedCells.clear();
-				ST._fireQ = []; ST._cryoQ = []; ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = [];
+				ST._fireQ = []; ST._cryoQ = []; ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = [];
 				if (ST._dataSeen) ST._dataSeen.clear();
 				if (ST._dataEdited) ST._dataEdited.clear();
 			}

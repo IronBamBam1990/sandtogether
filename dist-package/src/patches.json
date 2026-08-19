@@ -183,6 +183,16 @@
       ]
     },
     {
+      "name": "grabber shake residue hook (_shakeRes)",
+      "critical": false,
+      "variants": [
+        {
+          "anchor": "(0,y.Lu)(e,U,k,e=>{if(!p.on.isCellEmpty(e.shared.sim,U,k))return;const t=(0,s.n)(r.RJ.Residue,U,k)",
+          "patched": "(window.SandTogether&&window.SandTogether._shakeRes&&window.SandTogether._shakeRes(e,U,k),0,y.Lu)(e,U,k,e=>{if(!p.on.isCellEmpty(e.shared.sim,U,k))return;const t=(0,s.n)(r.RJ.Residue,U,k)"
+        }
+      ]
+    },
+    {
       "name": "volcanizer lava hook (_volc)",
       "critical": false,
       "variants": [
