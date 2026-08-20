@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.71-beta";
+	const VER = "0.9.72-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -467,6 +467,7 @@
 				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
 				ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
+				autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
 				// własny nick (localStorage) rozgłaszany istniejącym protokołem hello — bez zmian w mostku IPC
@@ -502,6 +503,7 @@
 				// lokalnie nie wiedząc, że wszystko przepadnie przy ponownym joinie). Chcesz grać solo → Stop.
 			} else if (ev.kind === "stopped") {
 				if (ST.state) profileSave(ST.state); // przed resetem roli (isClientSync jeszcze true)
+				autoLoadClear();
 				ST.net.role = "idle"; ST.peers.clear(); removeAllPeerPuppets(); setStatus(t("offline"), "#aaa"); showInviteButton(false); ST.net.lobbyId = null; updateLobbyIdDisplay(); updatePingDisplay();
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = [];
 				ST._gotHostWorld = false;
@@ -526,6 +528,17 @@
 		}).catch(() => {});
 	}
 
+	// Guard auto-loadu odporny na reload strony (patrz komentarz przy auto-load). Klucz per save hosta,
+	// TTL 30 min (po tym czasie świadomy ponowny join/load ma działać normalnie).
+	function autoLoadDoneBefore(saveId) {
+		try { const v = Number(sessionStorage.getItem("st_autoload_" + saveId) || 0); return v > 0 && Date.now() - v < 30 * 60 * 1000; } catch (e) { return false; }
+	}
+	function autoLoadMark(saveId) {
+		try { sessionStorage.setItem("st_autoload_" + saveId, String(Date.now())); } catch (e) {}
+	}
+	function autoLoadClear() {
+		try { const del = []; for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); if (k && k.indexOf("st_autoload_") === 0) del.push(k); } del.forEach((k) => sessionStorage.removeItem(k)); } catch (e) {}
+	}
 	function handleMsg(from, msg) {
 		if (msg.t === "relay") { handleMsg(msg.from, msg.msg); return; }
 		if (msg.t === "ping") { try { net.send({ t: "pong", ts: msg.ts }, from); } catch (e) {} return; }
@@ -649,6 +662,9 @@
 				ST._worldReqN = Math.max(0, (ST._worldReqN || 0) - 1);
 				setStatus(t("waiting_host_world"), "#fd5");
 			}
+		} else if ((msg.t === "world-begin" || msg.t === "world-chunk" || msg.t === "world-end" || msg.t === "world-wait") && ST.net.role === "host") {
+			// host nigdy nie odbiera świata (0.9.72): pakiet świata u hosta = echo/self-loop albo obcy klient → ignoruj
+			if (!ST._hostWorldPktLogged) { ST._hostWorldPktLogged = true; log("HOST: zignorowany pakiet świata", msg.t, "od", from); }
 		} else if (msg.t === "world-begin") {
 			// NOWY transfer w trakcie odbioru = restart z przemieszanymi indeksami paczek → burza world-need
 			// (fix TCentraL "went crazy with the retrys"): ignorujemy, dopóki bieżący odbiór się nie skończy.
@@ -699,6 +715,13 @@
 				log("World import OK:", rx.name, bytes.length, "bytes");
 				// Auto-load: jeśli FH.game.load istnieje, wskocz prosto do gry (bez ręcznego Load Game). (wkład dotNine)
 				const saveId = r && r.metaData && r.metaData.id;
+				// PĘTLA PRZEŁADOWAŃ — PRZYCZYNA ŹRÓDŁOWA (0.9.72, odtworzona e2e): auto-load = FH.game.load =
+				// PRZEŁADOWANIE STRONY, które kasuje pamięć renderera (_autoLoadedOnce, _worldRxDone z 0.9.68).
+				// Po reloadzie klient "nie pamięta", że już wczytał ten save → kolejny transfer (world-req po 15 s
+				// gdy lustro nie wystartowało, re-send hosta) → znów auto-load → reload → ... Guard musi przeżyć
+				// reload: sessionStorage (per okno, kasowany przy nowym join/stop). Ten sam save hosta w tej
+				// sesji = tylko import, bez auto-loadu.
+				if (saveId && autoLoadDoneBefore(saveId)) { log("auto-load POMINIĘTY (ten save hosta był już auto-wczytany w tej sesji — guard po reloadzie) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
 				// PĘTLA PRZEŁADOWAŃ (fix TCentraL "reloading the same map over and over"): kolejny transfer
 				// tego samego świata NIE wyrywa gracza z gry — gdy lustro już działa albo load w toku, nie ładujemy.
 				// auto-load TYLKO RAZ na sesję (fix ZeroHazard "reload every 10 s"): powtórzony transfer
@@ -706,6 +729,7 @@
 				// kolejne save'y tylko importujemy; gracz może je wczytać ręcznie przez Load Game.
 				if (ST.wsx.everApplied || ST._loadingWorld || ST._autoLoadedOnce) { log("auto-load POMINIĘTY (lustro działa / load w toku / już auto-wczytano w tej sesji) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
 				ST._autoLoadedOnce = true;
+				if (saveId) autoLoadMark(saveId);
 				if (saveId && ST.FH && ST.FH.game && typeof ST.FH.game.load === "function" && ST.state) {
 					try {
 						ST._loadingWorld = true; // lustro NIE pisze po buforach w trakcie load (fix freeze na dużej mapie)
@@ -1458,7 +1482,7 @@
 				gl: state.store.gloom || null,          // stan gloomu
 				fp: fpCounters(state),                  // liczniki procesów fabryki (ShakeWetSand itd.) — SAB nie-lustrzany
 				up: state.store.upgrades || null,       // WSPÓLNA pula ulepszeń (fix G2)
-				th: (state.store.player && state.store.player.tech) || null, // tech tree
+				th: techFlagsForNet(state), // tech tree (bez śmieciowego klucza "undefined")
 				pg: state.store.progression || null,    // progression (upgradesUnlocked, dungeons)
 			});
 		} catch (e) {}
@@ -1496,12 +1520,30 @@
 	//                pula), a grę zostawiamy AUTORYTATYWNE odjęcie kosztu (równo z kolektorów itd.);
 	//       "free" = odblokowanie OD DRUŻYNY (zapłacił ktoś inny): session.cheat.bypassCosts na czas
 	//                wywołania = bez sprawdzania i BEZ odejmowania (klient nie kasuje lustrzanego złota).
+	// Definicja tech Z POLEM id (fix 0.9.72, e2e): getTechDefinition(id) zwraca goły obiekt {cost,unlocks,...}
+	// BEZ id — UI gry kupuje przez węzły z getTechNodes() (mają id, typ numeryczny dla enumów). Podanie
+	// defa bez id do unlockTech => gra zapisywała tech["undefined"]=true (śmieć w save), a switch(t.id)
+	// (efekty uboczne: krok tutoriala, odkrycia elementów) nie trafiał. Klucze z sieci przychodzą jako
+	// stringi ("2") — dopasowanie luźne (==) do id węzła (2).
+	function techNode(techId) {
+		const tm = ST._techMod;
+		try {
+			const nodes = (tm.getTechNodes && tm.getTechNodes()) || [];
+			for (const n of nodes) if (n && n.id == techId) return n; // eslint-disable-line eqeqeq
+		} catch (e) {}
+		try {
+			const d = tm.getTechDefinition(techId);
+			if (!d) return null;
+			if (d.id !== undefined) return d;
+			const num = Number(techId);
+			return Object.assign({ id: String(num) === String(techId) && !isNaN(num) ? num : techId }, d);
+		} catch (e) { return null; }
+	}
 	// Zwraca: true = pełny unlock; false = gra ODMÓWIŁA (flagi NIE stawiać!); null = brak _techMod.
 	function techUnlock(state, techId, mode, defOverride) {
 		const tm = ST._techMod;
 		if (!(tm && tm.unlockTech && tm.getTechDefinition)) return null;
-		let def = defOverride || null;
-		if (!def) try { def = tm.getTechDefinition(techId); } catch (e) {}
+		let def = defOverride || techNode(techId);
 		if (!def) { log("techUnlock: nieznany tech", techId); return false; }
 		const sess = state.session || (state.session = {});
 		const prevCheat = sess.cheat;
@@ -1516,7 +1558,7 @@
 	function techRefusedRecently(id) {
 		const m = ST._techRefused || (ST._techRefused = new Map());
 		const now = performance.now(), last = m.get(id) || 0;
-		if (now - last < 10000) return true;
+		if (now - last < 3000) return true; // 3 s (było 10 s): odmowa bywa chwilowa (kolejność kluczy/wymagania)
 		m.set(id, now);
 		return false;
 	}
@@ -1536,8 +1578,8 @@
 			const blds = pl.buildings || [], inv = pl.inventory || [];
 			for (const id of Object.keys(pl.tech)) {
 				if (pl.tech[id] !== true) continue;
-				let def = null;
-				try { def = tm.getTechDefinition(id); } catch (e) {}
+				if (id === "undefined") { delete pl.tech[id]; log("REPAIR(" + who + "): usunięty śmieciowy klucz tech[\"undefined\"] (po starym błędzie defa bez id)"); continue; }
+				const def = techNode(id);
 				if (!def || !def.unlocks) continue;
 				const ms = (def.unlocks.structures || []).filter((b) => !blds.includes(b));
 				const mi = (def.unlocks.items || []).filter((it) => !inv.some((x) => x && x.id === it));
@@ -1554,6 +1596,12 @@
 		return fixed;
 	}
 	ST.repairTech = () => (ST.state ? techRepair(ST.state, "manual") : 0); // ręcznie z konsoli: SandTogether.repairTech()
+	function techFlagsForNet(state) {
+		const t = state.store.player && state.store.player.tech;
+		if (!t) return null;
+		if (!Object.prototype.hasOwnProperty.call(t, "undefined")) return t;
+		const out = Object.assign({}, t); delete out.undefined; return out;
+	}
 	function fpArr(state) { // surowa tablica SAB (do zapisu u klienta)
 		try {
 			const w = ST.FH.workers;
@@ -1600,9 +1648,14 @@
 					}
 				}
 			}
-			if (msg.th && state.store.player && state.store.player.tech) {
+			// progresja PRZED tech: bramka wiersza drzewka w unlockTech (factory tier) czyta progression —
+			// przy odwrotnej kolejności pierwsza próba odblokowania bywała odrzucana (fix 0.9.72, e2e)
+			if (msg.pg && state.store.progression) Object.assign(state.store.progression, msg.pg);
+			// tech od hosta TYLKO gdy klient jest w swiecie z dzialajacym lustrem (0.9.72): w menu/loadzie
+			// unlockTech gry odmawia (tutorial/scena), a po reloadzie i tak wszystko przepada -> burza odmow w logu
+			if (msg.th && ST.wsx.everApplied && !ST._loadingWorld && state.store.scene && state.store.scene.active !== 1 && state.store.player && state.store.player.tech) {
 				for (const k of Object.keys(msg.th)) {
-					if (!msg.th[k] || state.store.player.tech[k]) continue;
+					if (k === "undefined" || !msg.th[k] || state.store.player.tech[k]) continue;
 					if (techRefusedRecently(k)) continue;
 					// NOWY tech od hosta → PEŁNY unlock u klienta (menu budynków, itemy do ekwipunku, MAPA!)
 					// — goła flaga zostawiała UI martwe ("kolega zbadał mapę, ja jej nie mam" — ЗаКеЛьМан).
@@ -1612,11 +1665,10 @@
 						const realU = techUnlock(state, k, "free");
 						if (realU === true) { state.store.player.tech[k] = true; log("SYNC: tech od drużyny odblokowany:", k, "(REAL)"); } // flaga node'a jawnie (fix podwójnego zakupu)
 						else if (realU === null) { state.store.player.tech[k] = true; try { ST.FH.events.emit(state, "tech:unlocked", { techId: k, suppressMusic: true }); } catch (e) {} log("SYNC: tech od drużyny:", k, "(FALLBACK flaga — patch _techMod nie pasuje do tego builda gry!)"); }
-						else log("SYNC: gra ODMÓWIŁA odblokowania tech od drużyny:", k, "(zablokowany/tutorial/wymagania) — ponowię za 10 s, flagi NIE stawiam");
+						else log("SYNC: gra ODMÓWIŁA odblokowania tech od drużyny:", k, "(zablokowany/tutorial/wymagania) — ponowię za 3 s, flagi NIE stawiam");
 					} finally { ST._applyingNet = false; }
 				}
 			}
-			if (msg.pg && state.store.progression) Object.assign(state.store.progression, msg.pg);
 			// auto-naprawa (0.9.71) tylko gdy klient JEST w swiecie z dzialajacym lustrem (nie w menu / nie w trakcie loadu)
 			if (ST.wsx.everApplied && !ST._loadingWorld && performance.now() - (ST._techRepairT || 0) > 20000) { ST._techRepairT = performance.now(); techRepair(state, "client"); }
 				ST._resSnapshot = Object.assign({}, state.store.resources); // re-baza dla przyrostów klienta (dotNine)
@@ -2132,8 +2184,8 @@
 						} else {
 							// gra odmówiła (wymagania/tutorial/brak surowców): flagi NIE stawiamy (inaczej "zbadane, ale
 							// nie da się budować" na zawsze) i odsyłamy klientowi NAK → cofa swoją lokalną flagę i może spróbować znów.
-							log("HOST: gra ODMÓWIŁA tech klienta:", msg.id, "→ NAK do", from);
-							try { net.send({ t: "tech-nak", id: msg.id }, from); } catch (e) {}
+							log("HOST: gra ODMÓWIŁA tech klienta:", msg.id, "→ NAK do", fromId); // fix 0.9.72: było `from` (ReferenceError → NAK nigdy nie wychodził)
+							try { net.send({ t: "tech-nak", id: msg.id }, fromId); } catch (e) {}
 						}
 					} else if (state.store.player && state.store.player.tech && state.store.player.tech[msg.id]) {
 						log("HOST: tech klienta już odblokowany (ignoruję):", msg.id);

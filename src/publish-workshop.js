@@ -20,6 +20,8 @@ const DESCRIPTION = `[h1]SandTogether — Co-op Multiplayer for Sandustry[/h1]
 Play Sandustry together over the internet — no server, no port forwarding. Connect through Steam friend invites. Up to 4 players.
 
 [h2]⚠ AFTER SUBSCRIBING — READ THIS (ONE-TIME setup, ever)[/h2]
+[b]Installed between Aug 18 and Aug 20?[/b] Run [b]install.bat[/b] ONCE more (macOS: install.command, Linux: install-linux.sh) — a bug in those versions broke the auto-updater, so your game kept an old copy of the mod. Fixed from v0.9.72; after that one re-run the mod updates itself again.
+
 Sandustry cannot auto-load this kind of mod yet, so after subscribing you run the installer [b]once[/b] — after that the mod [b]updates itself automatically[/b] at every game launch:
 [olist]
 [*] Subscribe (you already did) and let Steam finish downloading.
@@ -104,7 +106,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.71-beta — research no longer bricks (reports: Akriz, Cr0ss0vr). A research bought by the joining player showed as Researched on the host but the building could not be placed and the tech could not be bought again; host research could throw the client into a reload cycle. Cause: the game unlockTech returns false (not enough resources, requirements, tutorial) and the mod ignored it while also charging the cost twice. Now the game deducts the cost once on the host, team unlocks are free on the other side, and a refused research is reported back instead of leaving a dead flag. Already broken saves repair themselves on load: missing buildings and items of researched techs are restored for free, no duplicates. Auto-updates at next launch.',
+    changeNote: 'v0.9.72-beta — IMPORTANT: if you installed the mod between Aug 18 and Aug 20, run install.bat ONCE more (macOS: install.command, Linux: install-linux.sh). A bug in those versions silently broke the AUTO-UPDATER, so your game kept an old copy of the mod no matter what the Workshop delivered — this explains most of the recent reports of bugs that were already fixed. From 0.9.72 auto-update works again. Also in this release: the 10-second reload loop is fixed at its real root (loading the received world reloads the game page, which wiped the guards; the guard now survives the reload), a crash in the research-refusal path (tech-nak) is fixed, research definitions carry their id (no more junk tech entries in saves), and progression syncs before the tech tree. Auto-updates at next launch (after that one install.bat).',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

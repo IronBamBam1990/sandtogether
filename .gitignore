@@ -17,3 +17,6 @@ MAPA_WORKERY.md
 PLAN_COOP.md
 REKONESANS.md
 /.vs
+
+# e2e harness: profile Electron testowych instancji (tools/cdp.js zostaje)
+tools/client-profile*/

@@ -423,6 +423,9 @@ function applyBundlePatches(bundlePath, patches) {
 }
 function autoUpdateFromWorkshop() {
   try {
+    // FIX 0.9.72 (KRYTYCZNY): appDir zniknal w 0.9.40 przy walk-upie do steamapps, uzycia zostaly
+    // -> 'appDir is not defined' przy KAZDYM starcie = auto-update martwy od 18.08 u wszystkich graczy.
+    const appDir = __dirname; // .../resources/app (Win/Linux) lub .../Contents/Resources/app (macOS)
     // Windows: steamapps/common/Sandustry/resources/app (4 poziomy w górę)
     // macOS:   steamapps/common/Sandustry/Sandustry.app/Contents/Resources/app (6 poziomów)
     // → szukamy katalogu "steamapps" W GÓRĘ zamiast liczyć poziomy.
