@@ -106,7 +106,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.85-beta — HOTFIX on top of 0.9.84: if BOTH players had set a custom nick, the two games greeted each other in an endless loop (dozens of greetings per second), which flooded the connection and kept re-triggering world transfers. Each player is now greeted exactly once. Everything from 0.9.84 stands: Host (Internet - direct) with automatic UPnP port opening and a stream-safe masked address, a quarter of the previous bandwidth with ping-aware rate control, and no more false version warnings. Auto-updates at next launch; if you installed between Aug 18 and Aug 20, run install.bat ONCE first.',
+    changeNote: 'v0.9.86-beta — SEPARATE LOG PER GAME INSTANCE. When two copies of the game run on one PC (the usual way people test co-op), both used to write into the same main.log, so the report you sent me was a mix of both sides and hard to read. Now the second instance gets its own main-<pid>.log, and instances started with a custom user-data folder log inside that folder. Nothing changes for normal single-instance play. Everything from 0.9.84 and 0.9.85 stands: Host (Internet - direct) with automatic UPnP port opening and a stream-safe masked address, a quarter of the previous bandwidth with ping-aware rate control, no more false version warnings, and no more greeting loop between two players with custom nicks.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

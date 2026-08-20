@@ -123,4 +123,58 @@ done('st-main.js skopiowany');
   else { console.error('BŁĄD: kotwica single-instance nie znaleziona'); process.exit(1); }
 }
 
+
+// 7. logger.js — osobny plik logu na instancje (diagnostyka coopa)
+{
+  const p = path.join(APP, 'logger.js');
+  if (!fs.existsSync(p)) skip('logger.js (brak pliku w tym buildzie)');
+  else {
+    let s = read(p);
+    const anchor = "_logFile = path.join(dir, 'main.log')";
+    const patched = [
+      "/* ST_INSTANCE_LOG */ let _stName = 'main.log'",
+      "    try {",
+      "      const _lock = path.join(dir, 'st-instance.lock')",
+      "      let _busy = false",
+      "      try {",
+      "        const _pid = parseInt(fs.readFileSync(_lock, 'utf8'), 10)",
+      "        if (_pid && _pid !== process.pid) { try { process.kill(_pid, 0); _busy = true } catch (_) {} }",
+      "      } catch (_) {}",
+      "      if (_busy) _stName = 'main-' + process.pid + '.log'",
+      "      else { try { fs.writeFileSync(_lock, String(process.pid)) } catch (_) {} }",
+      "    } catch (_) {}",
+      "    _logFile = path.join(dir, _stName)",
+    ].join('\n');
+    if (s.includes('ST_INSTANCE_LOG')) skip('logger.js per-instance');
+    else if (s.includes(anchor)) { s = s.replace(anchor, patched); write(p, s); done('logger.js: osobny log na instancje'); }
+    else console.log('  [!] logger.js: kotwica nie pasuje (build gry zmieniony) — logi zostaja wspolne');
+  }
+}
+
+// 8. main.js — WCZESNY blok: userData override + nazwa pliku logu (musi byc PRZED kodem gry,
+//    bo logger rozwiazuje sciezke przy pierwszym wpisie)
+{
+  const p = path.join(APP, 'main.js');
+  let s = read(p);
+  const START = '// --- SandTogether early ---';
+  const END = '// --- /SandTogether early ---';
+  const early = [
+    START,
+    "try {",
+    "  const { app: _a } = require('electron');",
+    "  const _ud = process.argv.find((a) => a.startsWith('--st-userdata='));",
+    "  if (_ud) _a.setPath('userData', _ud.slice('--st-userdata='.length));",
+    "} catch (e) { console.error('[SandTogether] early error:', e); }",
+    END,  ].join('\n');
+  const i0 = s.indexOf(START), i1 = s.indexOf(END);
+  if (i0 >= 0 && i1 > i0) {
+    const cur = s.slice(i0, i1 + END.length);
+    if (cur.trim() === early.trim()) skip('main.js early block');
+    else { write(p, s.slice(0, i0) + early + s.slice(i1 + END.length)); done('main.js: early block zaktualizowany'); }
+  } else {
+    write(p, early + '\n' + s);
+    done('main.js: early block (log na instancje)');
+  }
+}
+
 console.log('Gotowe. Zmian:', changes);
