@@ -15,7 +15,7 @@ const PREVIEW = path.resolve(__dirname, '../workshop/preview.png');
 
 const TITLE = 'SandTogether — Co-op Multiplayer';
 const DESCRIPTION = `[h1]SandTogether — Co-op Multiplayer for Sandustry[/h1]
-[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox[/b]
+[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.[/b]
 
 Play Sandustry together over the internet — no server, no port forwarding. Connect through Steam friend invites. Up to 4 players.
 
@@ -44,7 +44,7 @@ That's it — [b]forever[/b]. From v0.9.39 the mod checks the Workshop folder at
 [*] See your teammate: real player models with equipped tools, build ghosts and grabber crosshairs, off-screen arrows
 [*] Per-player memory: rejoin a world and you're back where you left off, with your inventory
 [*] Steam achievements keep working; the panel warns in red on mod-version or game-build mismatch
-[*] Bilingual UI (English / Polski)
+[*] Trilingual UI: English / Polski / 简体中文 (Simplified Chinese by NanYu_sad., auto-detected from your system language)
 [*] Windows + macOS + Linux (macOS port by DwoaC, LAN co-op verified on Apple Silicon; Steam invites got a fix in 0.9.41 — Mac feedback welcome! Note: the installer is named [b]install.command[/b] — it replaced the briefly-announced install-macos.command. Linux is NEW in 0.9.57 and experimental: [b]bash install-linux.sh[/b], testers welcome!)
 [/list]
 
@@ -71,7 +71,7 @@ Both players must run the same mod version (the panel warns in red if they diffe
 This mod patches the game files (the game has no built-in mod loader for Early Access yet). Subscribe, then run [b]install.bat[/b] from this item's folder — [b]once[/b]. From then on the mod auto-updates itself at every game launch, so both players always match. Full instructions in README.md (EN) / INSTRUKCJA.md (PL).
 
 [h2]💛 Thank you — this mod is community-built[/h2]
-Huge thanks to the code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts — a whole pull request!) [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix, tested on two Macs) [b]Cr0ss0vr[/b] (precise client demolish selection + safe red-tile cleanup) [b]TCentraL[/b] (blob-expanding red-tile cleanup — after being our sharpest tester, he sent code) and [b]AlyxiaFox[/b] (congestion control for the world sync — the mirror now measures how far behind the slowest player is and throttles itself, so big sessions stay in the present instead of replaying history).
+Huge thanks to the code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts — a whole pull request!) [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix, tested on two Macs) [b]Cr0ss0vr[/b] (precise client demolish selection + safe red-tile cleanup) [b]TCentraL[/b] (blob-expanding red-tile cleanup — after being our sharpest tester, he sent code) [b]AlyxiaFox[/b] (congestion control for the world sync — the mirror now measures how far behind the slowest player is and throttles itself, so big sessions stay in the present instead of replaying history) and [b]NanYu_sad.[/b] (the complete Simplified Chinese translation — after being one of our first testers).
 
 And to the testers whose precise bug reports shaped almost every release: [b]TCentraL[/b], [b]Warlow[/b], [b]derErste67[/b], [b]NanYu_sad.[/b], [b]ЗаКеЛьМан[/b], [b]星灵[/b], [b]Lofar666[/b], [b]Bobulator333[/b], [b]thatsmaik[/b], [b]uolkx[/b], [b]MIXUIL[/b], [b]Justin[/b], [b]Hooye!![/b], [b]tony.s.jennette[/b], [b]Sprut[/b] — and everyone else who reported, tested and played. A short description + your log file (%APPDATA%\\Sandustry\\logs\\main.log) is the fastest route to a fix.
 
@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.68-beta — RELOAD LOOP fixed for good (report: ZeroHazard): (1) the quit-to-title auto-leave no longer fires DURING the mod’s own world load (the scene passes through the menu mid-load, which used to disconnect and re-transfer forever), (2) the received world auto-loads only ONCE per session (repeated transfers just import quietly), (3) the host’s automatic save-send has a 20 s cooldown so reconnect cycles cannot spam transfers. The high latency right after joining a big map is the first full sync and settles by itself. Auto-updates at next launch.',
+    changeNote: 'v0.9.69-beta — 简体中文! Complete Simplified Chinese translation by NanYu_sad. (contributor #7 — PR #9), auto-detected from your system language. The UI is now trilingual: English / Polski / 简体中文. Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

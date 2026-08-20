@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-20 (v0.9.69) — 简体中文! PR #9 by NanYu_sad. (contributor #7)
+
+Complete Simplified Chinese translation, auto-detected from the system language — every string covered, including the newest ones. NanYu_sad. was one of our first testers back in the earliest releases; now they've sent code. The UI is trilingual: English / Polski / 简体中文.
+
 ## 2026-08-20 (v0.9.68) — the reload loop, part 2 (report: ZeroHazard)
 
 Three belt-and-suspenders fixes against the client reloading the world every ~10 seconds: (1) the "quit to title = leave session" logic no longer fires DURING the mod's own world load (the scene passes through the menu mid-load, which used to disconnect → reconnect → re-transfer → re-load, forever); (2) the received world auto-loads only ONCE per session — repeated transfers just import quietly; (3) the host's automatic save-send after a peer joins has a 20 s cooldown, so reconnect cycles on a congested link can't spam transfers. The initial high latency on big maps is the first full sync and settles by itself.

@@ -16,9 +16,9 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.68-beta";
+	const VER = "0.9.69-beta";
 	const AUTHOR = "Kamil Padula";
-	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox";
+	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
 	const RJ_FIRE = 11, RJ_FREEZINGICE = 12; // wartości enuma RJ z obecnego builda (do createAt na hoście)
 	const CHUNK = 40;
@@ -29,7 +29,10 @@
 	const LANG = (() => {
 		try {
 			const langs = window.electron && window.electron.getPreferredSystemLanguagesSync ? window.electron.getPreferredSystemLanguagesSync() : [];
-			return (langs[0] || navigator.language || "en").toLowerCase().startsWith("pl") ? "pl" : "en";
+			const l = (langs[0] || navigator.language || "en").toLowerCase();
+			if (l.startsWith("zh")) return "zh";
+			if (l.startsWith("pl")) return "pl";
+			return "en";
 		} catch (e) { return "en"; }
 	})();
 	const STRINGS = {
@@ -140,6 +143,60 @@
 			lb_pick_save: "📂 Wybierz save...", lb_pick_save_d: "wczytaj konkretny świat zamiast ostatniego",
 			lb_new_note: "Nowa mapa? Zamknij to okno i kliknij Nowa — hosting zostaje aktywny, świat wyśle się graczom gdy do niego wejdziesz.",
 			host_enter_world_first: "Najpierw wejdź do świata (Kontynuuj / Wczytaj) — graczom wyśle się automatycznie.",
+		},
+		zh: {
+			offline: "离线", btn_host: "创建房间 (Steam)", btn_invite: "邀请", btn_host_lan: "局域网主机",
+			btn_join_lan: "加入局域网", btn_connect: "连接", btn_stop: "停止", btn_send_world: "发送世界", btn_resync: "重新同步",
+			host_paused: "房主已暂停(菜单中)——世界已冻结,将自动恢复", sync_stalled: "已 {0} 秒未收到房主的世界数据…",
+			reconnecting: "连接已断开——正在重新连接(第 {0}/5 次尝试)…",
+			left_to_menu: "已离开合作会话(已返回主菜单)",
+			chat_ph: "聊天消息…", chat_me: "你",
+			btn_join_id: "通过ID加入(剪贴板)", lobby_copied: "已复制!",
+			clipboard_no_id: "剪贴板中没有房间ID——请先点击房主的绿色房间ID行进行复制",
+			hint: "点击标题栏隐藏 (Ctrl+Shift+H)", by: "作者:" + AUTHOR + " + " + CONTRIBUTORS,
+			hosting_steam: "正在创建房间(Steam)——邀请你的朋友吧!", hosting_lan: (p) => "正在创建房间(局域网 :" + p + ")",
+			joined: (tr) => "已连接到房主(" + tr + ")", players: (n) => "在线玩家:" + n,
+			player_left: (n) => "玩家已离开。在线人数:" + n, error: (m) => "错误:" + m,
+			creating_lobby: "正在创建房间...", connect_first: "请先连接!",
+			no_saves: "没有存档——请先保存游戏", exporting: (n) => "正在导出世界 '" + n + "'...",
+			export_err: (m) => "导出错误:" + m, import_err: (m) => "导入错误:" + m,
+			decode_err: (m) => "世界解码错误:" + m,
+			world_sent: (kb, ch) => "世界已发送(" + kb + " KB," + ch + " 部分)",
+			world_imported: (n) => "世界 '" + n + "' 已导入!请加载它:菜单 → 加载游戏",
+			world_imported_loaded: (n) => "已加入房主的世界 '" + n + "'——你已进入游戏!",
+			waiting_host_world: "已连接——正在等待房主进入世界(将自动加载)...",
+			receiving: (a, b) => "正在接收世界:" + a + "/" + b,
+			other_world: "⚠ 你不在房主的世界中!房主:点击'发送世界'。你:菜单 → 加载游戏 → 加载收到的存档。",
+			dims_differ: (a, b) => "⚠ 世界大小不同(" + a + " 对比房主的 " + b + ")——请通过加载游戏来加载房主的存档。",
+			sync_up: (kb, ch, q) => "上传:" + kb + " KB/s," + ch + " 区块/s,队列 " + q,
+			sync_down: (kb, ch, q) => "房主镜像:" + kb + " KB/s," + ch + " 区块/s" + (q > 0 ? " ——还剩 " + q + " 个区块" : ""),
+			loading_world: "正在加载房主的世界...(大地图可能需要几分钟——游戏可能看起来像卡住了)",
+			join_prompt: "房主地址(ip 或 ip:port):",
+			ver_mismatch: "模组版本不匹配——双方玩家都必须更新 SandTogether!",
+			waiting_world: "已连接。正在等待房主的世界——房主需要点击'发送世界',然后你:菜单 → 加载游戏。",
+			unsupported: "⚠ 不支持的游戏版本——游戏已更新并导致模组失效。请重新运行安装程序,或前往创意工坊页面查看更新。",
+			mp_btn: "多人游戏",
+			lb_title: "多人游戏", lb_sub: "SandTogether 合作模式——最多4名玩家",
+			lb_host_steam_d: "通过互联网游玩——从Steam好友列表邀请朋友",
+			lb_host_lan_d: "局域网或VPN(Tailscale、Radmin等)",
+			lb_join_lan_d: "通过地址连接局域网/VPN房主",
+			lb_join_id_d: "使用复制到剪贴板的房间ID加入",
+			lb_close: "✕", lb_disconnect: "断开连接", lb_players: "玩家", lb_you: "你",
+			lb_id: "房间ID", lb_copy: "复制", lb_copied: "已复制!", lb_invite: "邀请朋友",
+			lb_play_last: "▶ 加载最新存档并开始游戏",
+			lb_play_note: "你的世界会自动发送给已加入的玩家。你也可以直接使用继续/加载游戏。",
+			lb_wait_host: "正在等待房主的世界——它会自动下载并加载。",
+			lb_hint: "提示:Steam邀请可以在任何时候接受——其余的都会自动完成。",
+			lb_steps: "1) 邀请朋友   2) 点击开始游戏——他们会自动加入你的地图",
+			badge_offline: "○ 离线——未连接",
+			badge_host: (tr) => "● 正在创建房间(" + tr + ")",
+			badge_client: (tr) => "● 已连接(" + tr + ")——你是一名玩家",
+			chat_joined: (n) => n + " 加入了",
+			chat_left: (n) => n + " 离开了",
+			lb_nick: "你的昵称",
+			lb_pick_save: "📂 选择存档...", lb_pick_save_d: "加载指定的世界而不是最新的存档",
+			lb_new_note: "新地图?关闭此窗口并点击新游戏——创建房间状态保持激活,当你进入世界后会自动发送给玩家。",
+			host_enter_world_first: "请先进入你的世界(继续/加载游戏)——将自动发送给玩家。",
 		},
 	};
 	const t = (key, ...args) => {
