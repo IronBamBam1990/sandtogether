@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.69-beta";
+	const VER = "0.9.70-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1943,6 +1943,10 @@
 							const b = structureBounds(state, SA, st, x, y); if (b) bounds.push(b);
 						}
 					}
+					// FALLBACK (review PR #11): przeciągnięcie po SAMYCH starych czerwonych kaflach (bez żywej struktury)
+					// dawało puste bounds = brak sprzątania. Zachowujemy workflow graczy: pusty rect → czyść osierocone
+					// kafle w recie (isOrphanTile per komórkę chroni zdrowe, malowane fundamenty).
+					if (!bounds.length && (x1 - x0 + 1) * (y1 - y0 + 1) <= 40000) bounds.push({ x0, y0, x1, y1 });
 					armDemolCleanup(bounds);
 				} catch (e) { log("demolish bounds error:", e.message); }
 				return false; // gra rozbiera normalnie; my tylko posprzątamy po niej

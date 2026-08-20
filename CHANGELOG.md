@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-20 (v0.9.70) — PR #11 by Cr0ss0vr: foundation cleanup after client demolition (issue #10)
+
+The post-demolish cleanup used to look at the drag rectangle, which does not describe a building's real footprint. The PR captures each structure's true occupied bounds (via the game's own cell lookup) BEFORE the game removes it and cleans exactly those boxes — client-ordered demolitions finally leave no foundation behind. Merged with one addition: dragging over old orphaned red tiles with no live structure still cleans them.
+
 ## 2026-08-20 (v0.9.69) — 简体中文! PR #9 by NanYu_sad. (contributor #7)
 
 Complete Simplified Chinese translation, auto-detected from the system language — every string covered, including the newest ones. NanYu_sad. was one of our first testers back in the earliest releases; now they've sent code. The UI is trilingual: English / Polski / 简体中文.
