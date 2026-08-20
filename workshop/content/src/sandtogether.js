@@ -57,6 +57,7 @@
 			world_imported: (n) => "World '" + n + "' imported! Load it: menu → Load Game",
 			world_imported_loaded: (n) => "Joined host's world '" + n + "' — you're in!",
 			tech_rejected: (id) => "Research '" + id + "' rejected by the host (requirements/cost) — try again",
+			tech_repaired: (n) => "Repaired " + n + " broken research unlock(s) — buildings/items restored",
 			waiting_host_world: "Connected — waiting for host to enter a world (it'll load automatically)...",
 			receiving: (a, b) => "Receiving world: " + a + "/" + b,
 			other_world: "⚠ NOT on host's world! Host: click 'Send world'. You: menu → Load Game → load the received save.",
@@ -112,6 +113,7 @@
 			world_imported: (n) => "Świat '" + n + "' zaimportowany! Wczytaj go: menu → Load Game",
 			world_imported_loaded: (n) => "Dołączono do świata hosta '" + n + "' — jesteś w grze!",
 			tech_rejected: (id) => "Badanie '" + id + "' odrzucone przez hosta (wymagania/koszt) — spróbuj ponownie",
+			tech_repaired: (n) => "Naprawiono " + n + " uszkodzonych badań — budynki/przedmioty przywrócone",
 			waiting_host_world: "Połączono — czekam aż host wejdzie do świata (wczyta się automatycznie)...",
 			receiving: (a, b) => "Odbieranie świata: " + a + "/" + b,
 			other_world: "⚠ NIE jesteś na świecie hosta! Host: kliknij 'Wyślij świat'. Ty: menu → Load Game → wczytaj otrzymany save.",
@@ -167,6 +169,7 @@
 			world_imported: (n) => "世界 '" + n + "' 已导入!请加载它:菜单 → 加载游戏",
 			world_imported_loaded: (n) => "已加入房主的世界 '" + n + "'——你已进入游戏!",
 			tech_rejected: (id) => "研究 '" + id + "' 被主机拒绝(条件/费用不足)— 请重试",
+			tech_repaired: (n) => "已修复 " + n + " 个损坏的研究解锁 — 建筑/物品已恢复",
 			waiting_host_world: "已连接——正在等待房主进入世界(将自动加载)...",
 			receiving: (a, b) => "正在接收世界:" + a + "/" + b,
 			other_world: "⚠ 你不在房主的世界中!房主:点击'发送世界'。你:菜单 → 加载游戏 → 加载收到的存档。",
@@ -1087,6 +1090,7 @@
 		if (typeof msg.sq === "number") ST._lastAppliedSq = msg.sq;
 		if (applied > 0 && !w.everApplied) {
 			w.everApplied = true; log("Pierwsze paczki świata zastosowane — lustro działa"); setStatus(t("players", ST.peers.size + 1));
+			techRepair(state, "client"); // zbrickowane flagi w save od hosta (0.9.71)
 			profileRestore(state, msg.wid || ST._trustedWid); // wróć tam, gdzie skończyłeś w TYM świecie (G7-lite)
 			// AUTO-RESYNC (fix TCentraL "big map"): initial flood (enqueueFullWorld po peer-hello) leciał
 			// gdy klient był jeszcze w MENU/loadzie i był DROPOWANY, a rowH hosta uważa go za dostarczony
@@ -1493,11 +1497,11 @@
 	//       "free" = odblokowanie OD DRUŻYNY (zapłacił ktoś inny): session.cheat.bypassCosts na czas
 	//                wywołania = bez sprawdzania i BEZ odejmowania (klient nie kasuje lustrzanego złota).
 	// Zwraca: true = pełny unlock; false = gra ODMÓWIŁA (flagi NIE stawiać!); null = brak _techMod.
-	function techUnlock(state, techId, mode) {
+	function techUnlock(state, techId, mode, defOverride) {
 		const tm = ST._techMod;
 		if (!(tm && tm.unlockTech && tm.getTechDefinition)) return null;
-		let def = null;
-		try { def = tm.getTechDefinition(techId); } catch (e) {}
+		let def = defOverride || null;
+		if (!def) try { def = tm.getTechDefinition(techId); } catch (e) {}
 		if (!def) { log("techUnlock: nieznany tech", techId); return false; }
 		const sess = state.session || (state.session = {});
 		const prevCheat = sess.cheat;
@@ -1516,6 +1520,40 @@
 		m.set(id, now);
 		return false;
 	}
+	// NAPRAWA "ZBRICKOWANYCH" SAVE'ÓW (0.9.71): stary błąd zostawiał tech z flagą true, ale bez
+	// zarejestrowanych budynków (player.buildings) / itemów (inventory) — w drzewku "Researched", budować
+	// nie można, zbadać ponownie też nie. Dla każdego takiego tech wołamy unlockTech gry w trybie "free"
+	// z defem OKROJONYM do brakujących unlocks (bez duplikatów itemów; `ae` budynków i tak jest idempotentne).
+	// unlockTech nie sprawdza flagi "już zbadane" (tylko lockedTechs/tutorial/wymagania), więc można.
+	// Idempotentne. Host/solo: raz na wejście w świat; klient: po starcie lustra + throttle w streamie th.
+	function techRepair(state, who) {
+		let fixed = 0;
+		try {
+			const tm = ST._techMod;
+			if (!(tm && tm.unlockTech && tm.getTechDefinition)) return 0;
+			const pl = state.store && state.store.player;
+			if (!pl || !pl.tech) return 0;
+			const blds = pl.buildings || [], inv = pl.inventory || [];
+			for (const id of Object.keys(pl.tech)) {
+				if (pl.tech[id] !== true) continue;
+				let def = null;
+				try { def = tm.getTechDefinition(id); } catch (e) {}
+				if (!def || !def.unlocks) continue;
+				const ms = (def.unlocks.structures || []).filter((b) => !blds.includes(b));
+				const mi = (def.unlocks.items || []).filter((it) => !inv.some((x) => x && x.id === it));
+				if (!ms.length && !mi.length) continue;
+				const partial = Object.assign({}, def, { unlocks: Object.assign({}, def.unlocks, { structures: ms, items: mi }) });
+				ST._applyingNet = true;
+				let r = false;
+				try { r = techUnlock(state, id, "free", partial); } finally { ST._applyingNet = false; }
+				log("REPAIR(" + who + "): tech", id, "miał flagę bez unlocks — brak budynków:", ms.join(",") || "-", "itemów:", mi.join(",") || "-", "→", r === true ? "NAPRAWIONY" : "gra odmówiła (" + r + ")");
+				if (r === true) fixed++;
+			}
+			if (fixed) setStatus(t("tech_repaired", fixed), "#5f5");
+		} catch (e) { log("techRepair error:", e.message); }
+		return fixed;
+	}
+	ST.repairTech = () => (ST.state ? techRepair(ST.state, "manual") : 0); // ręcznie z konsoli: SandTogether.repairTech()
 	function fpArr(state) { // surowa tablica SAB (do zapisu u klienta)
 		try {
 			const w = ST.FH.workers;
@@ -1579,6 +1617,7 @@
 				}
 			}
 			if (msg.pg && state.store.progression) Object.assign(state.store.progression, msg.pg);
+			if (performance.now() - (ST._techRepairT || 0) > 20000) { ST._techRepairT = performance.now(); techRepair(state, "client"); }
 				ST._resSnapshot = Object.assign({}, state.store.resources); // re-baza dla przyrostów klienta (dotNine)
 		} catch (e) {}
 	}
@@ -3367,6 +3406,11 @@
 		if (ST.net.role === "host" && ST.peers.size && state.store && state.store.scene && state.store.scene.active !== 1) {
 			const wid = (state.store.meta && state.store.meta.worldId) || "unknown";
 			if (ST._autoSentWid !== wid) { ST._autoSentWid = wid; sendWorld(); }
+		}
+		// auto-naprawa zbrickowanego researchu (0.9.71): host/solo raz na świat, 3 s po wejściu (po loadzie)
+		if (ST.net.role !== "client" && state.store && state.store.scene && state.store.scene.active !== 1 && state.store.player && now > (ST._loadGuardUntil || 0)) {
+			const wid = (state.store.meta && state.store.meta.worldId) || "unknown";
+			if (ST._techRepairWid !== wid) { ST._techRepairWid = wid; techRepair(state, ST.net.role === "host" ? "host" : "solo"); }
 		}
 		// HOST W MENU NIE STREAMUJE (fix "instant kick" — Akriz + derErste67): w menu bufory świata
 		// należą do SCENY MENU; streamowanie ich klientowi malowało śmieci i uruchamiało u niego
