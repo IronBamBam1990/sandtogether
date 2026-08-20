@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('sandtogetherNet', {
   joinSteam: (lobbyId) => ipcRenderer.invoke('st:join-steam', lobbyId),
   invite: () => ipcRenderer.invoke('st:invite'),
   hostWs: (port) => ipcRenderer.invoke('st:host-ws', port),
+  hostDirect: (port) => ipcRenderer.invoke('st:host-direct', port),
   joinWs: (host, port) => ipcRenderer.invoke('st:join-ws', host, port),
   stop: () => ipcRenderer.invoke('st:stop'),
   status: () => ipcRenderer.invoke('st:status'),

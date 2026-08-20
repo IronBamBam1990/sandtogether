@@ -10,6 +10,7 @@
 'use strict';
 
 const net = require('net');
+const os = require('os'); // UPnP: wykrycie wlasnego adresu LAN
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -343,7 +344,7 @@ function handleIncoming(peerId, text, steamSid) {
   if (peer && obj.t === 'hello') {
     peer.nick = obj.nick || '?';
     emitEvent('peer-hello', { id: peerId, nick: peer.nick });
-    if (obj.ver !== PROTO_VER) emitEvent('version-mismatch', { id: peerId, theirs: obj.ver, ours: PROTO_VER });
+    if (obj.ver != null && obj.ver !== PROTO_VER) emitEvent('version-mismatch', { id: peerId, theirs: obj.ver, ours: PROTO_VER });
   }
   emitMsg(peerId, obj);
   // host relays player positions/hellos to the other clients (3+ player support)
@@ -421,6 +422,162 @@ function applyBundlePatches(bundlePath, patches) {
   if (dirty) fs.writeFileSync(bundlePath, s);
   return { criticalFail, appliedN };
 }
+
+// ============================================================================
+// UPnP: automatyczne otwarcie portu na routerze + publiczny IP.
+// Cel: ruch gry ma isc BEZPOSREDNIO miedzy graczami, a nie przez relay Steama
+// (ktory dlawi pasmo i podbija ping do sekund). Bez zadnych zaleznosci:
+// SSDP przez UDP (odkrycie routera) + SOAP przez HTTP (mapowanie portu).
+// ============================================================================
+const dgram = require("dgram");
+const http = require("http");
+const urlMod = require("url");
+
+function localIPv4() {
+  const ifs = os.networkInterfaces();
+  const cands = [];
+  for (const name of Object.keys(ifs)) for (const a of ifs[name] || []) {
+    if (a.family !== "IPv4" && a.family !== 4) continue;
+    if (a.internal) continue;
+    cands.push(a.address);
+  }
+  // preferuj adresy prywatne (192.168/10./172.16-31)
+  const priv = cands.filter((ip) => /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip));
+  return priv[0] || cands[0] || null;
+}
+
+// 1) SSDP: znajdz bramke internetowa (router) w sieci lokalnej
+function upnpDiscover(timeoutMs) {
+  return new Promise((resolve) => {
+    const targets = [
+      "urn:schemas-upnp-org:service:WANIPConnection:1",
+      "urn:schemas-upnp-org:service:WANPPPConnection:1",
+      "urn:schemas-upnp-org:device:InternetGatewayDevice:1",
+    ];
+    const sock = dgram.createSocket({ type: "udp4", reuseAddr: true });
+    let done = false;
+    const finish = (loc) => { if (done) return; done = true; try { sock.close(); } catch (e) {} resolve(loc); };
+    sock.on("error", () => finish(null));
+    sock.on("message", (msg) => {
+      const txt = msg.toString("utf8");
+      const m = /LOCATION:\s*(\S+)/i.exec(txt);
+      if (m) finish(m[1]);
+    });
+    sock.bind(0, () => {
+      try { sock.setBroadcast(true); } catch (e) {}
+      for (const t of targets) {
+        const q = "M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nMAN: \"ssdp:discover\"\r\nMX: 2\r\nST: " + t + "\r\n\r\n";
+        try { sock.send(Buffer.from(q), 1900, "239.255.255.250"); } catch (e) {}
+      }
+    });
+    setTimeout(() => finish(null), timeoutMs || 2500);
+  });
+}
+
+function httpGet(u, timeoutMs) {
+  return new Promise((resolve) => {
+    let req;
+    try { req = http.get(u, { timeout: timeoutMs || 3000 }, (res) => { let d = ""; res.setEncoding("utf8"); res.on("data", (c) => (d += c)); res.on("end", () => resolve(d)); }); }
+    catch (e) { return resolve(null); }
+    req.on("timeout", () => { try { req.destroy(); } catch (e) {} resolve(null); });
+    req.on("error", () => resolve(null));
+  });
+}
+
+// 2) z opisu urzadzenia wyciagnij adres uslugi sterujacej (WANIPConnection / WANPPPConnection)
+async function upnpControl(locationUrl) {
+  const xml = await httpGet(locationUrl, 3000);
+  if (!xml) return null;
+  const svcRe = /<service>([\s\S]*?)<\/service>/g;
+  let m;
+  while ((m = svcRe.exec(xml))) {
+    const blk = m[1];
+    const type = (/<serviceType>([^<]+)<\/serviceType>/i.exec(blk) || [])[1];
+    const ctrl = (/<controlURL>([^<]+)<\/controlURL>/i.exec(blk) || [])[1];
+    if (!type || !ctrl) continue;
+    if (!/WAN(IP|PPP)Connection:\d/i.test(type)) continue;
+    const base = urlMod.parse(locationUrl);
+    const ctrlUrl = /^https?:\/\//i.test(ctrl) ? ctrl : (base.protocol + "//" + base.host + (ctrl.charAt(0) === "/" ? "" : "/") + ctrl);
+    return { controlUrl: ctrlUrl, serviceType: type };
+  }
+  return null;
+}
+
+// 3) SOAP
+function soap(ctrl, serviceType, action, bodyXml, timeoutMs) {
+  return new Promise((resolve) => {
+    const u = urlMod.parse(ctrl);
+    const payload = '<?xml version="1.0"?>' +
+      '<s:Envelope xmlns:s="http://schemas.xmlsoap.org/soap/envelope/" s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/">' +
+      "<s:Body><u:" + action + ' xmlns:u="' + serviceType + '">' + (bodyXml || "") + "</u:" + action + "></s:Body></s:Envelope>";
+    const req = http.request({
+      host: u.hostname, port: u.port || 80, path: u.path, method: "POST",
+      timeout: timeoutMs || 4000,
+      headers: {
+        "Content-Type": 'text/xml; charset="utf-8"',
+        "Content-Length": Buffer.byteLength(payload),
+        SOAPAction: '"' + serviceType + "#" + action + '"',
+      },
+    }, (res) => { let d = ""; res.setEncoding("utf8"); res.on("data", (c) => (d += c)); res.on("end", () => resolve({ status: res.statusCode, body: d })); });
+    req.on("timeout", () => { try { req.destroy(); } catch (e) {} resolve(null); });
+    req.on("error", () => resolve(null));
+    req.end(payload);
+  });
+}
+
+// 4) calosc: otworz port i zwroc publiczny IP
+async function upnpOpenPort(port) {
+  const out = { upnp: false, publicIp: null, port: port, error: null };
+  try {
+    const loc = await upnpDiscover(2500);
+    if (!loc) { out.error = "router nie odpowiedzial na SSDP (UPnP wylaczone?)"; return out; }
+    const svc = await upnpControl(loc);
+    if (!svc) { out.error = "brak uslugi WANIPConnection w routerze"; return out; }
+    const lan = localIPv4();
+    if (!lan) { out.error = "nie znam wlasnego adresu LAN"; return out; }
+    const body = "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + port + "</NewExternalPort>" +
+      "<NewProtocol>TCP</NewProtocol><NewInternalPort>" + port + "</NewInternalPort>" +
+      "<NewInternalClient>" + lan + "</NewInternalClient><NewEnabled>1</NewEnabled>" +
+      "<NewPortMappingDescription>SandTogether</NewPortMappingDescription><NewLeaseDuration>0</NewLeaseDuration>";
+    const add = await soap(svc.controlUrl, svc.serviceType, "AddPortMapping", body, 5000);
+    if (!add || add.status !== 200) { out.error = "router odmowil mapowania portu" + (add ? " (HTTP " + add.status + ")" : ""); }
+    else { out.upnp = true; S.upnp = { ctrl: svc.controlUrl, type: svc.serviceType, port: port }; }
+    const parseIp = (body) => { const mm = /<(?:[A-Za-z0-9]+:)?NewExternalIPAddress>\s*([^<\s]*)\s*<\/(?:[A-Za-z0-9]+:)?NewExternalIPAddress>/i.exec(body || ""); return mm && mm[1] ? mm[1].trim() : null; };
+    for (let attempt = 0; attempt < 2 && !out.publicIp; attempt++) {
+      if (attempt) await new Promise((r2) => setTimeout(r2, 1500));
+      const ip = await soap(svc.controlUrl, svc.serviceType, "GetExternalIPAddress", "", 5000);
+      if (ip && ip.body) out.publicIp = parseIp(ip.body);
+    }
+    if (!out.publicIp) { out.publicIp = await publicIpFallback(); if (out.publicIp) log("UPnP: router nie podal adresu — ustalony zewnetrznie"); }
+  } catch (e) { out.error = e.message; }
+  return out;
+}
+
+// Gdy router nie chce podac adresu zewnetrznego — pytamy uslugi zwracajacej czysty tekst.
+// To WLASNY adres hosta, potrzebny zeby podac go koledze; nic wiecej nie wysylamy.
+function publicIpFallback() {
+  return new Promise((resolve) => {
+    try {
+      const https = require("https");
+      const req = https.get("https://api.ipify.org", { timeout: 4000 }, (res) => {
+        let d = ""; res.setEncoding("utf8"); res.on("data", (c) => (d += c));
+        res.on("end", () => resolve(/^\d{1,3}(\.\d{1,3}){3}$/.test(d.trim()) ? d.trim() : null));
+      });
+      req.on("timeout", () => { try { req.destroy(); } catch (e) {} resolve(null); });
+      req.on("error", () => resolve(null));
+    } catch (e) { resolve(null); }
+  });
+}
+async function upnpClosePort() {
+  const u = S.upnp; if (!u) return;
+  S.upnp = null;
+  try {
+    await soap(u.ctrl, u.type, "DeletePortMapping",
+      "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + u.port + "</NewExternalPort><NewProtocol>TCP</NewProtocol>", 4000);
+    log("UPnP: mapowanie portu " + u.port + " usuniete");
+  } catch (e) {}
+}
+
 function autoUpdateFromWorkshop() {
   try {
     // FIX 0.9.72 (KRYTYCZNY): appDir zniknal w 0.9.40 przy walk-upie do steamapps, uzycia zostaly
@@ -515,7 +672,16 @@ function init(opts) {
   ipcMain.handle('st:invite', async () => { try { if (!S.lobby) return { ok: false, error: 'brak lobby' }; S.lobby.openInviteDialog(); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; } });
   ipcMain.handle('st:host-ws', async (ev, port) => { try { startWsServer(port || 27777); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; } });
   ipcMain.handle('st:join-ws', async (ev, host, port) => { try { joinWs(host, port || 27777); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; } });
-  ipcMain.handle('st:stop', async () => { stopNetworking(); return { ok: true }; });
+  ipcMain.handle('st:host-direct', async (ev, port) => {
+    try {
+      const p = port || 27777;
+      startWsServer(p);
+      const r = await upnpOpenPort(p);
+      log("HOST DIRECT: port " + p + (r.upnp ? " otwarty przez UPnP" : " BEZ UPnP (" + r.error + ")") + ", publiczny IP: " + (r.publicIp || "?"));
+      return { ok: true, upnp: r.upnp, publicIp: r.publicIp, port: p, error: r.error };
+    } catch (e) { return { ok: false, error: e.message }; }
+  });
+  ipcMain.handle('st:stop', async () => { upnpClosePort(); stopNetworking(); return { ok: true }; });
   ipcMain.on('st:send', (ev, payload, toId) => netSend(payload, toId));
   ipcMain.handle('st:status', async () => ({
     role: S.role, transport: S.transport, myNick: S.myNick, myId: S.myId,

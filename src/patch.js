@@ -73,7 +73,19 @@ done('st-main.js skopiowany');
 {
   const p = path.join(APP, 'preload.js');
   let s = read(p);
-  if (s.includes('sandtogetherNet')) skip('preload.js');
+  // bridge jest WYMIENIANY miedzy markerami (nie tylko doklejany) — inaczej stare instalacje
+  // zostaja bez nowych metod IPC (np. hostDirect z 0.9.79).
+  const BRIDGE_START = '// --- SandTogether by Kamil Padula: network bridge (appended by patch.js) ---';
+  const BRIDGE_END = '// --- /SandTogether ---';
+  const fresh = read(path.join(SRC, 'st-preload-append.js'));
+  const i0 = s.indexOf(BRIDGE_START), i1 = s.indexOf(BRIDGE_END);
+  if (i0 >= 0 && i1 > i0) {
+    const cur = s.slice(i0, i1 + BRIDGE_END.length);
+    const want = fresh.slice(fresh.indexOf(BRIDGE_START));
+    if (cur.trim() === want.trim()) skip('preload.js');
+    else { write(p, s.slice(0, i0) + want.trim() + s.slice(i1 + BRIDGE_END.length)); done('preload.js: bridge zaktualizowany'); }
+  }
+  else if (s.includes('sandtogetherNet')) skip('preload.js');
   else {
     s += '\n' + read(path.join(SRC, 'st-preload-append.js'));
     write(p, s);

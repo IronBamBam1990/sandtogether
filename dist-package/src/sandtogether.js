@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.77-beta";
+	const VER = "0.9.84-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -81,6 +81,12 @@
 			lb_play_note: "Your world is sent to joined players automatically. You can also just use Continue / Load Game.",
 			lb_wait_host: "Waiting for the host's world — it downloads and loads automatically.",
 			lb_hint: "Tip: a Steam invite can be accepted at ANY time — everything else happens automatically.",
+			btn_host_direct: "Host (Internet — direct)",
+			lb_host_direct_d: "Full speed, no Steam relay. Opens the port on your router automatically (UPnP).",
+			direct_ready: "DIRECT hosting — give your friend the address below",
+			direct_no_upnp: "Port not opened automatically — forward TCP {0} on your router, then share the address",
+			direct_addr: "Your address", direct_show: "show", direct_hide: "hide", direct_copied: "Address copied!",
+			direct_hidden_hint: "hidden on purpose — safe to stream",
 			lb_steps: "1) Invite friends   2) Hit PLAY — they will join your map automatically",
 			badge_offline: "○ OFFLINE — not connected",
 			badge_host: (tr) => "● HOSTING (" + tr + ")",
@@ -137,6 +143,12 @@
 			lb_play_note: "Twój świat wyśle się dołączonym graczom automatycznie. Możesz też po prostu użyć Kontynuuj / Wczytaj.",
 			lb_wait_host: "Czekam na świat hosta — pobierze się i wczyta automatycznie.",
 			lb_hint: "Tip: zaproszenie Steam możesz przyjąć w KAŻDEJ chwili — reszta dzieje się sama.",
+			btn_host_direct: "Host (internet — bezpośrednio)",
+			lb_host_direct_d: "Pełna prędkość, bez relaya Steama. Sam otwiera port na routerze (UPnP).",
+			direct_ready: "Hostujesz BEZPOŚREDNIO — podaj koledze adres poniżej",
+			direct_no_upnp: "Port nie otworzył się sam — przekieruj TCP {0} na routerze, potem podaj adres",
+			direct_addr: "Twój adres", direct_show: "pokaż", direct_hide: "ukryj", direct_copied: "Adres skopiowany!",
+			direct_hidden_hint: "celowo ukryty — bezpieczne na streamie",
 			lb_steps: "1) Zaproś znajomych   2) Wciśnij GRAJ — dołączą na Twoją mapę automatycznie",
 			badge_offline: "○ OFFLINE — nie połączono",
 			badge_host: (tr) => "● HOSTUJESZ (" + tr + ")",
@@ -193,6 +205,12 @@
 			lb_play_note: "你的世界会自动发送给已加入的玩家。你也可以直接使用继续/加载游戏。",
 			lb_wait_host: "正在等待房主的世界——它会自动下载并加载。",
 			lb_hint: "提示:Steam邀请可以在任何时候接受——其余的都会自动完成。",
+			btn_host_direct: "创建房间(互联网 — 直连)",
+			lb_host_direct_d: "全速直连,不经过Steam中继。自动在路由器上开放端口(UPnP)。",
+			direct_ready: "直连主机模式 — 把下面的地址发给朋友",
+			direct_no_upnp: "端口未自动开放 — 请在路由器上转发 TCP {0},然后分享地址",
+			direct_addr: "你的地址", direct_show: "显示", direct_hide: "隐藏", direct_copied: "地址已复制!",
+			direct_hidden_hint: "已刻意隐藏 — 直播安全",
 			lb_steps: "1) 邀请朋友   2) 点击开始游戏——他们会自动加入你的地图",
 			badge_offline: "○ 离线——未连接",
 			badge_host: (tr) => "● 正在创建房间(" + tr + ")",
@@ -459,7 +477,7 @@
 			log("net event:", ev.kind, JSON.stringify(ev).slice(0, 150));
 			if (ev.kind === "hosting") {
 				ST.net.role = "host"; ST.net.transport = ev.transport;
-				setStatus(ev.transport === "steam" ? t("hosting_steam") : t("hosting_lan", ev.port));
+				setStatus(ev.transport === "steam" ? t("hosting_steam") : (ST._directMode ? t("direct_ready") : t("hosting_lan", ev.port)));
 				ST.net.lobbyId = ev.lobbyId || null; ST._autoSentWid = null; // reset auto-send; zapamiętaj lobbyId
 				resetWorldQueue(); // new host session starts clean, peer-connected re-queues the full world
 					updateLobbyIdDisplay();
@@ -470,7 +488,7 @@
 				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
 				ST._mirrorKickN = 0; ST._mirrorKickT = 0; ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
-				autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
+				ST._directMode = false; ST._directAddr = null; autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
 				// własny nick (localStorage) rozgłaszany istniejącym protokołem hello — bez zmian w mostku IPC
@@ -525,7 +543,7 @@
 			try { ST._nickCustom = localStorage.getItem("st_nick") || null; } catch (e) { ST._nickCustom = null; }
 			ST._myNick = ST._nickCustom || s.myNick || null; // własny nick > nick Steam > default (feedback TCentraL: LAN = "Player" na stałe)
 			ST._gameFp = s.gameFp || null; // odcisk buildu gry (guard różnych buildów między graczami)
-			for (const p of s.peers) ST.peers.set(p.id, { nick: p.nick, x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
+			for (const p of s.peers) { const old = ST.peers.get(p.id); ST.peers.set(p.id, Object.assign({ x: 0, y: 0, tx: 0, ty: 0 }, old || {}, { nick: p.nick, lastSeen: performance.now() })); } // 0.9.82: zachowaj modVer/ping znanego peera
 			// 0.9.76 HANDSHAKE: renderer wstal (start gry ALBO przeladowanie po wczytaniu swiata).
 			// Polaczenie zyje w procesie main, wiec host NIE wie, ze stracilismy caly stan sesji —
 			// mowimy mu to wprost i podajemy, na jakim swiecie jestesmy (decyduje: stream czy save).
@@ -595,7 +613,7 @@
 			setStatus(t("players", ST.peers.size + 1));
 			try { net.send({ t: "mver", v: VER, gf: ST._gameFp || null }, from); } catch (e) {} // wersja MODA + odcisk buildu GRY
 			// stary mod (≤0.9.7) nie zna mver i nie odpowie — po 5s bez odpowiedzi ALARM (przypadek "ziomek na 0.9.0")
-			setTimeout(() => {
+			if (!msg.ready) setTimeout(() => { // 0.9.82: handshake renderera NIE uruchamia kontroli "stary mod"
 				const pp = ST.peers.get(from);
 				if (pp && !pp.modVer) {
 					setStatus(t("ver_mismatch") + " [" + (pp.nick || from) + ": OLD mod (<= 0.9.7)! / you: " + VER + "]", "#f66");
@@ -644,7 +662,14 @@
 			// Steam's send buffer is invisible to us and sendP2PPacket never reports that it is full.
 			if (ST.net.role === "host" && typeof msg.sq === "number") {
 				const p = ST.peers.get(from);
-				if (p) { p.ackSq = msg.sq; ST.wsx.ackSeen = true; } // per peer, so the slowest one governs
+				if (p) { if (p.ackSq !== msg.sq) ST.wsx.ackAdvanceT = performance.now(); p.ackSq = msg.sq; ST.wsx.ackSeen = true; } // per peer, so the slowest one governs
+				// 0.9.78: paczki potwierdzone przez NAJWOLNIEJSZEGO klienta mozna zapomniec
+				const w0 = ST.wsx;
+				if (w0.unacked && w0.unacked.size) {
+					let minAck = null;
+					for (const pp of ST.peers.values()) if (typeof pp.ackSq === "number" && (minAck === null || pp.ackSq < minAck)) minAck = pp.ackSq;
+					if (minAck !== null) for (const sq of [...w0.unacked.keys()]) if (sq <= minAck) w0.unacked.delete(sq);
+				}
 			}
 		} else if (msg.t === "act") {
 			if (ST.net.role === "host") replayAction(msg, from);
@@ -835,6 +860,11 @@
 
 	function enqueueFullWorld() {
 		if (!ST.state) return;
+		// 0.9.81: handshake, peer-hello i resync potrafia trafic w te sama chwile — bez tej blokady
+		// przechodzimy 9216 chunkow kilka razy z rzedu bez zadnego zysku (kolejka to zbior).
+		const nowE = performance.now();
+		if (nowE - (ST._fullWorldT || 0) < 3000) { log("Pelny swiat: pomijam (zakolejkowany " + Math.round(nowE - ST._fullWorldT) + " ms temu)"); return; }
+		ST._fullWorldT = nowE;
 		const { W, H } = worldBuffers(ST.state);
 		if (!W) return;
 		const d = chunkDims(W, H);
@@ -853,7 +883,7 @@
 		if (ST.wsx.rowH) ST.wsx.rowH.clear();   // stale hashes would suppress sends in the new world
 		ST.wsx.sweep = 0;
 		ST.wsx.bpc = 0; ST.wsx.lastNear = 0;    // re-measure chunk cost, the new world compresses differently
-		ST.wsx.seq = 0; ST.wsx.ackSeen = false; ST.wsx.lag = 0; ST.wsx.rate = 1; // start un-throttled
+		ST.wsx.seq = 0; ST.wsx.ackSeen = false; ST.wsx.lag = 0; ST.wsx.rate = 0.25; // 0.9.78: start ostrozny, regulator sam podniesie if (ST.wsx.unacked) ST.wsx.unacked.clear(); // start un-throttled
 	}
 
 	function scanDirty(state) {
@@ -887,8 +917,14 @@
 				// AIMD with a 4..8 dead zone. The measurement carries ~1 batch of ack age plus RTT, so a
 				// healthy link sits around 2-3. Thresholds have to clear that noise, otherwise we would
 				// throttle a connection with nothing wrong with it.
+				// 0.9.78: PING jako drugi sygnal przeciazenia. Zaleglosc paczek reaguje z opoznieniem,
+				// a rosnacy RTT widac od razu — przy 3000 ms lacze jest juz zapchane i paczki gina.
+				let pingMs = 0;
+				for (const pp of ST.peers.values()) if (pp.ping != null && pp.ping > pingMs) pingMs = pp.ping;
+				if (pingMs > 1000) w.rate = Math.max(0.02, w.rate * 0.7);            // lacze zapchane: ostro w dol
+				else if (pingMs > 400) w.rate = Math.max(0.03, w.rate * 0.9);
 				if (w.lag > 8) w.rate = Math.max(0.03, w.rate * 0.85);        // over 0.8 s behind, cut hard
-				else if (w.lag <= 4) w.rate = Math.min(1, w.rate * 1.05);     // keeping up, give back slowly
+				else if (w.lag <= 4 && pingMs < 250) w.rate = Math.min(1, w.rate * 1.05); // oddajemy pasmo tylko przy zdrowym RTT
 				// Hard stop. The buffer is so full that shrinking batches cannot drain it in time. Send
 				// nothing at all: pending grows here instead, where chunks coalesce, so the client gets
 				// one current state rather than replaying every intermediate frame in order.
@@ -898,6 +934,19 @@
 					return;
 				}
 			} else w.lag = 0;
+		}
+		// 0.9.78: paczki bez potwierdzenia po 10 s traktujemy jako ZGUBIONE (typowe dla Steam P2P).
+		// Bez tego ich wiersze zostaja u klienta puste NA ZAWSZE (host ma je za dostarczone) — to jest
+		// przyczyna "dziurawego swiata" przez internet przy dzialajacym LAN.
+		if (w.ackSeen && w.unacked && w.unacked.size) {
+			let lost = 0;
+			for (const [sq, rec] of [...w.unacked]) {
+				if (now - rec.t < 20000) continue;
+				if (w.ackAdvanceT && now - w.ackAdvanceT < 20000) continue; // ACK sie posuwa => klient tylko nie nadaza
+				w.unacked.delete(sq);
+				for (const idx of rec.idx) { if (w.rowH) w.rowH.delete(idx); w.pending.add(idx); lost++; }
+			}
+			if (lost && now - (w.lostLogT || 0) > 3000) { w.lostLogT = now; log("STRATA: " + lost + " chunkow bez potwierdzenia — wysylam je od nowa (kolejka " + w.pending.size + ")"); }
 		}
 		w.busy = true; w.lastBatch = now;
 		try {
@@ -913,7 +962,8 @@
 			const anchors = [{ x: state.store.player.x / 4, y: state.store.player.y / 4 }];
 			for (const p of ST.peers.values()) anchors.push({ x: p.tx / 4, y: p.ty / 4 });
 			const FAST_R = 24 * CHUNK; // ~2 ekrany wokół gracza (Manhattan, w komórkach)
-			const budget = Math.floor(96 * 1024 * w.rate);  // ~96 KB compressed per batch, a 960 KB/s ceiling at rate 1
+			const budget = Math.floor(24 * 1024 * w.rate);  // 0.9.78: 24 KB/paczke = sufit ~240 KB/s (~1,9 Mbit/s) zamiast ~960 KB/s.
+			// LAN tego nie odczuje (i tak rzadko mamy tyle zmian), a internet przestaje sie dlawic wlasnym strumieniem.
 			const bpc = w.bpc || 512;                       // measured compressed bytes per chunk, updated after deflate
 			// Floor of 2, not 8. At the measured bpc of ~2 KB a floor of 8 still held ~310 KB/s, which is
 			// nearly the 349 KB/s that caused the jam: the controller had nowhere to go and degenerated
@@ -1017,6 +1067,9 @@
 			let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
 			const packed = await deflate(all);
 			w.seq++; // batch number the client echoes back in wcack
+			// 0.9.78: zapamietaj chunki tej paczki — hashe wierszy sa "warunkowe" do czasu ACK klienta.
+			if (!w.unacked) w.unacked = new Map();
+			w.unacked.set(w.seq, { idx: take.slice(0), t: now });
 			// q = rozmiar kolejki hosta (odliczanie postępu u klienta, 0.9.62) + sq = numer paczki (wcack, PR #8)
 			net.send({ t: "wc", v: 5, sq: w.seq, wid: state.store.meta && state.store.meta.worldId, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, q: w.pending.size, d: b64enc(packed) });
 			// EMA of what a chunk really costs on the wire, drives the batch budget above. Cheap chunks
@@ -1151,7 +1204,8 @@
 			}
 		}
 		const w = ST.wsx;
-		if (applied > 0) ST._lastWcT = performance.now(); // do wskaźnika zatoru (sync_stalled)
+		if (applied > 0) ST._lastWcT = performance.now();
+		if (applied > 0 && ST._stallShown) { ST._stallShown = false; setStatus(t("players", ST.peers.size + 1)); } // dane wrocily => zdejmij komunikat o zatorze // do wskaźnika zatoru (sync_stalled)
 		// Record the batch AFTER applying it, not on receipt, so the host's lag also catches a client that
 		// is CPU bound, not only a saturated link.
 		if (typeof msg.sq === "number") ST._lastAppliedSq = msg.sq;
@@ -2749,7 +2803,7 @@
 		const hud = document.getElementById("st-hud"); if (!hud) return;
 		const q = (id) => hud.querySelector(id);
 		const role = ST.net.role;
-		const trName = ST.net.transport === "steam" ? "Steam" : "LAN";
+		const trName = ST.net.transport === "steam" ? "Steam" : (ST._directMode ? "Internet" : "LAN");
 		const badge = q("#st-badge");
 		const roleColor = role === "host" ? "#5f5" : role === "client" ? "#6cf" : "#f66";
 		if (badge) {
@@ -2984,6 +3038,24 @@
 					renderLobby(true);
 				};
 				p.appendChild(bSteam);
+				// 0.9.79: hosting BEZPOSREDNI — omija relay Steama (dlawi pasmo, ping do sekund).
+				const bDir = lbBtn(t("btn_host_direct"), t("lb_host_direct_d"), true);
+				bDir.onclick = async () => {
+					setStatus(t("creating_lobby"));
+					try {
+						ST._directMode = true;
+						const r = await net.hostDirect(27777);
+						if (!r || !r.ok) setStatus(t("error", (r && r.error) || "?"), "#f66");
+						else {
+							ST._directAddr = (r.publicIp ? r.publicIp : null); ST._directPort = r.port || 27777; ST._directUpnp = !!r.upnp;
+							ST._directShown = false;
+							setStatus(r.upnp ? t("direct_ready") : t("direct_no_upnp", ST._directPort), r.upnp ? "#5f5" : "#fd5");
+							log("HOST DIRECT: upnp=" + r.upnp + " port=" + r.port + " ip=" + (r.publicIp ? "(ukryty)" : "nieznany") + (r.error ? " err=" + r.error : ""));
+						}
+					} catch (e) { setStatus(t("error", e.message), "#f66"); }
+					renderLobby(true);
+				};
+				p.appendChild(bDir);
 				const bLan = lbBtn(t("btn_host_lan"), t("lb_host_lan_d"), false);
 				bLan.onclick = async () => {
 					try { const r = await net.hostWs(27777); if (!r.ok) setStatus(t("error", r.error), "#f66"); }
@@ -3032,7 +3104,7 @@
 			} else {
 				// LOBBY: badge roli + status + lobby id + zaproś + lista graczy + świat + rozłącz
 				const badge = document.createElement("div");
-				const trName = ST.net.transport === "steam" ? "Steam" : "LAN";
+				const trName = ST.net.transport === "steam" ? "Steam" : (ST._directMode ? "Internet" : "LAN");
 				badge.style.cssText = "font-weight:800;font-size:15px;margin:2px 0 4px;color:" + (ST.net.role === "host" ? "#5f5" : "#6cf");
 				badge.textContent = ST.net.role === "host" ? t("badge_host", trName) : t("badge_client", trName);
 				p.appendChild(badge);
@@ -3057,6 +3129,28 @@
 						try { await navigator.clipboard.writeText(ST.net.lobbyId); idRow.textContent = t("lb_id") + ": " + t("lb_copied"); } catch (e) {}
 					};
 					p.appendChild(idRow);
+				}
+				// adres hosta bezposredniego — DOMYSLNIE ZAMASKOWANY (stream-safe), kopiowanie bez odslaniania
+				if (ST.net.role === "host" && ST._directAddr) {
+					const row = document.createElement("div");
+					row.style.cssText = "margin:6px 0 8px;font-size:13px;color:#9f9;display:flex;align-items:center;gap:8px;flex-wrap:wrap";
+					const lbl = document.createElement("span"); lbl.style.color = "#9fb6c9"; lbl.textContent = t("direct_addr") + ":";
+					const val = document.createElement("span");
+					val.style.cssText = "font:13px monospace;color:#9f9";
+					const paint = () => { val.textContent = ST._directShown ? (ST._directAddr + ":" + ST._directPort) : ("●●●.●●●.●●●.●●●:" + ST._directPort); };
+					paint();
+					const eye = document.createElement("span");
+					eye.style.cssText = "cursor:pointer;font-size:11px;color:#6cf;text-decoration:underline";
+					eye.textContent = ST._directShown ? t("direct_hide") : t("direct_show");
+					eye.onclick = () => { ST._directShown = !ST._directShown; paint(); eye.textContent = ST._directShown ? t("direct_hide") : t("direct_show"); };
+					const cp = document.createElement("span");
+					cp.style.cssText = "cursor:pointer;font-size:11px;color:#6cf;text-decoration:underline";
+					cp.textContent = "📋 " + t("lb_copy");
+					cp.onclick = async () => { try { await navigator.clipboard.writeText(ST._directAddr + ":" + ST._directPort); cp.textContent = t("direct_copied"); setTimeout(() => { cp.textContent = "📋 " + t("lb_copy"); }, 1200); } catch (e) {} };
+					const hint = document.createElement("span");
+					hint.style.cssText = "font-size:10px;color:#7d95a8"; hint.textContent = t("direct_hidden_hint");
+					row.appendChild(lbl); row.appendChild(val); row.appendChild(eye); row.appendChild(cp); row.appendChild(hint);
+					p.appendChild(row);
 				}
 				const plH = document.createElement("div");
 				plH.style.cssText = "font-weight:700;font-size:14px;color:#fff;margin-top:6px"; plH.textContent = t("lb_players");
@@ -3694,6 +3788,7 @@
 				ST._lastResT && now - ST._lastResT < 5000 && now - (ST._stallHintT || 0) > 5000) {
 				ST._stallHintT = now;
 				setStatus(t("sync_stalled", Math.round((now - ST._lastWcT) / 1000)), "#fd5");
+				ST._stallShown = true;
 			}
 		}
 		drawGhosts(state);
