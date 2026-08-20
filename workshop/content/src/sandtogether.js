@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.73-beta";
+	const VER = "0.9.77-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -207,7 +207,10 @@
 	};
 	const t = (key, ...args) => {
 		const v = (STRINGS[LANG] && STRINGS[LANG][key]) || STRINGS.en[key] || key;
-		return typeof v === "function" ? v(...args) : v;
+		if (typeof v === "function") return v(...args);
+		// FIX 0.9.74: teksty z placeholderami {0} byly zwracane DOSLOWNIE — gracz widzial
+		// "Brak danych swiata od hosta od {0}s..." albo "reconnecting (attempt {0}/5)".
+		return args.length ? String(v).replace(/\{(\d+)\}/g, (m, i) => (args[i] !== undefined ? String(args[i]) : m)) : v;
 	};
 
 	const ST = (window.SandTogether = {
@@ -523,6 +526,24 @@
 			ST._myNick = ST._nickCustom || s.myNick || null; // własny nick > nick Steam > default (feedback TCentraL: LAN = "Player" na stałe)
 			ST._gameFp = s.gameFp || null; // odcisk buildu gry (guard różnych buildów między graczami)
 			for (const p of s.peers) ST.peers.set(p.id, { nick: p.nick, x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
+			// 0.9.76 HANDSHAKE: renderer wstal (start gry ALBO przeladowanie po wczytaniu swiata).
+			// Polaczenie zyje w procesie main, wiec host NIE wie, ze stracilismy caly stan sesji —
+			// mowimy mu to wprost i podajemy, na jakim swiecie jestesmy (decyduje: stream czy save).
+			if (s.role === "client") {
+				// czekamy az frame hook przechwyci stan gry — inaczej wyslemy wid=null i host
+				// niepotrzebnie przysle CALY SAVE (bug 0.9.76). Max ~20 s, potem i tak sie zglaszamy.
+				let tries = 0;
+				const announce = () => {
+					const st = ST.state;
+					if (!st && ++tries < 40) return void setTimeout(announce, 500);
+					try {
+						const wid = st && st.store.meta && st.store.meta.worldId, sc = st && st.store.scene && st.store.scene.active;
+						net.send({ t: "hello", nick: ST._myNick || "Player", wid: wid || null, scene: sc || null, ready: 1 });
+						log("HANDSHAKE: renderer gotowy — zglaszam sie hostowi (wid=" + wid + " scene=" + sc + ")");
+					} catch (e) {}
+				};
+				setTimeout(announce, 800);
+			}
 			if (s.role === "host") setStatus("HOST (" + s.transport + ") — gracze: " + (s.peers.length + 1));
 			else if (s.role === "client") setStatus("POŁĄCZONO — gracze: " + (s.peers.length + 1));
 		}).catch(() => {});
@@ -581,7 +602,18 @@
 					log("PEER NA STARYM MODZIE (brak odpowiedzi mver):", pp.nick || from, "— musi zrobić install.bat!");
 				}
 			}, 5000);
-			if (ST.net.role === "host") enqueueFullWorld();
+			if (ST.net.role === "host") {
+				enqueueFullWorld(); // 0.9.76: KAZDY hello (takze po przeladowaniu renderera klienta) = pelny swiat od nowa
+				const hst = ST.state, myWid = hst && hst.store.meta && hst.store.meta.worldId;
+				const hostInWorld = hst && hst.store.scene && hst.store.scene.active !== 1;
+				// SAVE tylko gdy klient NIE stoi na naszym swiecie. Klient po przeladowaniu ma juz nasz swiat
+				// wczytany (ten sam worldId) → wysylka save = kolejny auto-load = przeladowanie = PETLA.
+				const clientInMenu = msg.scene === 1 || msg.scene == null;
+				const clientElsewhere = msg.wid != null && msg.wid !== myWid;
+				if (hostInWorld && (clientElsewhere || (clientInMenu && msg.ready))) { ST._autoSendT = 0; log("hello: klient bez mojego swiata (wid=" + msg.wid + " scene=" + msg.scene + ") — wysylam save"); sendWorld(); }
+				else if (hostInWorld && !msg.ready) { ST._autoSendT = 0; log("hello: nowy gracz — wysylam save"); sendWorld(); }
+				else if (hostInWorld) log("hello: klient JUZ na moim swiecie — tylko stream, bez save");
+			}
 		} else if (msg.t === "mver") {
 			const p = ST.peers.get(from); if (p) p.modVer = msg.v;
 			if (msg.v !== VER) {
@@ -621,6 +653,7 @@
 		} else if (msg.t === "snap") {
 			if (ST.net.role === "client") applySnapshot(msg).catch((e) => log("snap error:", e.message));
 		} else if (msg.t === "res") {
+			ST._lastResT = performance.now(); // dowod, ze host ZYJE (osobno od strumienia swiata)
 			if (ST.net.role === "client") applyResources(msg);
 		} else if (msg.t === "tech-nak") {
 			// host (gra hosta) odmówił naszego badania — lokalny optymistyczny unlock cofamy na poziomie
@@ -668,9 +701,12 @@
 		} else if (msg.t === "world-begin") {
 			// NOWY transfer w trakcie odbioru = restart z przemieszanymi indeksami paczek → burza world-need
 			// (fix TCentraL "went crazy with the retrys"): ignorujemy, dopóki bieżący odbiór się nie skończy.
-			if (ST._worldRx && !ST._worldRx.done) { log("world-begin ZIGNOROWANY — odbiór poprzedniego transferu w toku"); return; }
+			// 0.9.75: guard tylko dla ŻYWEGO odbioru. Zakleszczony (host już wysłał world-end, a nam
+			// brakuje paczek, albo trwa >30 s) MUSI ustąpić — inaczej klient nigdy nie dostanie pełnego świata.
+			if (ST._worldRx && !ST._worldRx.done && !ST._worldRx.ended && performance.now() - (ST._worldRx.t0 || 0) < 30000) { log("world-begin ZIGNOROWANY — odbiór poprzedniego transferu w toku"); return; }
+			if (ST._worldRx && !ST._worldRx.done) log("porzucam zakleszczony odbiór tid " + ST._worldRx.tid + " (" + ST._worldRx.got + "/" + ST._worldRx.total + ") — przyjmuję nowy transfer tid " + msg.tid);
 			ST._gotHostWorld = true; // otrzymaliśmy świat OD hosta → ufamy jego worldId gdy oboje w grze (patrz applyWorldBatch)
-			ST._worldRx = { tid: msg.tid, name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false };
+			ST._worldRx = { tid: msg.tid, name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false, t0: performance.now() };
 			log("world-begin: tid", msg.tid, "-", msg.name, "-", msg.chunks, "paczek,", Math.round((msg.size || 0) / 1024), "KB");
 			setStatus(t("receiving", 0, msg.chunks), "#ff5");
 			scheduleRxCheck();
@@ -691,6 +727,13 @@
 			maybeFinishRx();
 		} else if (msg.t === "world-need") {
 			// host: klient prosi o brakujące kawałki -> ponów je (priorytetowo)
+			// 0.9.75: paczki trzymamy tylko dla BIEŻĄCEGO transferu. Prośba o starszy tid (klient utknął
+			// na poprzednim) = odesłanie mu paczek z nowego transferu, które i tak odrzuci → wieczne "recovering".
+			// Zamiast tego startujemy świeży, kompletny transfer.
+			if (ST._wtx && msg.tid !== undefined && ST._wtx.tid !== undefined && msg.tid !== ST._wtx.tid) {
+				log("world-need dla starego transferu tid " + msg.tid + " (mamy " + ST._wtx.tid + ") — wysyłam świat od nowa");
+				ST._autoSendT = 0; ST._wtx = null; sendWorld(); return;
+			}
 			if (ST._wtx && Array.isArray(msg.idx)) for (const i of msg.idx) if (ST._wtx.parts[i] !== undefined) ST._wtx.queue.push(i);
 			pumpWtx();
 		}
@@ -761,7 +804,7 @@
 			if (!rx || rx.done) return;
 			const miss = missingRxIndices();
 			if (miss.length) {
-				net.send({ t: "world-need", idx: miss.slice(0, 200) }, rx.from);
+				net.send({ t: "world-need", tid: rx.tid, idx: miss.slice(0, 200) }, rx.from);
 				setStatus(t("receiving", rx.got, rx.total) + " (recovering " + miss.length + ")", "#ff5");
 			}
 			scheduleRxCheck();
@@ -3644,7 +3687,11 @@
 				} catch (e) {}
 			}
 			// zator lustra (fix G4): działało, a od >4s nic nie przychodzi i host NIE zgłasza pauzy → pokaż ile czekamy
-			if (ST.wsx.everApplied && !ST._hostPausedShown && ST._lastWcT && now - ST._lastWcT > 4000 && now - (ST._stallHintT || 0) > 2000) {
+			// FIX 0.9.74: alarm tylko gdy host ZYJE (paczki zasobow ida), a strumien swiata milczy >15 s.
+			// Wczesniej: 4 s ciszy = alarm, a cisza jest NORMALNA gdy w swiecie nic sie nie zmienia
+			// (host nie wysyla nic, bo kolejka pusta) — gracz mial wiecznie czerwony status o zatorze.
+			if (ST.wsx.everApplied && !ST._hostPausedShown && ST._lastWcT && now - ST._lastWcT > 15000 &&
+				ST._lastResT && now - ST._lastResT < 5000 && now - (ST._stallHintT || 0) > 5000) {
 				ST._stallHintT = now;
 				setStatus(t("sync_stalled", Math.round((now - ST._lastWcT) / 1000)), "#fd5");
 			}
