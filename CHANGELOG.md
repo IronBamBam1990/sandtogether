@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-20 (v0.9.71) — research no longer bricks (reports: Akriz, Cr0ss0vr)
+
+Symptoms: a client's research showed as "Researched" on the host but the building could not be placed and the tech could not be researched again; host research sometimes threw the client into a ~10 s reload cycle; a freshly joined player did not get the Shaker right away. Root cause (verified on game 0.5.2 and 0.5.5 — all 22 patch anchors match, so not a patch issue): the game's `unlockTech` RETURNS true/false and does nothing on false (locked tech, tutorial, unmet requirements, not enough resources, gold that cannot be deducted evenly). The mod ignored the result and set the tech flag anyway; worse, the host deducted the client's cost manually BEFORE calling `unlockTech`, which checks and deducts the cost itself — so the second check failed on missing gold (or charged twice). The client had the same problem when applying the host's tech stream (cost checked against mirrored resources already reduced by the host). Fix: `unlockTech` is now called in two modes — "pay" on the host for a client purchase (cost check skipped, the game deducts the cost authoritatively, no manual deduction) and "free" for team unlocks (temporary `bypassCosts`: no check, no deduction, no mirrored gold removed on the client). The return value is honored: on refusal no flag is set, the host sends a `tech-nak` and the client reverts its optimistic local flag with a status message; refusals on the client retry every 10 s instead of every tick.
+
 ## 2026-08-20 (v0.9.70) — PR #11 by Cr0ss0vr: foundation cleanup after client demolition (issue #10)
 
 The post-demolish cleanup used to look at the drag rectangle, which does not describe a building's real footprint. The PR captures each structure's true occupied bounds (via the game's own cell lookup) BEFORE the game removes it and cleans exactly those boxes — client-ordered demolitions finally leave no foundation behind. Merged with one addition: dragging over old orphaned red tiles with no live structure still cleans them.

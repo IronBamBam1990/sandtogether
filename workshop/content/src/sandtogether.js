@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.70-beta";
+	const VER = "0.9.71-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -56,6 +56,7 @@
 			world_sent: (kb, ch) => "World sent (" + kb + " KB, " + ch + " parts)",
 			world_imported: (n) => "World '" + n + "' imported! Load it: menu → Load Game",
 			world_imported_loaded: (n) => "Joined host's world '" + n + "' — you're in!",
+			tech_rejected: (id) => "Research '" + id + "' rejected by the host (requirements/cost) — try again",
 			waiting_host_world: "Connected — waiting for host to enter a world (it'll load automatically)...",
 			receiving: (a, b) => "Receiving world: " + a + "/" + b,
 			other_world: "⚠ NOT on host's world! Host: click 'Send world'. You: menu → Load Game → load the received save.",
@@ -110,6 +111,7 @@
 			world_sent: (kb, ch) => "Świat wysłany (" + kb + " KB, " + ch + " części)",
 			world_imported: (n) => "Świat '" + n + "' zaimportowany! Wczytaj go: menu → Load Game",
 			world_imported_loaded: (n) => "Dołączono do świata hosta '" + n + "' — jesteś w grze!",
+			tech_rejected: (id) => "Badanie '" + id + "' odrzucone przez hosta (wymagania/koszt) — spróbuj ponownie",
 			waiting_host_world: "Połączono — czekam aż host wejdzie do świata (wczyta się automatycznie)...",
 			receiving: (a, b) => "Odbieranie świata: " + a + "/" + b,
 			other_world: "⚠ NIE jesteś na świecie hosta! Host: kliknij 'Wyślij świat'. Ty: menu → Load Game → wczytaj otrzymany save.",
@@ -164,6 +166,7 @@
 			world_sent: (kb, ch) => "世界已发送(" + kb + " KB," + ch + " 部分)",
 			world_imported: (n) => "世界 '" + n + "' 已导入!请加载它:菜单 → 加载游戏",
 			world_imported_loaded: (n) => "已加入房主的世界 '" + n + "'——你已进入游戏!",
+			tech_rejected: (id) => "研究 '" + id + "' 被主机拒绝(条件/费用不足)— 请重试",
 			waiting_host_world: "已连接——正在等待房主进入世界(将自动加载)...",
 			receiving: (a, b) => "正在接收世界:" + a + "/" + b,
 			other_world: "⚠ 你不在房主的世界中!房主:点击'发送世界'。你:菜单 → 加载游戏 → 加载收到的存档。",
@@ -603,6 +606,15 @@
 			if (ST.net.role === "client") applySnapshot(msg).catch((e) => log("snap error:", e.message));
 		} else if (msg.t === "res") {
 			if (ST.net.role === "client") applyResources(msg);
+		} else if (msg.t === "tech-nak") {
+			// host (gra hosta) odmówił naszego badania — lokalny optymistyczny unlock cofamy na poziomie
+			// flagi (gra nie ma "lockTech"; budynki w menu zostaną do restartu, ale budowa bez tech hosta i tak
+			// nie przejdzie przez lustro). Surowce wrócą ze streamem hosta w ≤1 s.
+			if (ST.net.role === "client" && ST.state && ST.state.store.player && ST.state.store.player.tech && msg.id) {
+				ST.state.store.player.tech[msg.id] = false;
+				setStatus(t("tech_rejected", msg.id), "#fa5");
+				log("tech-nak od hosta:", msg.id, "— cofam lokalną flagę");
+			}
 		} else if (msg.t === "resDelta") {
 			if (ST.net.role === "host") applyResourceDelta(msg);
 		} else if (msg.t === "ent") {
@@ -1469,14 +1481,39 @@
 	// Samo `tech[id]=true` NIE wystarcza: unlockTech gry rejestruje budynki w menu, tworzy
 	// przedmioty do ekwipunku i emituje tech:mapUnlocked (minimapa!). _techMod = eksport
 	// modułu 77135 przez patch "tech module export".
-	function techUnlock(state, techId) {
+	//
+	// FIX 0.9.71 (Akriz / Cr0ss0vr: "research bricked"): unlockTech gry ZWRACA true/false i przy
+	// false NIC nie robi (tech zablokowany, tutorial, niespełnione wymagania, ZA MAŁO SUROWCÓW,
+	// "cantDeductEvenly" złota). Ignorowaliśmy wynik i stawialiśmy flagę → w drzewku "Researched",
+	// ale budynki/itemy niezarejestrowane i NIE DA SIĘ zbadać ponownie. Do tego host odejmował koszt
+	// klienta ręcznie PRZED unlockTech, która sama sprawdza i odejmuje koszt → drugie sprawdzenie
+	// padało na braku złota (albo płaciliśmy podwójnie).
+	// mode: "pay"  = host przetwarza zakup klienta: skipCostCheck (klient już sprawdził koszt vs wspólna
+	//                pula), a grę zostawiamy AUTORYTATYWNE odjęcie kosztu (równo z kolektorów itd.);
+	//       "free" = odblokowanie OD DRUŻYNY (zapłacił ktoś inny): session.cheat.bypassCosts na czas
+	//                wywołania = bez sprawdzania i BEZ odejmowania (klient nie kasuje lustrzanego złota).
+	// Zwraca: true = pełny unlock; false = gra ODMÓWIŁA (flagi NIE stawiać!); null = brak _techMod.
+	function techUnlock(state, techId, mode) {
+		const tm = ST._techMod;
+		if (!(tm && tm.unlockTech && tm.getTechDefinition)) return null;
+		let def = null;
+		try { def = tm.getTechDefinition(techId); } catch (e) {}
+		if (!def) { log("techUnlock: nieznany tech", techId); return false; }
+		const sess = state.session || (state.session = {});
+		const prevCheat = sess.cheat;
 		try {
-			const tm = ST._techMod;
-			if (tm && tm.unlockTech && tm.getTechDefinition) {
-				const def = tm.getTechDefinition(techId);
-				if (def) { tm.unlockTech(state, def, { suppressMusic: true }); return true; }
-			}
-		} catch (e) { log("techUnlock error:", techId, e.message); }
+			if (mode === "free") sess.cheat = Object.assign({}, prevCheat || {}, { bypassCosts: true });
+			const r = tm.unlockTech(state, def, { suppressMusic: true, playSound: false, skipCostCheck: true });
+			return r !== false;
+		} catch (e) { log("techUnlock error:", techId, e.message); return false; }
+		finally { sess.cheat = prevCheat; }
+	}
+	// Gra odmówiła odblokowania tech od drużyny (u klienta) — nie spamuj co 1 s: ponów co 10 s.
+	function techRefusedRecently(id) {
+		const m = ST._techRefused || (ST._techRefused = new Map());
+		const now = performance.now(), last = m.get(id) || 0;
+		if (now - last < 10000) return true;
+		m.set(id, now);
 		return false;
 	}
 	function fpArr(state) { // surowa tablica SAB (do zapisu u klienta)
@@ -1528,16 +1565,17 @@
 			if (msg.th && state.store.player && state.store.player.tech) {
 				for (const k of Object.keys(msg.th)) {
 					if (!msg.th[k] || state.store.player.tech[k]) continue;
+					if (techRefusedRecently(k)) continue;
 					// NOWY tech od hosta → PEŁNY unlock u klienta (menu budynków, itemy do ekwipunku, MAPA!)
-					// — goła flaga zostawiała UI martwe ("kolega zbadał mapę, ja jej nie mam" — ЗаКеЛьМан)
+					// — goła flaga zostawiała UI martwe ("kolega zbadał mapę, ja jej nie mam" — ЗаКеЛьМан).
+					// "free": zapłacił host — bez sprawdzania/odejmowania kosztu u klienta (fix 0.9.71).
 					ST._applyingNet = true;
-					let realU = false;
 					try {
-						realU = techUnlock(state, k);
-						if (realU) state.store.player.tech[k] = true; // flaga node'a jawnie (fix podwójnego zakupu)
-						if (!realU) { state.store.player.tech[k] = true; try { ST.FH.events.emit(state, "tech:unlocked", { techId: k, suppressMusic: true }); } catch (e) {} }
+						const realU = techUnlock(state, k, "free");
+						if (realU === true) { state.store.player.tech[k] = true; log("SYNC: tech od drużyny odblokowany:", k, "(REAL)"); } // flaga node'a jawnie (fix podwójnego zakupu)
+						else if (realU === null) { state.store.player.tech[k] = true; try { ST.FH.events.emit(state, "tech:unlocked", { techId: k, suppressMusic: true }); } catch (e) {} log("SYNC: tech od drużyny:", k, "(FALLBACK flaga — patch _techMod nie pasuje do tego builda gry!)"); }
+						else log("SYNC: gra ODMÓWIŁA odblokowania tech od drużyny:", k, "(zablokowany/tutorial/wymagania) — ponowię za 10 s, flagi NIE stawiam");
 					} finally { ST._applyingNet = false; }
-					log("SYNC: tech od drużyny odblokowany:", k, realU ? "(REAL)" : "(FALLBACK flaga — patch _techMod nie pasuje!)");
 				}
 			}
 			if (msg.pg && state.store.progression) Object.assign(state.store.progression, msg.pg);
@@ -2040,16 +2078,25 @@
 				ST._applyingNet = true;
 				try {
 					if (state.store.player && state.store.player.tech && !state.store.player.tech[msg.id]) {
-						deductCosts(state, msg.cost);
-						// PEŁNY unlock (budynki/itemy/mapa + własny emit tech:unlocked); fallback = goła flaga
-						const real = techUnlock(state, msg.id);
-						if (real) state.store.player.tech[msg.id] = true; // unlockTech nie stawia flagi node'a → tech tree pokazywał "niekupione" (Warlow: podwójny zakup)
-						if (!real) {
+						// PEŁNY unlock "pay": gra sama sprawdza wymagania i AUTORYTATYWNIE odejmuje koszt ze
+						// wspólnej puli (bez naszego deductCosts — podwójne pobranie/brak złota = odmowa, fix 0.9.71).
+						const real = techUnlock(state, msg.id, "pay");
+						if (real === true) {
+							state.store.player.tech[msg.id] = true; // unlockTech nie stawia flagi node'a → tech tree pokazywał "niekupione" (Warlow: podwójny zakup)
+							log("HOST: tech klienta odblokowany:", msg.id, "(REAL unlockTech, koszt odjęty przez grę)");
+						} else if (real === null) {
+							deductCosts(state, msg.cost);
 							state.store.player.tech[msg.id] = true;
 							try { ST.FH.events.emit(state, "tech:unlocked", { techId: msg.id, suppressMusic: true }); } catch (e) {}
+							log("HOST: tech klienta:", msg.id, "(FALLBACK flaga — patch _techMod nie pasuje do tego builda gry!)");
+						} else {
+							// gra odmówiła (wymagania/tutorial/brak surowców): flagi NIE stawiamy (inaczej "zbadane, ale
+							// nie da się budować" na zawsze) i odsyłamy klientowi NAK → cofa swoją lokalną flagę i może spróbować znów.
+							log("HOST: gra ODMÓWIŁA tech klienta:", msg.id, "→ NAK do", from);
+							try { net.send({ t: "tech-nak", id: msg.id }, from); } catch (e) {}
 						}
-						// log MÓWI PRAWDĘ (raport TCentraL: "pełny unlock" drukował się też przy gołej fladze):
-						log("HOST: tech klienta odblokowany:", msg.id, real ? "(REAL unlockTech)" : "(FALLBACK flaga — patch _techMod nie pasuje do tego builda gry!)");
+					} else if (state.store.player && state.store.player.tech && state.store.player.tech[msg.id]) {
+						log("HOST: tech klienta już odblokowany (ignoruję):", msg.id);
 					}
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "story") {

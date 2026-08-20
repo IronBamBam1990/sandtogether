@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.70-beta — PR #11 by Cr0ss0vr: after a demolition ordered by the joining player, the host now cleans the foundation tiles correctly — the cleanup captures the real footprint of each structure before the game removes it instead of guessing from the drag rectangle (closes GitHub issue #10). Dragging the demolisher over old orphaned red tiles still cleans them. Auto-updates at next launch.',
+    changeNote: 'v0.9.71-beta — research no longer bricks (reports: Akriz, Cr0ss0vr). A research bought by the joining player showed as Researched on the host but the building could not be placed and the tech could not be bought again; host research could throw the client into a reload cycle. Cause: the game unlockTech returns false (not enough resources, requirements, tutorial) and the mod ignored it while also charging the cost twice. Now the game deducts the cost once on the host, team unlocks are free on the other side, and a refused research is reported back instead of leaving a dead flag. Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
