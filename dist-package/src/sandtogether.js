@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.84-beta";
+	const VER = "0.9.85-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -266,6 +266,7 @@
 			rate: 1,              // host: byte budget multiplier driven by AIMD below
 		},
 		// struktury/zasoby/vacuum
+		_greeted: new Set(),      // komu juz przedstawilismy sie nickiem (anty-petla hello, 0.9.85)
 		_applyingNet: false,      // tłumik pętli eventów przy aplikowaniu zmian z sieci
 		_subscribedState: null,
 		_lastSnap: 0,
@@ -486,7 +487,7 @@
 				ST.net.role = "client"; ST.net.transport = ev.transport;
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; ST.wsx.wasInWorld = false; // nowa sesja klienta
 				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
-				ST._mirrorKickN = 0; ST._mirrorKickT = 0; ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
+				ST._mirrorKickN = 0; ST._mirrorKickT = 0; ST._greeted.clear(); ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._directMode = false; ST._directAddr = null; autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
@@ -499,7 +500,11 @@
 				if (isNew) ST.peers.set(ev.id, { nick: ev.nick || "?", x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() });
 				if (ev.nick) ST.peers.get(ev.id).nick = ev.nick;
 				if (ev.kind === "peer-hello") addChat("★", t("chat_joined", ev.nick || "?")); // widoczna informacja KTO dołączył
-				if (ST._nickCustom) { try { net.send({ t: "hello", nick: ST._nickCustom }, ev.id); } catch (e) {} } // nowy peer ma znać nasz własny nick
+				// 0.9.85: DOKLADNIE RAZ na peera — odsylanie hello na kazde peer-hello tworzylo petle
+					if (ST._nickCustom && !ST._greeted.has(ev.id)) {
+						ST._greeted.add(ev.id);
+						try { net.send({ t: "hello", nick: ST._nickCustom, greet: 1 }, ev.id); } catch (e) {}
+					}
 				setStatus(t("players", ST.peers.size + 1));
 				if (ST.net.role === "host") {
 					const hostInWorld = ST.state && ST.state.store && ST.state.store.scene && ST.state.store.scene.active !== 1;
@@ -518,14 +523,14 @@
 				if (ST.state) profileSave(ST.state); // utrwal profil PRZED ewentualną zmianą stanu (G7-lite)
 				const gone = ST.peers.get(ev.id);
 				if (gone) addChat("★", t("chat_left", gone.nick || "?"));
-				ST.peers.delete(ev.id); removePeerPuppet(ev.id);
+				ST._greeted.delete(ev.id); ST.peers.delete(ev.id); removePeerPuppet(ev.id);
 				setStatus(t("player_left", ST.peers.size + 1), "#fa5");
 				// KLIENT ZOSTAJE ZAPAUZOWANY — ciche odpauzowanie tworzyło rozwidlony świat (gracz "grał dalej"
 				// lokalnie nie wiedząc, że wszystko przepadnie przy ponownym joinie). Chcesz grać solo → Stop.
 			} else if (ev.kind === "stopped") {
 				if (ST.state) profileSave(ST.state); // przed resetem roli (isClientSync jeszcze true)
 				autoLoadClear();
-				ST.net.role = "idle"; ST.peers.clear(); removeAllPeerPuppets(); setStatus(t("offline"), "#aaa"); showInviteButton(false); ST.net.lobbyId = null; updateLobbyIdDisplay(); updatePingDisplay();
+				ST._greeted.clear(); ST.net.role = "idle"; ST.peers.clear(); removeAllPeerPuppets(); setStatus(t("offline"), "#aaa"); showInviteButton(false); ST.net.lobbyId = null; updateLobbyIdDisplay(); updatePingDisplay();
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = [];
 				ST._gotHostWorld = false;
 				ST._lastAppliedSq = null; // drop the ack so it cannot throttle the next session

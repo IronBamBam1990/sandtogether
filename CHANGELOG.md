@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-20 (v0.9.85) — hotfix: endless greeting loop between the two games
+
+If BOTH players had set a custom nick, the games greeted each other in an infinite loop — dozens of greetings per second, flooding the connection and re-triggering world transfers. The greeting was sent in response to a peer-greeting event, so each side kept answering the other. Every peer is now greeted exactly once per session. (Regression introduced with the nick feature in 0.9.61, only reachable when both players had nicks set.)
+
 ## 2026-08-20 (v0.9.78 - v0.9.84) — host over the internet directly, instead of through Steam relay
 
 Steam routes co-op traffic through its own relay when it cannot establish a direct link. That relay throttles bandwidth and pushed ping into the seconds (3000 ms measured), which is what produced the "swiss cheese" world on the joining side: the world protocol marks rows as delivered without waiting for confirmation, so every dropped packet becomes a permanent hole. The bundled Steam library exposes no way to force a direct connection (no session state, no relay toggle), so the mod now offers its own: **Host (Internet - direct)** asks your router to open the port via UPnP (implemented from scratch over SSDP + SOAP, no dependencies) and shows your address **masked by default**, with show/hide and a copy button that never reveals it on screen — safe to stream. Your friend pastes it into Join LAN. Bandwidth per batch was also cut to a quarter and the rate controller now reacts to ping, not just to backlog.
