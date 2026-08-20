@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.72-beta";
+	const VER = "0.9.73-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -465,7 +465,7 @@
 				ST.net.role = "client"; ST.net.transport = ev.transport;
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; ST.wsx.wasInWorld = false; // nowa sesja klienta
 				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
-				ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
+				ST._mirrorKickN = 0; ST._mirrorKickT = 0; ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
@@ -3579,10 +3579,25 @@
 			// SELF-HEALING (fix TCentraL reconnect na dużej mapie): brak world-begin mimo połączenia
 			// (auto-send hosta nie zadziałał / zgubiony) → klient prosi o save co 15 s, MAX 4 razy na sesję,
 			// i NIGDY po udanym odbiorze świata (_worldRxDone) — inaczej pętla transferów/przeładowań (0.9.58!).
+			// ...i TYLKO gdy siedzimy w MENU (0.9.73). Prosba o save W SWIECIE = kolejny auto-load =
+			// PRZELADOWANIE strony = petla co ~10-15 s (ZeroHazard, J.Slayer, Akriz).
 			if (!ST._worldRxDone && !ST._gotHostWorld && !ST._worldRx && !ST.wsx.everApplied && ST.peers.size > 0 &&
+				state.store.scene && state.store.scene.active === 1 &&
 				(ST._worldReqN || 0) < 4 && now - (ST._worldReqT || 0) > 15000) {
 				ST._worldReqT = now; ST._worldReqN = (ST._worldReqN || 0) + 1;
 				try { net.send({ t: "world-req" }); log("world-req " + ST._worldReqN + "/4: nie dostałem world-begin — proszę hosta o save"); } catch (e) {}
+			}
+			// MIRROR-KICK (0.9.73 — PRZYCZYNA "klient nie moze kopac / kopie u siebie", odtworzona e2e):
+			// auto-load konczy sie PRZELADOWANIEM STRONY renderera. Mod wstaje od zera (everApplied=false,
+			// sim NIE zapauzowany), ale siec zyje w procesie main — host NIE dostaje nowego peer-hello,
+			// wiec NIGDY nie wola enqueueFullWorld. Efekt: klient stoi w swiecie hosta z martwym lustrem
+			// i gra lokalnie (kopanie nie idzie do hosta, host go nie widzi). Prosimy o STRUMIEN (resync),
+			// nie o save — nic sie nie przeladowuje, wiec nie ma z czego zrobic petli.
+			if (!ST.wsx.everApplied && !ST._loadingWorld && ST.peers.size > 0 &&
+				state.store.scene && state.store.scene.active !== 1 &&
+				(ST._mirrorKickN || 0) < 6 && now - (ST._mirrorKickT || 0) > 6000) {
+				ST._mirrorKickT = now; ST._mirrorKickN = (ST._mirrorKickN || 0) + 1;
+				try { net.send({ t: "resync" }); log("mirror-kick " + ST._mirrorKickN + "/6: jestem w swiecie, lustro nie startuje — prosze hosta o pelny swiat"); } catch (e) {}
 			}
 			// klient FAKTYCZNIE był w świecie w tej sesji — warunek auto-wyjścia (pas i szelki po
 			// incydencie instant-kick: everApplied ustawione w menu nie może rozłączać)
