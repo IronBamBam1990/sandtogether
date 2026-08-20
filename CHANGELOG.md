@@ -2,6 +2,12 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-21 (v0.9.87 + v0.9.88) — world-transfer restart storm, and the false "OLD mod" warning
+
+A joining player could end up never receiving the world at all: they asked for the missing pieces of transfer N, the host answered by starting transfer N+1, and the joining player ignored it because "a transfer is already in progress" — forty restarts in twenty-five seconds (report and logs: Cr0ss0vr). Two safeguards added on different days were cancelling each other out. The newer transfer now always wins — pieces are already tagged per transfer, so mixing them is impossible — and the host will not restart a transfer more than once every three seconds. Measured after the fix: zero restarts where there had been forty.
+
+Also fixed: the red "OLD mod" warning shown to players who are perfectly up to date. The verdict used to be reached after five seconds of silence, but a player busy loading a world (or whose renderer has just reloaded) simply cannot answer in time; the check now asks twice more before complaining.
+
 ## 2026-08-21 (v0.9.86) — one log file per game instance
 
 Two copies of the game running on one PC — the usual way people test co-op — both wrote into the same main.log, so bug reports arrived as a mix of both sides and were hard to untangle. The second instance now gets its own main-<pid>.log, and instances started with a custom user-data folder log inside that folder. Nothing changes for normal single-instance play. (Implementation note: the instance check had to live inside the logger itself — doing it at module load fails because the log directory cannot be resolved before the app is ready.)

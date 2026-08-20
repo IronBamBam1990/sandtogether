@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.86-beta";
+	const VER = "0.9.88-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -618,13 +618,22 @@
 			setStatus(t("players", ST.peers.size + 1));
 			try { net.send({ t: "mver", v: VER, gf: ST._gameFp || null }, from); } catch (e) {} // wersja MODA + odcisk buildu GRY
 			// stary mod (≤0.9.7) nie zna mver i nie odpowie — po 5s bez odpowiedzi ALARM (przypadek "ziomek na 0.9.0")
-			if (!msg.ready) setTimeout(() => { // 0.9.82: handshake renderera NIE uruchamia kontroli "stary mod"
-				const pp = ST.peers.get(from);
-				if (pp && !pp.modVer) {
+			// Kontrola "stary mod" z PONOWIENIAMI (0.9.88): brak odpowiedzi w 5 s nie znaczy stary mod —
+			// peer bywa w trakcie wczytywania świata albo jego renderer właśnie wstaje po przeładowaniu.
+			if (!msg.ready) {
+				const askVer = (attempt) => {
+					const pp = ST.peers.get(from);
+					if (!pp || pp.modVer) return;                       // już wiemy — koniec
+					if (attempt < 3) {
+						try { net.send({ t: "mver", v: VER, gf: ST._gameFp || null }, from); } catch (e) {}
+						setTimeout(() => askVer(attempt + 1), attempt === 1 ? 7000 : 13000);
+						return;
+					}
 					setStatus(t("ver_mismatch") + " [" + (pp.nick || from) + ": OLD mod (<= 0.9.7)! / you: " + VER + "]", "#f66");
-					log("PEER NA STARYM MODZIE (brak odpowiedzi mver):", pp.nick || from, "— musi zrobić install.bat!");
-				}
-			}, 5000);
+					log("PEER NA STARYM MODZIE (brak odpowiedzi mver po 25 s):", pp.nick || from, "— musi zrobić install.bat!");
+				};
+				setTimeout(() => askVer(1), 5000);
+			}
 			if (ST.net.role === "host") {
 				enqueueFullWorld(); // 0.9.76: KAZDY hello (takze po przeladowaniu renderera klienta) = pelny swiat od nowa
 				const hst = ST.state, myWid = hst && hst.store.meta && hst.store.meta.worldId;
@@ -733,8 +742,12 @@
 			// (fix TCentraL "went crazy with the retrys"): ignorujemy, dopóki bieżący odbiór się nie skończy.
 			// 0.9.75: guard tylko dla ŻYWEGO odbioru. Zakleszczony (host już wysłał world-end, a nam
 			// brakuje paczek, albo trwa >30 s) MUSI ustąpić — inaczej klient nigdy nie dostanie pełnego świata.
-			if (ST._worldRx && !ST._worldRx.done && !ST._worldRx.ended && performance.now() - (ST._worldRx.t0 || 0) < 30000) { log("world-begin ZIGNOROWANY — odbiór poprzedniego transferu w toku"); return; }
-			if (ST._worldRx && !ST._worldRx.done) log("porzucam zakleszczony odbiór tid " + ST._worldRx.tid + " (" + ST._worldRx.got + "/" + ST._worldRx.total + ") — przyjmuję nowy transfer tid " + msg.tid);
+			// 0.9.87: NOWSZY transfer wygrywa (paczki i tak są filtrowane po tid, więc przeplot jest niemożliwy).
+			if (ST._worldRx && !ST._worldRx.done && msg.tid !== undefined && ST._worldRx.tid !== undefined && msg.tid < ST._worldRx.tid) {
+				log("world-begin STARSZY (tid " + msg.tid + " < " + ST._worldRx.tid + ") — ignoruję"); return;
+			}
+			if (ST._worldRx && !ST._worldRx.done) log("przełączam odbiór: tid " + ST._worldRx.tid + " (" + ST._worldRx.got + "/" + ST._worldRx.total + ") → tid " + msg.tid);
+			
 			ST._gotHostWorld = true; // otrzymaliśmy świat OD hosta → ufamy jego worldId gdy oboje w grze (patrz applyWorldBatch)
 			ST._worldRx = { tid: msg.tid, name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false, t0: performance.now() };
 			log("world-begin: tid", msg.tid, "-", msg.name, "-", msg.chunks, "paczek,", Math.round((msg.size || 0) / 1024), "KB");
@@ -761,6 +774,8 @@
 			// na poprzednim) = odesłanie mu paczek z nowego transferu, które i tak odrzuci → wieczne "recovering".
 			// Zamiast tego startujemy świeży, kompletny transfer.
 			if (ST._wtx && msg.tid !== undefined && ST._wtx.tid !== undefined && msg.tid !== ST._wtx.tid) {
+				if (performance.now() - (ST._wtxRestartT || 0) < 3000) { return; } // 0.9.87: nie restartuj częściej niż co 3 s
+				ST._wtxRestartT = performance.now();
 				log("world-need dla starego transferu tid " + msg.tid + " (mamy " + ST._wtx.tid + ") — wysyłam świat od nowa");
 				ST._autoSendT = 0; ST._wtx = null; sendWorld(); return;
 			}
