@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.70-beta";
+	const VER = "0.9.71-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1210,7 +1210,7 @@
 			});
 			ST.FH.events.on(state, "tech:unlocked", (st, data) => {
 				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data) return;
-				net.send({ t: "act", k: "tech", id: data.techId, cost: resCostDiff() });
+				net.send({ t: "act", k: "tech", id: data.techId, cost: resCostDiff(), bl: state.store.player && state.store.player.buildings });
 				log("CLIENT tech →", data.techId);
 			});
 			// FABUŁA (fix G6): krok wyzwolony pozycją/akcją KLIENTA mutuje tylko jego lokalny storage
@@ -1443,6 +1443,7 @@
 				fp: fpCounters(state),                  // liczniki procesów fabryki (ShakeWetSand itd.) — SAB nie-lustrzany
 				up: state.store.upgrades || null,       // WSPÓLNA pula ulepszeń (fix G2)
 				th: (state.store.player && state.store.player.tech) || null, // tech tree
+				bl: (state.store.player && state.store.player.buildings) || null, // budynki odblokowane przez tech
 				pg: state.store.progression || null,    // progression (upgradesUnlocked, dungeons)
 			});
 		} catch (e) {}
@@ -1478,6 +1479,18 @@
 			}
 		} catch (e) { log("techUnlock error:", techId, e.message); }
 		return false;
+	}
+	function mergeUnlockedBuildings(state, list) {
+		const dst = state && state.store && state.store.player && state.store.player.buildings;
+		if (!Array.isArray(dst) || !Array.isArray(list)) return 0;
+		let added = 0;
+		for (const value of list) {
+			let exists = dst.includes(value);
+			if (!exists && value && typeof value === "object") try { const key = JSON.stringify(value); exists = dst.some((v) => { try { return JSON.stringify(v) === key; } catch (e) { return false; } }); } catch (e) {}
+			if (exists) continue;
+			try { dst.push(value && typeof value === "object" ? JSON.parse(JSON.stringify(value)) : value); added++; } catch (e) {}
+		}
+		return added;
 	}
 	function fpArr(state) { // surowa tablica SAB (do zapisu u klienta)
 		try {
@@ -1525,6 +1538,7 @@
 					}
 				}
 			}
+			if (msg.bl) mergeUnlockedBuildings(state, msg.bl);
 			if (msg.th && state.store.player && state.store.player.tech) {
 				for (const k of Object.keys(msg.th)) {
 					if (!msg.th[k] || state.store.player.tech[k]) continue;
@@ -2039,6 +2053,8 @@
 			} else if (msg.k === "tech") {
 				ST._applyingNet = true;
 				try {
+					const addedBuildings = mergeUnlockedBuildings(state, msg.bl);
+					if (addedBuildings) log("HOST: tech buildings merged:", addedBuildings, "total", state.store.player.buildings.length);
 					if (state.store.player && state.store.player.tech && !state.store.player.tech[msg.id]) {
 						deductCosts(state, msg.cost);
 						// PEŁNY unlock (budynki/itemy/mapa + własny emit tech:unlocked); fallback = goła flaga
