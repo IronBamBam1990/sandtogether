@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-21 (v0.9.90) — world sync roughly twelve times faster
+
+The batch limit was a NUMBER of chunks derived from an average cost, so a nearly empty piece of map — which costs almost nothing once compressed — occupied the same slot as a dense one. Joining a big world crawled along at twenty to fifty chunks per second, and that alone was enough to trigger congestion warnings even on a LAN. The limit is now measured in real bytes, with the compression ratio measured live, and candidates that do not fit go back into the queue instead of being dropped. Measured on a 9216-chunk world: 580 to 600 chunks per second at the same bandwidth ceiling, joining player keeping up, zero lag. The false lost-packet resends during the first sync are gone as well (they were resending data the client was simply still working through).
+
 ## 2026-08-21 (v0.9.89) — research shared by a teammate now lands instantly
 
 The tech tree has prerequisites, but incoming research was applied in whatever order it arrived, so a child node kept being refused until its parent happened to go through — the retry loop sorted it out eventually, roughly twenty seconds later and with sixty refusals in the log. Unlocks now repeat in dependency order until nothing more can be unlocked. Found by auditing every log file on disk (15k lines) rather than by a report.

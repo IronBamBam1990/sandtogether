@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.89-beta";
+	const VER = "0.9.90-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -958,7 +958,8 @@
 		// 0.9.78: paczki bez potwierdzenia po 10 s traktujemy jako ZGUBIONE (typowe dla Steam P2P).
 		// Bez tego ich wiersze zostaja u klienta puste NA ZAWSZE (host ma je za dostarczone) — to jest
 		// przyczyna "dziurawego swiata" przez internet przy dzialajacym LAN.
-		if (w.ackSeen && w.unacked && w.unacked.size) {
+		// 0.9.90: nie w trakcie pierwszej synchronizacji (wielka kolejka) — tam brak ACK znaczy "nie nadąża", nie "zgubione"
+		if (w.ackSeen && w.unacked && w.unacked.size && w.pending.size < 200) {
 			let lost = 0;
 			for (const [sq, rec] of [...w.unacked]) {
 				if (now - rec.t < 20000) continue;
@@ -988,8 +989,11 @@
 			// Floor of 2, not 8. At the measured bpc of ~2 KB a floor of 8 still held ~310 KB/s, which is
 			// nearly the 349 KB/s that caused the jam: the controller had nowhere to go and degenerated
 			// into pure on/off stalling.
-			const maxN = Math.max(2, Math.min(400, Math.floor(budget / bpc)));
-			const nearN = Math.min(120, maxN);              // what players can actually see gets the budget first
+			// 0.9.90: maxN to już tylko GÓRNY limit kandydatów — o rozmiarze paczki decyduje budżet bajtowy niżej.
+			const ratio = w.ratio || 0.12;                  // zmierzony stosunek: po kompresji / przed
+			const rawBudget = Math.max(64 * 1024, Math.floor(budget / Math.max(0.02, ratio)));
+			const maxN = Math.max(2, Math.min(3000, Math.floor(budget / bpc) * 8));
+			const nearN = Math.min(600, maxN);              // what players can actually see gets the budget first
 			// Fast lane usage from the PREVIOUS batch, which is stable frame to frame. Without it we
 			// reserved all 120 slots even when nothing near the players was dirty, so the far lane got
 			// scraps on a link that was doing nothing.
@@ -1021,7 +1025,10 @@
 			const parts = [];
 			let size = 0;
 			let fogSkipped = 0;
-			for (const idx of take) {
+			let stoppedAt = -1;
+			for (let ti = 0; ti < take.length; ti++) {
+				if (size >= rawBudget) { stoppedAt = ti; break; } // budżet wyczerpany — reszta wróci do kolejki
+				const idx = take[ti];
 				const ccx = idx % d.cx, ccy = Math.floor(idx / d.cx);
 				const x0 = ccx * CHUNK, y0 = ccy * CHUNK;
 				const cw = Math.min(CHUNK, W - x0), ch = Math.min(CHUNK, H - y0);
@@ -1082,6 +1089,7 @@
 				for (const r of rows) { buf.set(etRows.subarray(r * cw, r * cw + cw), o); o += cw; }
 				parts.push(buf); size += buf.length;
 			}
+			if (stoppedAt >= 0) for (let ti = stoppedAt; ti < take.length; ti++) w.pending.add(take[ti]); // 0.9.90: nie gubimy reszty
 			if (!parts.length) { w.busy = false; return; }
 			const all = new Uint8Array(size);
 			let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
@@ -1097,6 +1105,8 @@
 			// holds regardless of what the sim is doing.
 			const bpcNow = packed.length / parts.length;
 			w.bpc = w.bpc ? w.bpc * 0.8 + bpcNow * 0.2 : bpcNow;
+			const ratioNow = packed.length / Math.max(1, all.length);
+			w.ratio = w.ratio ? w.ratio * 0.8 + ratioNow * 0.2 : ratioNow; // 0.9.90: ile realnie zostaje po kompresji
 			// statystyki
 			w.applyBytes += packed.length; w.applyCount += parts.length;
 			w.fogSkipped = (w.fogSkipped || 0) + fogSkipped;

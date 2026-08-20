@@ -101,7 +101,7 @@ Full source on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]githu
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.89-beta — research shared by a teammate now appears INSTANTLY instead of after roughly twenty seconds. The tech tree has prerequisites, and the mod was trying to unlock incoming research in whatever order it arrived, so a child node was refused until its parent happened to go through - the retry loop eventually sorted it out, slowly and noisily. Now the unlocks repeat in dependency order until nothing more can be unlocked. Includes the previous fix for the world-transfer restart storm and the false OLD MOD warning. Auto-updates at next launch.',
+    changeNote: 'v0.9.90-beta — WORLD SYNC IS ROUGHLY TWELVE TIMES FASTER. The batch limit used to be a number of chunks derived from an average cost, so a nearly empty piece of map (which costs almost nothing after compression) took up the same slot as a dense one - joining a big world crawled at twenty to fifty chunks per second. The limit is now measured in real bytes, with the compression ratio measured live. Measured on a 9216-chunk world: 580 to 600 chunks per second at the same bandwidth ceiling, with the joining player keeping up and no lag. Also gone: the false lost-packet resends that fired during the first sync (they were resending data the client was simply still working through). Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
