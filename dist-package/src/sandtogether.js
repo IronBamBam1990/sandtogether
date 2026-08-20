@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.90-beta";
+	const VER = "0.9.103-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -487,11 +487,11 @@
 				ST.net.role = "client"; ST.net.transport = ev.transport;
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; ST.wsx.wasInWorld = false; // nowa sesja klienta
 				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
-				ST._mirrorKickN = 0; ST._mirrorKickT = 0; ST._greeted.clear(); ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
+				ST._mirrorKickN = 0; ST._mirrorKickT = 0; if (ST._structSig) ST._structSig.clear(); ST._greeted.clear(); ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._directMode = false; ST._directAddr = null; autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
-				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
+				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; if (ST._projSent) ST._projSent.clear(); // stan z poprzedniej sesji = inne współrzędne/świat
 				// własny nick (localStorage) rozgłaszany istniejącym protokołem hello — bez zmian w mostku IPC
 				if (ST._nickCustom) { try { net.send({ t: "hello", nick: ST._nickCustom }); } catch (e) {} }
 				setStatus(t("joined", ev.transport));
@@ -635,7 +635,7 @@
 				setTimeout(() => askVer(1), 5000);
 			}
 			if (ST.net.role === "host") {
-				enqueueFullWorld(); // 0.9.76: KAZDY hello (takze po przeladowaniu renderera klienta) = pelny swiat od nowa
+				ST._snapForce = true; enqueueFullWorld(); // 0.9.76: KAZDY hello (takze po przeladowaniu renderera klienta) = pelny swiat od nowa
 				const hst = ST.state, myWid = hst && hst.store.meta && hst.store.meta.worldId;
 				const hostInWorld = hst && hst.store.scene && hst.store.scene.active !== 1;
 				// SAVE tylko gdy klient NIE stoi na naszym swiecie. Klient po przeladowaniu ma juz nasz swiat
@@ -720,7 +720,7 @@
 			// REFUND odkładania (R5): host nie zdołał położyć elementu (komórka zajęta) → oddaj do tanku
 			if (ST.net.role === "client" && typeof msg.et === "number" && msg.et > 0) clientFillGrabTank([msg.et], null);
 		} else if (msg.t === "resync") {
-			if (ST.net.role === "host") { log("resync od", from, "-> pełny świat do kolejki"); enqueueFullWorld(); ST._lastSnap = 0; }
+			if (ST.net.role === "host") { log("resync od", from, "-> pełny świat do kolejki"); enqueueFullWorld(); ST._lastSnap = 0; ST._snapForce = true; }
 		} else if (msg.t === "world-req") {
 			// klient prosi o SAVE (self-healing: reconnect / auto-send nie zadziałał) — rate-limit 15 s
 			if (ST.net.role === "host" && performance.now() - (ST._lastWorldReqT || 0) > 15000) {
@@ -878,6 +878,36 @@
 		} catch (e) {}
 	}
 
+	// po zmianie komórek "z ręki" (poza silnikiem) trzeba zabrudzić chunki, żeby lustro je odświeżyło
+	// 0.9.103: efekt akcji gracza ma wrócić do niego JAK NAJSZYBCIEJ — chunki wokół punktu akcji
+	// trafiają na początek najbliższej paczki (priorytet), z wyczyszczonym hashem, żeby na pewno poleciały.
+	function markUrgent(state, x, y, r) {
+		try {
+			const { W, H } = worldBuffers(state); if (!W) return;
+			const d = chunkDims(W, H), rad = r == null ? 1 : r;
+			const cx = Math.floor(x / CHUNK), cy = Math.floor(y / CHUNK);
+			for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+				const nx = cx + dx, ny = cy + dy;
+				if (nx < 0 || ny < 0 || nx >= d.cx || ny >= d.cy) continue;
+				const i = nx + ny * d.cx;
+				ST.wsx.pending.add(i); ST.wsx.priority.add(i);
+				if (ST.wsx.rowH) ST.wsx.rowH.delete(i);
+			}
+		} catch (e) {}
+	}
+	function enqueueAround(state, spots) {
+		try {
+			const { W, H } = worldBuffers(state); if (!W) return;
+			const d = chunkDims(W, H);
+			for (const sp of spots) {
+				const cx = Math.floor((sp.x | 0) / CHUNK), cy = Math.floor((sp.y | 0) / CHUNK);
+				for (let dy = -3; dy <= 3; dy++) for (let dx = -4; dx <= 4; dx++) {
+					const nx = cx + dx, ny = cy + dy;
+					if (nx >= 0 && ny >= 0 && nx < d.cx && ny < d.cy) { const i = nx + ny * d.cx; ST.wsx.pending.add(i); if (ST.wsx.rowH) ST.wsx.rowH.delete(i); }
+				}
+			}
+		} catch (e) {}
+	}
 	function enqueueFullWorld() {
 		if (!ST.state) return;
 		// 0.9.81: handshake, peer-hello i resync potrafia trafic w te sama chwile — bez tej blokady
@@ -903,7 +933,7 @@
 		if (ST.wsx.rowH) ST.wsx.rowH.clear();   // stale hashes would suppress sends in the new world
 		ST.wsx.sweep = 0;
 		ST.wsx.bpc = 0; ST.wsx.lastNear = 0;    // re-measure chunk cost, the new world compresses differently
-		ST.wsx.seq = 0; ST.wsx.ackSeen = false; ST.wsx.lag = 0; ST.wsx.rate = 0.25; // 0.9.78: start ostrozny, regulator sam podniesie if (ST.wsx.unacked) ST.wsx.unacked.clear(); // start un-throttled
+		ST.wsx.seq = 0; ST.wsx.ackSeen = false; ST.wsx.lag = 0; ST.wsx.rate = 0.25; ST.wsx.boost = 1; ST.wsx.buildMs = 0; // 0.9.78: start ostrozny, regulator sam podniesie if (ST.wsx.unacked) ST.wsx.unacked.clear(); // start un-throttled
 	}
 
 	function scanDirty(state) {
@@ -917,7 +947,9 @@
 	async function maybeSendBatch(state) {
 		const w = ST.wsx;
 		const now = performance.now();
-		if (w.busy || now - w.lastBatch < 100) return;
+		// 0.9.103: pilne zmiany (efekt akcji gracza) nie czekają pełnych 100 ms
+		const minGap = w.priority && w.priority.size ? 35 : 100;
+		if (w.busy || now - w.lastBatch < minGap) return;
 		const { map, wall, shadow, auth, sim, etype, W, H } = worldBuffers(state);
 		if (!map || !W) return;
 		const cellIds32 = sim ? new Uint32Array(sim.buffer, sim.byteOffset, W * H) : null; // do odczytu typu elementu per komórka (v4)
@@ -983,7 +1015,24 @@
 			const anchors = [{ x: state.store.player.x / 4, y: state.store.player.y / 4 }];
 			for (const p of ST.peers.values()) anchors.push({ x: p.tx / 4, y: p.ty / 4 });
 			const FAST_R = 24 * CHUNK; // ~2 ekrany wokół gracza (Manhattan, w komórkach)
-			const budget = Math.floor(24 * 1024 * w.rate);  // 0.9.78: 24 KB/paczke = sufit ~240 KB/s (~1,9 Mbit/s) zamiast ~960 KB/s.
+			// 0.9.91: LAN/localhost to NIE Steam relay — tam sufit 24 KB/paczkę był naszym własnym hamulcem.
+			// Przy szybkim łączu (niski RTT, zero zaległości) pozwalamy na więcej; przy wolnym zostaje ostrożnie.
+			let linkPing = 0;
+			for (const pp of ST.peers.values()) if (pp.ping != null && pp.ping > linkPing) linkPing = pp.ping;
+			// 0.9.92: BEZ SZTYWNEGO SUFITU — mnożnik rośnie, dopóki klient nadąża, łącze wyrabia
+			// i budowanie paczki nie zjada klatki (buildMs mierzony niżej). Inaczej: ostro w dół.
+			// BUDŻET CZASU KLATKI (0.9.94) — to on, a nie łącze, jest realnym ogranicznikiem.
+			// Budowanie paczki dzieje się w pętli renderowania hosta; nakładanie u klienta tak samo.
+			// Cel: paczka poniżej 8 ms. Powyżej 15 ms gra zaczyna szarpać — wtedy ostro w dół.
+			const pingOk = linkPing === 0 || linkPing < 60;
+			const ms = w.buildMs || 0;
+			if (pingOk && w.lag <= 2 && ms < 8) w.boost = Math.min(64, (w.boost || 1) * 1.15);      // wzrost spokojny
+			else if (ms > 15 || w.lag > 4) w.boost = Math.max(1, (w.boost || 1) * 0.6);              // szarpie — zwijamy
+			else { /* strefa komfortu: trzymamy poziom */ }
+			const fast = w.boost || 1;
+			// 0.9.93: SUFIT 150 Mbit/s = 18,75 MB/s; paczki lecą ~10x/s, więc 1,875 MB na paczkę.
+			const HARD_CAP = Math.floor((150 * 1000 * 1000) / 8 / 10);
+			const budget = Math.min(HARD_CAP, Math.floor(24 * 1024 * w.rate * fast));  // 0.9.78: 24 KB/paczke = sufit ~240 KB/s (~1,9 Mbit/s) zamiast ~960 KB/s.
 			// LAN tego nie odczuje (i tak rzadko mamy tyle zmian), a internet przestaje sie dlawic wlasnym strumieniem.
 			const bpc = w.bpc || 512;                       // measured compressed bytes per chunk, updated after deflate
 			// Floor of 2, not 8. At the measured bpc of ~2 KB a floor of 8 still held ~310 KB/s, which is
@@ -991,9 +1040,20 @@
 			// into pure on/off stalling.
 			// 0.9.90: maxN to już tylko GÓRNY limit kandydatów — o rozmiarze paczki decyduje budżet bajtowy niżej.
 			const ratio = w.ratio || 0.12;                  // zmierzony stosunek: po kompresji / przed
-			const rawBudget = Math.max(64 * 1024, Math.floor(budget / Math.max(0.02, ratio)));
-			const maxN = Math.max(2, Math.min(3000, Math.floor(budget / bpc) * 8));
-			const nearN = Math.min(600, maxN);              // what players can actually see gets the budget first
+			// 0.9.97: czy TA paczka poleci surowo? (te same warunki co przy wysyłce — musimy je znać WCZEŚNIEJ,
+			// bo od tego zależy budżet: bez kompresji bajtów na wyjściu jest tyle, ile zserializujemy).
+			let willSendRaw = ST._rawStream === true && ST.peers.size > 0 && ST.net.transport === "ws"; // 0.9.98: domyslnie WYLACZONE (SandTogether._rawStream=true wlacza recznie)
+			for (const pp of ST.peers.values()) if (pp.modVer !== VER) willSendRaw = false;
+			if (willSendRaw) for (const pid of ST.peers.keys()) {
+				const ip = (String(pid).match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/) || [])[0];
+				if (!ip) { if (String(pid) !== "host") willSendRaw = false; continue; }
+				const [A, B] = ip.split(".").map(Number);
+				if (!(A === 127 || A === 10 || (A === 192 && B === 168) || (A === 172 && B >= 16 && B <= 31) || (A === 169 && B === 254))) willSendRaw = false;
+			}
+			// bez kompresji bajty wyjściowe = bajty zserializowane, więc NIE dzielimy przez współczynnik
+			const rawBudget = willSendRaw ? Math.max(64 * 1024, budget) : Math.max(64 * 1024, Math.floor(budget / Math.max(0.02, ratio)));
+			const maxN = Math.max(2, Math.min(2500, Math.floor(budget / bpc) * 8));
+			const nearN = Math.min(1200, maxN);              // what players can actually see gets the budget first
 			// Fast lane usage from the PREVIOUS batch, which is stable frame to frame. Without it we
 			// reserved all 120 slots even when nothing near the players was dirty, so the far lane got
 			// scraps on a link that was doing nothing.
@@ -1025,9 +1085,12 @@
 			const parts = [];
 			let size = 0;
 			let fogSkipped = 0;
+			// bezpiecznik natychmiastowy: po naprawdę drogiej paczce tniemy budżet surowy o połowę
+			const rawBudgetEff = (w.buildMs || 0) > 30 ? Math.floor(rawBudget / 2) : rawBudget;
+			const buildT0 = performance.now(); // 0.9.92: mierzymy koszt budowania paczki
 			let stoppedAt = -1;
 			for (let ti = 0; ti < take.length; ti++) {
-				if (size >= rawBudget) { stoppedAt = ti; break; } // budżet wyczerpany — reszta wróci do kolejki
+				if (size >= rawBudgetEff) { stoppedAt = ti; break; } // budżet wyczerpany — reszta wróci do kolejki
 				const idx = take[ti];
 				const ccx = idx % d.cx, ccy = Math.floor(idx / d.cx);
 				const x0 = ccx * CHUNK, y0 = ccy * CHUNK;
@@ -1093,27 +1156,45 @@
 			if (!parts.length) { w.busy = false; return; }
 			const all = new Uint8Array(size);
 			let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
-			const packed = await deflate(all);
+			// 0.9.95: szybkie łącze + ta sama wersja u wszystkich => wysyłamy SUROWO (oszczędzamy procesor
+			// po obu stronach: brak pakowania u hosta, brak rozpakowania u klienta).
+			let sameVerAll = ST.peers.size > 0;
+			for (const pp of ST.peers.values()) if (pp.modVer !== VER) sameVerAll = false;
+						// Peer na adresie lokalnym/prywatnym => pasmo darmowe => nie pakujemy (oszczędzamy procesor
+			// po obu stronach). Identyfikatory peerów mają postać "ws:::ffff:127.0.0.1:5xxxx" albo "ws:192.168...".
+			let allLocal = ST.peers.size > 0 && ST.net.transport === "ws";
+			for (const pid of ST.peers.keys()) {
+				const ip = (String(pid).match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/) || [])[0];
+				if (!ip) { if (String(pid) !== "host") allLocal = false; continue; }   // "host" = my jesteśmy klientem
+				const [A, B] = ip.split(".").map(Number);
+				const priv = A === 127 || A === 10 || (A === 192 && B === 168) || (A === 172 && B >= 16 && B <= 31) || (A === 169 && B === 254);
+				if (!priv) allLocal = false;
+			}
+			const rawOk = willSendRaw && sameVerAll && allLocal && all.length < 8 * 1024 * 1024;
+			const packed = rawOk ? all : await deflate(all);
+			w.rawMode = rawOk;
 			w.seq++; // batch number the client echoes back in wcack
 			// 0.9.78: zapamietaj chunki tej paczki — hashe wierszy sa "warunkowe" do czasu ACK klienta.
 			if (!w.unacked) w.unacked = new Map();
 			w.unacked.set(w.seq, { idx: take.slice(0), t: now });
 			// q = rozmiar kolejki hosta (odliczanie postępu u klienta, 0.9.62) + sq = numer paczki (wcack, PR #8)
-			net.send({ t: "wc", v: 5, sq: w.seq, wid: state.store.meta && state.store.meta.worldId, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, q: w.pending.size, d: b64enc(packed) });
+			net.send({ t: "wc", v: 5, z: w.rawMode ? 0 : 1, sq: w.seq, wid: state.store.meta && state.store.meta.worldId, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, q: w.pending.size, d: b64enc(packed) });
 			// EMA of what a chunk really costs on the wire, drives the batch budget above. Cheap chunks
 			// (few changed rows) earn a bigger portion, expensive ones a smaller one, so the byte ceiling
 			// holds regardless of what the sim is doing.
 			const bpcNow = packed.length / parts.length;
 			w.bpc = w.bpc ? w.bpc * 0.8 + bpcNow * 0.2 : bpcNow;
 			const ratioNow = packed.length / Math.max(1, all.length);
-			w.ratio = w.ratio ? w.ratio * 0.8 + ratioNow * 0.2 : ratioNow; // 0.9.90: ile realnie zostaje po kompresji
+			w.ratio = w.ratio ? w.ratio * 0.8 + ratioNow * 0.2 : ratioNow;
+			const buildMsNow = performance.now() - buildT0;
+			w.buildMs = w.buildMs ? w.buildMs * 0.7 + buildMsNow * 0.3 : buildMsNow; // hamulec: nie zjadamy klatki hosta // 0.9.90: ile realnie zostaje po kompresji
 			// statystyki
 			w.applyBytes += packed.length; w.applyCount += parts.length;
 			w.fogSkipped = (w.fogSkipped || 0) + fogSkipped;
 			if (now - w.statT > 2000) {
 				// lag and rate appended raw, no i18n: this is a diagnostic readout, not player facing text.
 				// Blank when no client acks, so an un-throttled session does not show a misleading zero.
-				const cc = w.ackSeen ? "  lag " + w.lag + " (" + Math.round(w.rate * 100) + "%)" : "";
+				const cc = (w.ackSeen ? "  lag " + w.lag + " (" + Math.round(w.rate * 100) + "%)" : "") + "  x" + (Math.round((w.boost || 1) * 10) / 10) + "  " + Math.round(w.buildMs || 0) + "ms" + (w.rawMode ? "  surowo" : "");
 				const info = t("sync_up", Math.round(w.applyBytes / 2048), Math.round(w.applyCount / 2), w.pending.size) + cc;
 				setSyncInfo(info);
 				log("SYNC-HOST", info, w.fogSkipped ? "(fog-skip: " + w.fogSkipped + ")" : "");
@@ -1187,7 +1268,9 @@
 		setClientPaused(true);
 		const { auth, sim, etype } = worldBuffers(state);
 		const cellIds32 = sim ? new Uint32Array(sim.buffer, sim.byteOffset, W * H) : null;
-		const raw = await inflate(b64dec(msg.d));
+		const __t0 = performance.now(); // 0.9.101: ile kosztuje nakladanie lustra
+		const __rb = b64dec(msg.d);
+		const raw = msg.z === 0 ? __rb : await inflate(__rb); // 0.9.95: z=0 => paczka surowa (szybkie łącze)
 		const dv = new DataView(raw.buffer);
 		let o = 0, applied = 0;
 		while (o + 6 <= raw.length) {
@@ -1248,14 +1331,18 @@
 			// → bez tego stale dziury w świecie aż do ręcznego Resync. Raz na sesję (flaga _autoResynced).
 			if (!ST._autoResynced) { ST._autoResynced = true; try { net.send({ t: "resync" }); log("AUTO-RESYNC: proszę hosta o pełny świat (paczki sprzed wejścia do świata były dropowane)"); } catch (e) {} }
 		}
+		const __ms = performance.now() - __t0;
+		w.applyMs = w.applyMs ? w.applyMs * 0.7 + __ms * 0.3 : __ms;
+		if (__ms > (w.applyWorst || 0)) w.applyWorst = __ms;
 		w.applyBytes += msg.d.length * 0.75; w.applyCount += applied;
 		const now = performance.now();
 		if (now - w.statT > 2000) {
 			// q = ile paczek zostało w kolejce hosta — realny wskaźnik postępu wstępnej synchronizacji
 			// dużej mapy (feedback TCentraL: "no real progress to when it loads")
 			const info = t("sync_down", Math.round(w.applyBytes / 2048), Math.round(w.applyCount / 2), typeof msg.q === "number" ? msg.q : 0);
-			setSyncInfo(info);
-			log("SYNC-CLIENT", info);
+			const extra = "  lustro " + Math.round(w.applyMs || 0) + "/" + Math.round(w.applyWorst || 0) + "ms  snap " + Math.round(w.snapMs || 0) + "/" + Math.round(w.snapWorst || 0) + "ms";
+			setSyncInfo(info + extra);
+			log("SYNC-CLIENT", info + extra);
 			w.applyBytes = 0; w.applyCount = 0; w.statT = now;
 		}
 	}
@@ -1513,9 +1600,31 @@
 		} finally { ST._applyingNet = false; }
 	}
 
+	// 0.9.102: podpis zbioru struktur — jeśli nic się nie zmieniło, snapshot jest zbędny
+	// (host oszczędza serializację 90 tys. obiektów, klient nie dostaje pracy do wykonania).
+	function structuresSignature(state) {
+		try {
+			const a = state.store.structures || [], b = state.store.pipes || [];
+			let h = 2166136261 >>> 0;
+			h = (h ^ a.length) >>> 0; h = (h * 16777619) >>> 0;
+			h = (h ^ b.length) >>> 0; h = (h * 16777619) >>> 0;
+			const step = Math.max(1, Math.floor(a.length / 512)); // próbkujemy, pełny hash 90 tys. byłby drogi
+			for (let i = 0; i < a.length; i += step) {
+				const s = a[i]; if (!s) continue;
+				h = (h ^ ((s.x | 0) * 73856093) ^ ((s.y | 0) * 19349663) ^ (typeof s.type === "number" ? s.type : 0)) >>> 0;
+				h = (h * 16777619) >>> 0;
+			}
+			return h + ":" + a.length + ":" + b.length;
+		} catch (e) { return null; }
+	}
 	async function sendSnapshotIfDue(state) {
 		const now = performance.now();
 		if (now - ST._lastSnap < 2500) return;
+		// 0.9.102: jesli zbior struktur sie nie zmienil, snapshot jest zbedny — oszczedzamy serializacje
+		// 90 tys. obiektow u hosta i cala prace u klienta (to on powodowal zacinki 157-445 ms).
+		const sig = structuresSignature(state);
+		if (sig && sig === ST._snapSig && !ST._snapForce) { ST._lastSnap = performance.now(); return; }
+		ST._snapSig = sig; ST._snapForce = false;
 		ST._lastSnap = now;
 		try {
 			const payload = JSON.stringify({
@@ -1530,6 +1639,10 @@
 	}
 
 	async function applySnapshot(msg) {
+		const __s0 = performance.now();
+		try { return await __applySnapshotInner(msg); } finally { const d = performance.now() - __s0; ST.wsx.snapMs = ST.wsx.snapMs ? ST.wsx.snapMs * 0.7 + d * 0.3 : d; if (d > (ST.wsx.snapWorst || 0)) ST.wsx.snapWorst = d; }
+	}
+	async function __applySnapshotInner(msg) {
 		const state = ST.state;
 		if (!state || !ST.FH) return;
 		const snap = JSON.parse(new TextDecoder().decode(await inflate(b64dec(msg.d))));
@@ -1555,11 +1668,26 @@
 					if (cnt >= 3 && !fresh) {
 						log("RECONCILE: usuwam ducha (nieobecny w " + cnt + " snapshotach):", k);
 						removeOne(state, s);
-						ST._absentCount.delete(k); ST._structApplied.delete(k);
+						ST._absentCount.delete(k); ST._structApplied.delete(k); if (ST._structSig) ST._structSig.delete(k);
 					}
 				}
 				// dobuduj/zaktualizuj brakujące (klient: force=true — render bez kontroli kolizji/zapisu komórek)
-				for (const s of hostList) { buildOne(state, s, true); ST._structApplied.set(structKey(s), nowS); }
+				// 0.9.102: odbudowujemy TYLKO to, co nowe albo zmienione. Przy 90 tys. struktur pełny przebieg
+				// kosztował 157 ms (szczyt 445 ms) w jednej klatce — a fabryka zwykle stoi w miejscu.
+				if (!ST._structSig) ST._structSig = new Map();
+				const tSlice = performance.now();
+				let built = 0, skipped = 0, deferred = 0;
+				for (const s of hostList) {
+					const k = structKey(s);
+					const sig = (s.t != null ? s.t : "") + "|" + (s.v != null ? s.v : "") + "|" + (s.q ? 1 : 0);
+					if (ST._structSig.get(k) === sig) { skipped++; ST._structApplied.set(k, nowS); continue; }
+					if (built > 200 && performance.now() - tSlice > 8) { deferred++; continue; } // reszta w kolejnym snapshocie
+					buildOne(state, s, true);
+					ST._structSig.set(k, sig);
+					ST._structApplied.set(k, nowS);
+					built++;
+				}
+				if ((built || deferred) && (ST._snapDiag = (ST._snapDiag || 0) + 1) <= 30) log("SNAP: odbudowano " + built + ", pominieto bez zmian " + skipped + (deferred ? ", odlozono " + deferred : ""));
 			}
 			// worldItems: odfiltruj świeżo podniesione lokalnie (czekające na potwierdzenie hosta, TTL 10 s)
 			applyWorldItems(state, snap.wi || []);
@@ -2132,6 +2260,12 @@
 	// symuluje lot+eksplozję+dmg autorytatywnie, wynik wraca lustrem/strumieniem encji. (rocket/fusil)
 	ST._proj = (state, proj) => {
 		if (!isClientSync() || !ST.wsx.paused || ST._applyingNet) return;
+		if (!ST._projSent || !ST._projSent.set) ST._projSent = new Map(); // 0.9.98: pozycja -> czas (okno 3 s)
+		// 0.9.97: ten sam pocisk potrafił lecieć wielokrotnie (log hosta: ta sama pozycja x10) — wysyłamy RAZ.
+		try {
+			const pk = proj && (proj.id != null ? "id" + proj.id : Math.round(proj.x) + "," + Math.round(proj.y) + "," + (proj.type != null ? proj.type : "?"));
+			if (pk) { const nowP = performance.now(); const last = ST._projSent.get ? ST._projSent.get(pk) : 0; if (last && nowP - last < 3000) return; if (!ST._projSent.set) ST._projSent = new Map(); ST._projSent.set(pk, nowP); if (ST._projSent.size > 400) ST._projSent.clear(); }
+		} catch (e) {}
 		try { net.send({ t: "act", k: "proj", p: proj }); if ((ST._prDiag = (ST._prDiag || 0) + 1) <= 20) log("CLIENT forward proj:", proj && proj.type, "@", proj && Math.round(proj.x), proj && Math.round(proj.y)); } catch (e) {}
 	};
 	// _setCell (patch B/Gz): KLIENT nigdy nie pisze komórek lokalnie (host-autorytatywnie).
@@ -2140,7 +2274,18 @@
 	// - w każdym wypadku pomiń lokalny zapis
 	ST._setCell = (state, x, y, cellId, opts) => {
 		if (!isClientSync()) return false; // host/offline: normalnie
-		if (!ST._applyingNet && ST._sprayCtx) { try { net.send({ t: "act", k: "set", x, y, c: cellId }); } catch (e) {} }
+				if (!ST._applyingNet && ST._sprayCtx) {
+			// 0.9.100: dla elementu NIE wysyłamy samego cellId (to numer slotu, u hosta znaczy co innego) —
+			// dokładamy TYP, żeby host mógł stworzyć własny, żywy element.
+			let ty = 0;
+			try {
+				if (cellId >= ELEMENTS_MIN && cellId <= ELEMENTS_MAX) {
+					const ed = state.shared && state.shared.sim && state.shared.sim.elementData;
+					if (ed && ed.type) ty = ed.type[cellId - ELEMENTS_MIN] | 0;
+				}
+			} catch (e) {}
+			try { net.send({ t: "act", k: "set", x, y, c: cellId, ty }); } catch (e) {}
+		}
 		return true; // klient NIGDY nie zapisuje komórek lokalnie
 	};
 	// _dropLu: przy pauzie klienta kolejka mutacji nigdy nie drenuje — nie pozwól jej rosnąć
@@ -2250,12 +2395,21 @@
 		try {
 			if (msg.k === "dig") {
 				const ex = findApi("excavate", ["excavation", "patterns"]); // nazwa ns różni się między buildami (obecny=excavation, 0.5.3=patterns)
-				if (ex) { ex(state, msg.x, msg.y, msg.m, msg.v, msg.d); if (!ST._digLogged) { ST._digLogged = true; log("HOST: pierwsze kopanie klienta odtworzone @", msg.x, msg.y); } }
+				if (ex) { ex(state, msg.x, msg.y, msg.m, msg.v, msg.d); markUrgent(state, msg.x, msg.y, 1); if (!ST._digLogged) { ST._digLogged = true; log("HOST: pierwsze kopanie klienta odtworzone @", msg.x, msg.y); } }
 				else if (!ST._digErrLogged) { ST._digErrLogged = true; log("BŁĄD: brak API excavate — FH klucze:", Object.keys(ST.FH || {}).join(",")); }
 			} else if (msg.k === "set") {
-				const sc = findApi("setCellId");
-				if (sc) sc(state, msg.x, msg.y, msg.c);
-				else log("BŁĄD: brak API setCellId");
+				const isElem = msg.c >= ELEMENTS_MIN && msg.c <= ELEMENTS_MAX;
+				if (isElem) {
+					// 0.9.100: NIGDY nie wpisujemy cudzego numeru slotu — tworzymy własny element z typu.
+					const ty = msg.ty | 0;
+					if (ty > 0) {
+						try { if (ST.FH.world.isCellEmpty(state, msg.x, msg.y)) ST.FH.elements.createAt(state, msg.x, msg.y, ty); } catch (e) { log("set(elem) blad:", e.message); } markUrgent(state, msg.x, msg.y, 0);
+					} else if ((ST._setNoTy = (ST._setNoTy || 0) + 1) <= 5) log("set: element bez typu (stary klient?) — pomijam, zeby nie tworzyc martwej komorki");
+				} else {
+					const sc = findApi("setCellId");
+					if (sc) { sc(state, msg.x, msg.y, msg.c); markUrgent(state, msg.x, msg.y, 0); }
+					else log("BŁĄD: brak API setCellId");
+				}
 			} else if (msg.k === "place") {
 				// klient poprosił o postawienie — host stawia AUTORYTATYWNIE. force=true: ufamy walidacji
 				// klienta (kontrola kolizji przeszła u niego), więc pomijamy kontrolę hosta podając
@@ -2285,6 +2439,7 @@
 					seen.add(structKey(st)); actual.push(slimStruct(st));
 					const b = structureBounds(state, SA, st, s.x, s.y); if (b) bounds.push(b);
 				}
+				log("HOST demolish: prosba o " + ((msg.list||[]).length) + " struktur, znaleziono u siebie " + actual.length + (actual.length ? "" : " — NIC do usuniecia (wspolrzedne nie trafiaja?)"));
 				ST._applyingNet = true;
 				try { for (const s of actual) removeOne(state, s); } finally { ST._applyingNet = false; }
 				if (actual.length) net.send({ t: "st", k: "rm", list: actual });
@@ -2480,7 +2635,7 @@
 				try { if (ST.FH.elements && ST.FH.elements.removeAt) ST.FH.elements.removeAt(state, msg.x, msg.y); } finally { ST._applyingNet = false; } markCellDirty(state, msg.x, msg.y);
 				const gafter = gidx >= 0 ? gsim32[gidx] : -1;
 				if ((ST._grabPickHostDiag = (ST._grabPickHostDiag || 0) + 1) <= 60)
-					log("HOST grabPick @", msg.x, msg.y, "before=" + gbefore, "after=" + gafter, gbefore >= ELEMENTS_MIN && gafter === 0 ? "[OK retiré]" : gafter === gbefore ? "[!! removeAt N'A RIEN retiré]" : "[after=" + gafter + "]");
+					((ST._pickMiss=(ST._pickMiss||0)+1)<=5) && log("HOST grabPick @", msg.x, msg.y, "before=" + gbefore, "after=" + gafter, gbefore >= ELEMENTS_MIN && gafter === 0 ? "[OK retiré]" : gafter === gbefore ? "[!! removeAt N'A RIEN retiré]" : "[after=" + gafter + "]");
 			} else if (msg.k === "grabPlace") {
 				if (!validElement(msg.et)) return; // ochrona przed starym klientem (≤0.9.8) słącym et=null → createAt crash
 				ST._applyingNet = true;
@@ -2665,6 +2820,21 @@
 		document.body.appendChild(hud);
 		for (const b of hud.querySelectorAll("button")) b.style.cssText = "background:#222;color:#ddd;border:1px solid #555;border-radius:3px;font:11px monospace;cursor:pointer;margin:1px;padding:2px 6px";
 		updatePanel(); setInterval(updatePanel, 1000); // badge/przyciski/gracze zawsze aktualne
+		// STRAŻNIK ROLI (0.9.91): renderer bierze rolę ze zdarzeń, więc zgubione/spóźnione zdarzenie
+		// (przeładowanie strony, wyścig przy ponownym łączeniu) potrafi zostawić grę w przekonaniu,
+		// że jest hostem, choć sieć wie, że jest klientem. Skutek: bramka wyrzuca KAŻDĄ akcję gracza
+		// po cichu (grabber nie podnosi, nie da się budować). Prawdą jest proces sieciowy — pytamy go.
+		setInterval(() => {
+			try {
+				net.status().then((st) => {
+					if (!st || !st.role || st.role === ST.net.role) return;
+					log("KOREKTA ROLI: gra miała \"" + ST.net.role + "\", sieć ma \"" + st.role + "\" — poprawiam");
+					ST.net.role = st.role; ST.net.transport = st.transport || ST.net.transport;
+					if (st.role !== "client") { ST.wsx.everApplied = false; setClientPaused(false); }
+					updatePanel(); if (ST._lobbyOpen) renderLobby(true);
+				}).catch(() => {});
+			} catch (e) {}
+		}, 3000);
 		hud.querySelector("#st-host").onclick = async () => { setStatus(t("creating_lobby")); const r = await net.hostSteam(); if (!r.ok) setStatus(t("error", r.error), "#f66"); };
 		hud.querySelector("#st-invite").onclick = () => net.invite();
 		hud.querySelector("#st-host-lan").onclick = async () => { const r = await net.hostWs(27777); if (!r.ok) setStatus(t("error", r.error), "#f66"); };
@@ -3643,6 +3813,35 @@
 		// HOST W MENU NIE STREAMUJE (fix "instant kick" — Akriz + derErste67): w menu bufory świata
 		// należą do SCENY MENU; streamowanie ich klientowi malowało śmieci i uruchamiało u niego
 		// auto-wyjście do menu (everApplied w menu) = klient wylatywał sekundę po dołączeniu.
+		// SPRZĄTANIE MARTWYCH KOMÓREK (0.9.100): komórka wskazuje na element, którego nie ma w tablicy
+		// (typ = 0) => nic za nią nie stoi: rysuje się na czerwono, nie da się jej usunąć ani podnieść.
+		// Skanujemy okno wokół graczy, nie całą mapę.
+		if (ST.net.role !== "client" && state.store.scene && state.store.scene.active !== 1 && now - (ST._deadScanT || 0) > 5000) {
+			ST._deadScanT = now;
+			try {
+				const sim = state.shared.sim, W = sim.width, H = sim.height;
+				const ids = new Uint32Array(sim.cellIds.buffer, sim.cellIds.byteOffset, sim.cellIds.length);
+				const ed = sim.elementData, ety = ed && ed.type;
+				if (ety) {
+					const spots = [{ x: state.store.player.x / 4, y: state.store.player.y / 4 }];
+					for (const p of ST.peers.values()) spots.push({ x: p.tx / 4, y: p.ty / 4 });
+					let dead = 0;
+					for (const sp of spots) {
+						const cx = sp.x | 0, cy = sp.y | 0;
+						if (!(cx > 0 && cy > 0 && cx < W && cy < H)) continue;
+						const x0 = Math.max(1, cx - 120), x1 = Math.min(W - 2, cx + 120);
+						const y0 = Math.max(1, cy - 90), y1 = Math.min(H - 2, cy + 90);
+						for (let y = y0; y <= y1 && dead < 400; y++) for (let x = x0; x <= x1 && dead < 400; x++) {
+							const cid = ids[x + y * W];
+							if (cid < ELEMENTS_MIN || cid > ELEMENTS_MAX) continue;
+							if ((ety[cid - ELEMENTS_MIN] | 0) !== 0) continue;   // element żyje — zostaw
+							ids[x + y * W] = 0; dead++;                          // martwy slot — komórka do skasowania
+						}
+					}
+					if (dead) { log("SPRZATANIE: usunieto " + dead + " martwych komorek (element bez wpisu w tablicy)"); enqueueAround(state, spots); }
+				}
+			} catch (e) { if (!ST._deadErrLogged) { ST._deadErrLogged = true; log("sprzatanie martwych komorek blad:", e.message); } }
+		}
 		if (isHostSync() && state.store.scene && state.store.scene.active !== 1) {
 			scanDirty(state);
 			maybeSendBatch(state);
