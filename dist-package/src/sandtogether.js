@@ -1617,7 +1617,8 @@
 				}
 			}
 			if (msg.pg && state.store.progression) Object.assign(state.store.progression, msg.pg);
-			if (performance.now() - (ST._techRepairT || 0) > 20000) { ST._techRepairT = performance.now(); techRepair(state, "client"); }
+			// auto-naprawa (0.9.71) tylko gdy klient JEST w swiecie z dzialajacym lustrem (nie w menu / nie w trakcie loadu)
+			if (ST.wsx.everApplied && !ST._loadingWorld && performance.now() - (ST._techRepairT || 0) > 20000) { ST._techRepairT = performance.now(); techRepair(state, "client"); }
 				ST._resSnapshot = Object.assign({}, state.store.resources); // re-baza dla przyrostów klienta (dotNine)
 		} catch (e) {}
 	}
