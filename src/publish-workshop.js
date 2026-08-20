@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.66 + v0.9.67 — GAME UPDATE COMPATIBILITY: Sandustry Update #2 (v0.5.5, Aug 19) renamed game internals and most of the mod stopped working on the new build ("only the host can mine" — reports: Drewby, Tobi1Kenobi). All 22 file patches now have 0.5.5 variants, verified on the new build and still compatible with 0.5.2-0.5.4. IMPORTANT: both players must be on the SAME game version and let the mod auto-update at launch (the red warning in the panel tells you when builds differ). Also: deleting PIPES no longer deletes blocks in the selection too (report: TCentraL). Auto-updates at next launch.',
+    changeNote: 'v0.9.68-beta — RELOAD LOOP fixed for good (report: ZeroHazard): (1) the quit-to-title auto-leave no longer fires DURING the mod’s own world load (the scene passes through the menu mid-load, which used to disconnect and re-transfer forever), (2) the received world auto-loads only ONCE per session (repeated transfers just import quietly), (3) the host’s automatic save-send has a 20 s cooldown so reconnect cycles cannot spam transfers. The high latency right after joining a big map is the first full sync and settles by itself. Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

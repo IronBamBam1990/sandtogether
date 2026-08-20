@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-20 (v0.9.68) — the reload loop, part 2 (report: ZeroHazard)
+
+Three belt-and-suspenders fixes against the client reloading the world every ~10 seconds: (1) the "quit to title = leave session" logic no longer fires DURING the mod's own world load (the scene passes through the menu mid-load, which used to disconnect → reconnect → re-transfer → re-load, forever); (2) the received world auto-loads only ONCE per session — repeated transfers just import quietly; (3) the host's automatic save-send after a peer joins has a 20 s cooldown, so reconnect cycles on a congested link can't spam transfers. The initial high latency on big maps is the first full sync and settles by itself.
+
 ## 2026-08-20 (v0.9.67) — compatibility with game Update #2 (v0.5.5)
 
 Sandustry's Update #2 (Aug 19) renamed internals in the game bundle and 15 of the mod's 22 file patches stopped matching on the default branch — the panel still showed up (the critical frame hook survived), but client-action forwarding was dead: "only the host can mine" (reports: Drewby, Tobi1Kenobi). All patches got 0.5.5 variants, verified 22/22 on the new build AND 22/22 still matching on 0.5.2-0.5.4 (variants are additive; element/terrain enums confirmed unchanged). The repo also gained `src/check-anchors.js` — one command that audits every patch anchor against any game build, so the next game update takes minutes, not hours. Both players must update the mod AND be on the same game version.

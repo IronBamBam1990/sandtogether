@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.67-beta";
+	const VER = "0.9.68-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -402,7 +402,7 @@
 				ST.net.role = "client"; ST.net.transport = ev.transport;
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; ST.wsx.wasInWorld = false; // nowa sesja klienta
 				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
-				ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
+				ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; // stan z poprzedniej sesji = inne współrzędne/świat
@@ -419,8 +419,15 @@
 				if (ST.net.role === "host") {
 					const hostInWorld = ST.state && ST.state.store && ST.state.store.scene && ST.state.store.scene.active !== 1;
 					// nowy gracz -> pełny świat (mirror); TYLKO gdy host w świecie — w menu wymiary/bufory
-					// należą do sceny menu (i tak nie streamujemy, patrz gate w frame hooku)
-					if (hostInWorld) { enqueueFullWorld(); sendWorld(); } // save automatycznie, bez ręcznego "Wyślij świat"
+					// należą do sceny menu (i tak nie streamujemy, patrz gate w frame hooku).
+					// Cooldown 20 s na AUTO-wysyłkę save'a: cykl peer-hello (reconnecty przy przeciążonym P2P)
+					// spamował transferami = pętla przeładowań u klienta (ZeroHazard). Ręczny "Wyślij świat"
+					// i world-req klienta działają bez cooldownu (mają własne guardy).
+					if (hostInWorld) {
+						enqueueFullWorld();
+						if (performance.now() - (ST._autoSendT || 0) > 20000) { ST._autoSendT = performance.now(); sendWorld(); }
+						else log("auto-send save POMINIĘTY (cooldown 20 s po poprzednim)");
+					}
 				}
 			} else if (ev.kind === "peer-disconnected") {
 				if (ST.state) profileSave(ST.state); // utrwal profil PRZED ewentualną zmianą stanu (G7-lite)
@@ -622,7 +629,11 @@
 				const saveId = r && r.metaData && r.metaData.id;
 				// PĘTLA PRZEŁADOWAŃ (fix TCentraL "reloading the same map over and over"): kolejny transfer
 				// tego samego świata NIE wyrywa gracza z gry — gdy lustro już działa albo load w toku, nie ładujemy.
-				if (ST.wsx.everApplied || ST._loadingWorld) { log("auto-load POMINIĘTY (lustro działa / load w toku) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
+				// auto-load TYLKO RAZ na sesję (fix ZeroHazard "reload every 10 s"): powtórzony transfer
+				// (np. cykl peer-hello przy przeciążonym P2P) nie może w kółko wyrywać gracza do loadu —
+				// kolejne save'y tylko importujemy; gracz może je wczytać ręcznie przez Load Game.
+				if (ST.wsx.everApplied || ST._loadingWorld || ST._autoLoadedOnce) { log("auto-load POMINIĘTY (lustro działa / load w toku / już auto-wczytano w tej sesji) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
+				ST._autoLoadedOnce = true;
 				if (saveId && ST.FH && ST.FH.game && typeof ST.FH.game.load === "function" && ST.state) {
 					try {
 						ST._loadingWorld = true; // lustro NIE pisze po buforach w trakcie load (fix freeze na dużej mapie)
@@ -3349,7 +3360,9 @@
 			// POWRÓT DO MENU TYTUŁOWEGO = wyjście z sesji (sugestia tony.s.jennette): po tym jak lustro
 			// już działało (everApplied) I klient był w świecie, scena 1 oznacza świadome wyjście —
 			// rozłączamy czysto zamiast zostawiać sesję w limbo. (Przed pierwszym światem klient CZEKA w menu.)
-			if (ST.wsx.everApplied && ST.wsx.wasInWorld && state.store.scene && state.store.scene.active === 1) {
+			// !_loadingWorld: podczas NASZEGO FH.game.load scena przelatuje przez menu — auto-wyjście
+			// w tym oknie robiło net.stop() → reconnect → nowy transfer → load → PĘTLA (raport ZeroHazard)
+			if (ST.wsx.everApplied && ST.wsx.wasInWorld && !ST._loadingWorld && state.store.scene && state.store.scene.active === 1) {
 				log("Klient wrócił do menu tytułowego — opuszczam sesję co-op");
 				profileSave(state); // pozycja/ekwipunek per świat — PRZED zdjęciem pauzy (profileSave wymaga paused)
 				setClientPaused(false);
