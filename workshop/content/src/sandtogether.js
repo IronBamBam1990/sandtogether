@@ -1309,6 +1309,30 @@
 	function removeOne(state, s) {
 		try { const SA = structNs(); if (SA) SA.removeAt(state, s.x, s.y, {}); } catch (e) { log("removeOne error:", e.message); }
 	}
+	// Resolve the footprint while the structure is still alive. Foundation data has changed shape
+	// between game builds, whereas getAtCell is the game's authoritative shape lookup. Walk only
+	// cells belonging to this exact structure, then retain their bounding box for orphan cleanup.
+	function structureBounds(state, SA, st, seedX, seedY) {
+		if (!SA || !st) return null;
+		const key = structKey(st), q = [[seedX, seedY]], seen = new Set();
+		let x0 = seedX, y0 = seedY, x1 = seedX, y1 = seedY, cells = 0;
+		while (q.length && cells < 4096) {
+			const [x, y] = q.pop(), ck = x + "," + y;
+			if (seen.has(ck)) continue;
+			seen.add(ck);
+			let at = null; try { at = SA.getAtCell(state, x, y); } catch (e) {}
+			if (!at || (at !== st && structKey(at) !== key)) continue;
+			cells++;
+			if (x < x0) x0 = x; if (x > x1) x1 = x;
+			if (y < y0) y0 = y; if (y > y1) y1 = y;
+			q.push([x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]);
+		}
+		return cells ? { x0, y0, x1, y1 } : null;
+	}
+	function armDemolCleanup(bounds) {
+		if (!bounds || !bounds.length) return;
+		ST._hostDemolRect = { bounds, t: performance.now(), cleanOrphans: true };
+	}
 
 	function applyNetStructs(msg) {
 		const state = ST.state;
@@ -1904,7 +1928,23 @@
 					const sel = ST.FH.action && ST.FH.action.getSelected && ST.FH.action.getSelected(state);
 					if (sel && String(sel.id).toLowerCase().indexOf("pipe") >= 0) return false;
 				} catch (e) {}
-				ST._hostDemolRect = { x0: Math.floor(Math.min(start.x, end.x)), y0: Math.floor(Math.min(start.y, end.y)), x1: Math.ceil(Math.max(start.x, end.x)), y1: Math.ceil(Math.max(start.y, end.y)), t: performance.now() };
+				// Capture each selected structure's real footprint BEFORE the game removes it. The drag
+				// rectangle only selects structures; it does not describe their foundation geometry.
+				try {
+					const SA = structNs();
+					const x0 = Math.floor(Math.min(start.x, end.x)), y0 = Math.floor(Math.min(start.y, end.y));
+					const x1 = Math.ceil(Math.max(start.x, end.x)), y1 = Math.ceil(Math.max(start.y, end.y));
+					const found = new Map(), bounds = [];
+					if (SA && (x1 - x0 + 1) * (y1 - y0 + 1) <= 40000) {
+						for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+							let st = null; try { st = SA.getAtCell(state, x, y); } catch (e) {}
+							if (!st || found.has(structKey(st))) continue;
+							found.set(structKey(st), st);
+							const b = structureBounds(state, SA, st, x, y); if (b) bounds.push(b);
+						}
+					}
+					armDemolCleanup(bounds);
+				} catch (e) { log("demolish bounds error:", e.message); }
 				return false; // gra rozbiera normalnie; my tylko posprzątamy po niej
 			}
 			// rury (Pipe): osobna ścieżka w grze (Zn) — forwardujemy rect, host woła _pipeZn (eksport z patcha)
@@ -1966,24 +2006,20 @@
 				try { for (const s of msg.list) buildOne(state, s); } finally { ST._applyingNet = false; }
 				net.send({ t: "st", k: "add", list: msg.list }); // potwierdź pozostałym klientom
 			} else if (msg.k === "demolish") {
-				ST._applyingNet = true;
-				try { for (const s of msg.list) removeOne(state, s); } finally { ST._applyingNet = false; }
-				net.send({ t: "st", k: "rm", list: msg.list });
-				// fix (DwoaC): sweep osieroconych kafli uzbrajał się TYLKO na przeciągnięcia hosta —
-				// rozbiórki klienta zostawiały czerwone kafle. Uzbrajamy go bounding-boxem listy (±2).
-				if (msg.list && msg.list.length) {
-					let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-					for (const s of msg.list) { if (s.x < x0) x0 = s.x; if (s.x > x1) x1 = s.x; if (s.y < y0) y0 = s.y; if (s.y > y1) y1 = s.y; }
-					// Nowy klient przesyła DOKŁADNY rect zaznaczenia. Możemy w nim bezpiecznie posprzątać
-					// osierocone kafle fundamentu; wcześniejszy kod zgadywał obszar z anchorów struktur (+2)
-					// i przez to usuwał zdrowe, malowane fundamenty poza zaznaczeniem. Dla starego klienta
-					// zachowujemy fallback z bboxem, ale bez czyszczenia kafli.
-					const r = msg.rect;
-					const exact = r && [r.x0, r.y0, r.x1, r.y1].every(Number.isFinite) && r.x1 >= r.x0 && r.y1 >= r.y0 && (r.x1 - r.x0 + 1) * (r.y1 - r.y0 + 1) <= 40000;
-					ST._hostDemolRect = exact
-						? { x0: Math.floor(r.x0), y0: Math.floor(r.y0), x1: Math.ceil(r.x1), y1: Math.ceil(r.y1), t: performance.now(), cleanOrphans: true }
-						: { x0: x0, y0: y0, x1: x1 + 2, y1: y1 + 2, t: performance.now(), src: "client" };
+				// Resolve the client's targets on the host and snapshot their true occupied bounds before
+				// removeAt destroys the shape information needed to clean orphan foundation terrain.
+				const SA = structNs(), actual = [], bounds = [], seen = new Set();
+				for (const s of (Array.isArray(msg.list) ? msg.list : [])) {
+					if (!s || !Number.isFinite(s.x) || !Number.isFinite(s.y)) continue;
+					let st = null; try { st = SA && SA.getAtCell(state, s.x, s.y); } catch (e) {}
+					if (!st || seen.has(structKey(st))) continue;
+					seen.add(structKey(st)); actual.push(slimStruct(st));
+					const b = structureBounds(state, SA, st, s.x, s.y); if (b) bounds.push(b);
 				}
+				ST._applyingNet = true;
+				try { for (const s of actual) removeOne(state, s); } finally { ST._applyingNet = false; }
+				if (actual.length) net.send({ t: "st", k: "rm", list: actual });
+				armDemolCleanup(bounds);
 			} else if (msg.k === "upg") {
 				// zakup ulepszenia klienta (wspólna pula): ustaw poziom + odejmij koszt autorytatywnie
 				ST._applyingNet = true;
@@ -3301,11 +3337,14 @@
 				ST._hostDemolRect = null;
 				try {
 					const SA = structNs();
-					if (SA && (hd.x1 - hd.x0 + 1) * (hd.y1 - hd.y0 + 1) <= 40000) {
+					const cleanupBounds = Array.isArray(hd.bounds) ? hd.bounds : [];
+					const cleanupArea = cleanupBounds.reduce((n, b) => n + (b.x1 - b.x0 + 1) * (b.y1 - b.y0 + 1), 0);
+					if (SA && cleanupBounds.length && cleanupArea <= 40000) {
 						const leftovers = new Map();
-						for (let y = hd.y0; y <= hd.y1; y++) for (let x = hd.x0; x <= hd.x1; x++) {
-							try { const st = SA.getAtCell(state, x, y); if (st) leftovers.set(structKey(st), st); } catch (e) {}
-						}
+						for (const bound of cleanupBounds)
+							for (let y = bound.y0; y <= bound.y1; y++) for (let x = bound.x0; x <= bound.x1; x++) {
+								try { const st = SA.getAtCell(state, x, y); if (st) leftovers.set(structKey(st), st); } catch (e) {}
+							}
 						if (leftovers.size) {
 							log("demolish-dobicie: gra pominęła", leftovers.size, "struktur (kafle QUEUED?) — usuwam przez removeAt");
 							for (const st of leftovers.values()) { try { SA.removeAt(state, st.x, st.y, {}); } catch (e) {} }
@@ -3323,7 +3362,7 @@
 						// FH.terrains.removeAt WYŁĄCZNIE komórki bez żywej struktury (kafel Block bez struktury = śmieć).
 						// Dla klienta czyścimy kafle tylko wtedy, gdy wiadomość zawierała jego dokładny rect
 						// zaznaczenia; stare klienty z bboxem anchorów nadal omijają ten krok.
-						if (hd.src !== "client" || hd.cleanOrphans) try {
+						if (hd.cleanOrphans) try {
 							const sh = state.shared || {};
 							const simc = sh.sim && sh.sim.cellIds;
 							const tt = sh.sim && sh.sim.terrainType;
@@ -3333,12 +3372,8 @@
 							if (simc && tt && TR && TR.removeAt && W) {
 								const sim = new Uint32Array(simc.buffer, simc.byteOffset, simc.length);
 								const H = Math.floor(sim.length / W);
-								// BLOB-EXPAND (pomysł TCentraL, PR #6): od osieroconego kafla rozszerzamy się na całą
-								// przyległą plamę (czerwone klocki częściowo POZA zaznaczeniem też schodzą).
-								// Poprawki po review: (1) typy 15..18 (skosy/schody wróciły — to one były najgorsze),
-								// (2) getAtCell per KAŻDĄ komórkę plamy (plama dotykająca ZDROWEGO malowanego
-								// fundamentu nie może go zjeść), (3) bez mutowania y w środku pętli (gubiło blob-y),
-								// (4) limit ekspansji 64 komórki od seeda (bez maratonu po całej mapie).
+								// The host captured these bounds from getAtCell while each structure still existed.
+								// Clean exactly those foundation boxes; the user's drag rectangle is deliberately absent.
 								const isOrphanTile = (xx, yy) => {
 									const n = sim[xx + yy * W];
 									if (n <= 0 || n > 1000) return false;
@@ -3348,22 +3383,12 @@
 									return true;
 								};
 								let cleaned = 0;
-								const LIM = 64;
-								for (let y = hd.y0; y <= hd.y1; y++) {
-									for (let x = hd.x0; x <= hd.x1; x++) {
+								for (const bound of cleanupBounds)
+									for (let y = bound.y0; y <= bound.y1; y++) for (let x = bound.x0; x <= bound.x1; x++) {
 										if (!isOrphanTile(x, y)) continue;
-										let r = x;
-										while (r + 1 < W && r - x < LIM && isOrphanTile(r + 1, y)) r++;
-										let b = y;
-										while (b + 1 < H && b - y < LIM && isOrphanTile(x, b + 1)) b++;
-										for (let yy = y; yy <= b; yy++) for (let xx = x; xx <= r; xx++) {
-											if (!isOrphanTile(xx, yy)) continue;
-											try { TR.removeAt(state, xx, yy); cleaned++; } catch (e) {}
-										}
-										x = r; // wiersz przeskanowany do r; y zostaje (kolejne wiersze skanuje pętla zewn.)
+										try { TR.removeAt(state, x, y); cleaned++; } catch (e) {}
 									}
-								}
-								if (cleaned) log("demolish-dobicie: usunięto", cleaned, "OSIEROCONYCH kafli (blob-expand)");
+								if (cleaned) log("demolish-dobicie: usunięto", cleaned, "OSIEROCONYCH kafli (structure bounds)");
 							}
 						} catch (e) {
 							log("ORPHAN CLEANUP ERROR:", e.message);
