@@ -104,7 +104,7 @@ The full source code is on GitHub: [url=https://github.com/IronBamBam1990/sandto
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.69-beta — 简体中文! Complete Simplified Chinese translation by NanYu_sad. (contributor #7 — PR #9), auto-detected from your system language. The UI is now trilingual: English / Polski / 简体中文. Auto-updates at next launch.',
+    changeNote: 'v0.9.70-beta — PR #11 by Cr0ss0vr: after a demolition ordered by the joining player, the host now cleans the foundation tiles correctly — the cleanup captures each structure's real footprint before the game removes it instead of guessing from the drag rectangle (closes GitHub issue #10). Dragging the demolisher over old orphaned red tiles still cleans them. Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
