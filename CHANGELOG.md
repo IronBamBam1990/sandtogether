@@ -2,6 +2,10 @@
 
 *Translated from the original Polish development journal.*
 
+## 2026-08-21 (v0.9.89) — research shared by a teammate now lands instantly
+
+The tech tree has prerequisites, but incoming research was applied in whatever order it arrived, so a child node kept being refused until its parent happened to go through — the retry loop sorted it out eventually, roughly twenty seconds later and with sixty refusals in the log. Unlocks now repeat in dependency order until nothing more can be unlocked. Found by auditing every log file on disk (15k lines) rather than by a report.
+
 ## 2026-08-21 (v0.9.87 + v0.9.88) — world-transfer restart storm, and the false "OLD mod" warning
 
 A joining player could end up never receiving the world at all: they asked for the missing pieces of transfer N, the host answered by starting transfer N+1, and the joining player ignored it because "a transfer is already in progress" — forty restarts in twenty-five seconds (report and logs: Cr0ss0vr). Two safeguards added on different days were cancelling each other out. The newer transfer now always wins — pieces are already tagged per transfer, so mixing them is impossible — and the host will not restart a transfer more than once every three seconds. Measured after the fix: zero restarts where there had been forty.

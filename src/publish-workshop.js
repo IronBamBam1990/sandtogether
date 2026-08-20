@@ -101,7 +101,7 @@ Full source on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]githu
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.88-beta — CRITICAL: fixes a world-transfer restart storm that could stop the joining player from ever receiving the world (report + logs: Cr0ss0vr). Two of my own safeguards were fighting each other: the joining player asked for missing pieces of transfer N, the host answered by starting transfer N+1, and the joining player ignored it because "a transfer is already in progress" - forty restarts in twenty-five seconds. Now the newer transfer always wins (pieces are already filtered per transfer, so mixing is impossible) and the host will not restart a transfer more than once every three seconds. Also fixed: the false OLD MOD warning aimed at players who are perfectly up to date - the check now retries twice before complaining, because a player busy loading a world simply cannot answer in time. Auto-updates at next launch.',
+    changeNote: 'v0.9.89-beta — research shared by a teammate now appears INSTANTLY instead of after roughly twenty seconds. The tech tree has prerequisites, and the mod was trying to unlock incoming research in whatever order it arrived, so a child node was refused until its parent happened to go through - the retry loop eventually sorted it out, slowly and noisily. Now the unlocks repeat in dependency order until nothing more can be unlocked. Includes the previous fix for the world-transfer restart storm and the false OLD MOD warning. Auto-updates at next launch.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

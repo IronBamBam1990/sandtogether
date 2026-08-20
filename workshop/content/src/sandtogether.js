@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.88-beta";
+	const VER = "0.9.89-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1771,20 +1771,28 @@
 			// tech od hosta TYLKO gdy klient jest w swiecie z dzialajacym lustrem (0.9.72): w menu/loadzie
 			// unlockTech gry odmawia (tutorial/scena), a po reloadzie i tak wszystko przepada -> burza odmow w logu
 			if (msg.th && ST.wsx.everApplied && !ST._loadingWorld && state.store.scene && state.store.scene.active !== 1 && state.store.player && state.store.player.tech) {
-				for (const k of Object.keys(msg.th)) {
-					if (k === "undefined" || !msg.th[k] || state.store.player.tech[k]) continue;
-					if (techRefusedRecently(k)) continue;
-					// NOWY tech od hosta → PEŁNY unlock u klienta (menu budynków, itemy do ekwipunku, MAPA!)
-					// — goła flaga zostawiała UI martwe ("kolega zbadał mapę, ja jej nie mam" — ЗаКеЛьМан).
-					// "free": zapłacił host — bez sprawdzania/odejmowania kosztu u klienta (fix 0.9.71).
-					ST._applyingNet = true;
-					try {
-						const realU = techUnlock(state, k, "free");
-						if (realU === true) { state.store.player.tech[k] = true; log("SYNC: tech od drużyny odblokowany:", k, "(REAL)"); } // flaga node'a jawnie (fix podwójnego zakupu)
-						else if (realU === null) { state.store.player.tech[k] = true; try { ST.FH.events.emit(state, "tech:unlocked", { techId: k, suppressMusic: true }); } catch (e) {} log("SYNC: tech od drużyny:", k, "(FALLBACK flaga — patch _techMod nie pasuje do tego builda gry!)"); }
-						else log("SYNC: gra ODMÓWIŁA odblokowania tech od drużyny:", k, "(zablokowany/tutorial/wymagania) — ponowię za 3 s, flagi NIE stawiam");
-					} finally { ST._applyingNet = false; }
+				// KOLEJNOŚĆ ZALEŻNOŚCI (0.9.89): drzewko ma wymagania wstępne, a klucze obiektu przychodzą
+				// w dowolnej kolejności — próba "dziecka" przed "rodzicem" jest odrzucana przez grę.
+				// Powtarzamy przebieg, dopóki cokolwiek się odblokowuje (punkt stały, max 6 rund).
+				let todo = Object.keys(msg.th).filter((k) => k !== "undefined" && msg.th[k] && !state.store.player.tech[k]);
+				for (let round = 0; round < 6 && todo.length; round++) {
+					const stillTodo = [];
+					let progress = false;
+					for (const k of todo) {
+						if (state.store.player.tech[k]) continue;
+						if (round === 0 && techRefusedRecently(k)) { stillTodo.push(k); continue; }
+						ST._applyingNet = true;
+						try {
+							const realU = techUnlock(state, k, "free");
+							if (realU === true) { state.store.player.tech[k] = true; progress = true; log("SYNC: tech od drużyny odblokowany:", k, "(REAL)"); }
+							else if (realU === null) { state.store.player.tech[k] = true; progress = true; try { ST.FH.events.emit(state, "tech:unlocked", { techId: k, suppressMusic: true }); } catch (e) {} log("SYNC: tech od drużyny:", k, "(FALLBACK flaga — patch _techMod nie pasuje do tego builda gry!)"); }
+							else stillTodo.push(k);
+						} finally { ST._applyingNet = false; }
+					}
+					todo = stillTodo;
+					if (!progress) break; // nic nie ruszyło — dalsze rundy nic nie dadzą, spróbujemy za 3 s
 				}
+				if (todo.length && !ST._techPendLogged) { ST._techPendLogged = true; log("SYNC: " + todo.length + " tech od drużyny czeka na wymagania (" + todo.join(",") + ") — ponowię"); }
 			}
 			// auto-naprawa (0.9.71) tylko gdy klient JEST w swiecie z dzialajacym lustrem (nie w menu / nie w trakcie loadu)
 			if (ST.wsx.everApplied && !ST._loadingWorld && performance.now() - (ST._techRepairT || 0) > 20000) { ST._techRepairT = performance.now(); techRepair(state, "client"); }
