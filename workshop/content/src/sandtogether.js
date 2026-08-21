@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.137-beta";
+	const VER = "0.9.138-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -622,6 +622,7 @@
 			p.mwx = typeof msg.mwx === "number" ? msg.mwx : null;
 			p.mwy = typeof msg.mwy === "number" ? msg.mwy : null;
 			p.bt = msg.bt != null ? msg.bt : null;
+			p.btT = msg.bt != null ? performance.now() : 0; // 0.9.138: znacznik swiezosci — fantom gasnie po 2 s
 			p.boffs = Array.isArray(msg.boffs) ? msg.boffs : null;
 			if (p.x === 0 && p.y === 0) { p.x = msg.x; p.y = msg.y; }
 		} else if (msg.t === "hello") {
@@ -4042,7 +4043,7 @@
 				if (cur.x < -80 || cur.y < -80 || cur.x > gc.width + 80 || cur.y > gc.height + 80) continue;
 				const s1 = worldToScreen(state, p.mwx + 4, p.mwy); // +1 komórka (=4 world) → piksele/komórkę (skala zoomu)
 				let ppc = Math.abs(s1.x - cur.x); if (!(ppc > 0.5)) ppc = 6;
-				if (p.bt != null && Array.isArray(p.boffs) && p.boffs.length) {
+				if (p.bt != null && p.btT && performance.now() - p.btT < 2000 && Array.isArray(p.boffs) && p.boffs.length) {
 					// FANTOM POZY — prostokąty tam, gdzie gracz zaraz postawi (pierwszy offset = pod kursorem)
 					const base = p.boffs[0];
 					ctx.save();
