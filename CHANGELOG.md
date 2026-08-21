@@ -1,3 +1,13 @@
+## 0.9.132-beta
+
+**The client kept its own progression after joining - tools, research and buildings from its previous
+game.** The client received the host save but the reload-loop guard skipped loading it, so the save was
+only imported: the mirror painted the host terrain into the buffers of a *different* world and everything
+looked right, while the player store stayed local. Measured on a fresh host world: host 4 items / 1 tech,
+client 21 items. The rescue load used to require that the mirror had never started, which is never true
+once the mod trusts a freshly received world id - the condition is now simply "my world id differs from
+the one the host plays in", rate limited to once every 30 seconds so it cannot loop.
+
 ## 0.9.131-beta
 
 **Tools worked once and then died on the client - digging in particular.** Weapon cooldowns are game-time

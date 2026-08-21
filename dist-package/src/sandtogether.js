@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.131-beta";
+	const VER = "0.9.132-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -827,10 +827,12 @@
 				// sesji = tylko import, bez auto-loadu.
 								// 0.9.116: WYJATEK — jestem w swiecie, ale w INNYM niz host i lustro nigdy nie ruszylo.
 				// Bez tego klient po restarcie renderera zostaje z zamrozonym obrazem az do recznego Load Game.
-				const inWrongWorld = !ST.wsx.everApplied && ST._hostWidSeen &&
+				// 0.9.132: samo lustro nie wystarcza — gracz musi BYC w swiecie hosta, inaczej jego postep
+				// (ekwipunek, badania, budynki) zostaje z poprzedniej gry.
+				const inWrongWorld = ST._hostWidSeen &&
 					ST.state && ST.state.store.meta && ST.state.store.meta.worldId !== ST._hostWidSeen &&
 					Date.now() - (ST._rescueLoadT || 0) > 30000;
-				if (inWrongWorld) { ST._rescueLoadT = Date.now(); log("RATUNKOWY auto-load: jestem w swiecie", ST.state.store.meta.worldId, "a host gra w", ST._hostWidSeen, "— wczytuje swiat hosta"); }
+				if (inWrongWorld) { ST._rescueLoadT = Date.now(); log("WCZYTUJE SWIAT HOSTA: jestem w", ST.state.store.meta.worldId, "host gra w", ST._hostWidSeen, "— bez tego moj postep zostalby z poprzedniej gry"); }
 				if (!inWrongWorld && saveId && autoLoadDoneBefore(saveId)) { log("auto-load POMINIĘTY (ten save hosta był już auto-wczytany w tej sesji — guard po reloadzie) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
 				// PĘTLA PRZEŁADOWAŃ (fix TCentraL "reloading the same map over and over"): kolejny transfer
 				// tego samego świata NIE wyrywa gracza z gry — gdy lustro już działa albo load w toku, nie ładujemy.
@@ -1392,6 +1394,7 @@
 			if (!ST.wsx.mismatchLogged) { ST.wsx.mismatchLogged = true; log("REJECT world: worldId host=" + msg.wid + " me=" + myWid + " scene h/c=" + msg.scene + "/" + myScene); }
 				return;
 			}
+			ST._hostWidSeen = msg.wid; // 0.9.132: swiat hosta znamy takze wtedy, gdy paczke przyjmujemy
 			if (ST._trustedWid !== msg.wid) log("worldId różni się po auto-load, ale ufam (świeżo odebrany od hosta):", msg.wid);
 			ST._trustedWid = msg.wid; ST._trustedMyWid = myWid; ST._pendingTrustUntil = 0;
 			ST._gotHostWorld = false; // jednorazowe — od teraz rządzi para (hostWid, myWid)
