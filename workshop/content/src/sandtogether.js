@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.135-beta";
+	const VER = "0.9.137-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -489,7 +489,7 @@
 				ST.net.role = "client"; ST.net.transport = ev.transport;
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; ST.wsx.wasInWorld = false; // nowa sesja klienta
 				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
-				ST._mirrorKickN = 0; ST._mirrorKickT = 0; if (ST._structSig) ST._structSig.clear(); try { sessionStorage.removeItem("st_rescue_n"); } catch (e) {} if (ST._applyQ) ST._applyQ.length = 0; ST._greeted.clear(); ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
+				ST._mirrorKickN = 0; ST._mirrorKickT = 0; if (ST._structSig) ST._structSig.clear(); if (ST._snapRest) ST._snapRest.length = 0; try { sessionStorage.removeItem("st_rescue_n"); } catch (e) {} if (ST._applyQ) ST._applyQ.length = 0; ST._greeted.clear(); ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._directMode = false; ST._directAddr = null; autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
@@ -1830,7 +1830,13 @@
 					const k = structKey(s);
 					const sig = (s.t != null ? s.t : "") + "|" + (s.v != null ? s.v : "") + "|" + (s.q ? 1 : 0);
 					if (ST._structSig.get(k) === sig) { skipped++; ST._structApplied.set(k, nowS); continue; }
-					if (built > 200 && performance.now() - tSlice > 8) { deferred++; continue; } // reszta w kolejnym snapshocie
+					if (built > 200 && performance.now() - tSlice > 8) {
+						// 0.9.137: NIE porzucamy reszty — host moze nigdy nie przyslac kolejnego snapshotu
+						// (pomija wysylke, gdy zbior struktur bez zmian), a wtedy te struktury nie powstana.
+						if (!ST._snapRest) ST._snapRest = [];
+						ST._snapRest.push(s);
+						deferred++; continue;
+					}
 					buildOne(state, s, true);
 					ST._structSig.set(k, sig);
 					ST._structApplied.set(k, nowS);
@@ -4143,6 +4149,44 @@
 		// HOST W MENU NIE STREAMUJE (fix "instant kick" — Akriz + derErste67): w menu bufory świata
 		// należą do SCENY MENU; streamowanie ich klientowi malowało śmieci i uruchamiało u niego
 		// auto-wyjście do menu (everApplied w menu) = klient wylatywał sekundę po dołączeniu.
+		// OSIEROCONE KAFLE (0.9.136): kafel fundamentu (terrain Block 15..18) bez zywej struktury to smiec,
+		// ktory renderuje sie na czerwono i ktorego gra sama nie usunie. Sprzatamy okolice graczy co 5 s,
+		// z potwierdzeniem w drugim przebiegu (kafel w trakcie stawiania bywa chwilowo "bez struktury").
+		if (ST.net.role !== "client" && state.store.scene && state.store.scene.active !== 1 && now - (ST._orphanScanT || 0) > 5000) {
+			ST._orphanScanT = now;
+			try {
+				const sim = state.shared.sim, W = sim.width;
+				const ids = new Uint32Array(sim.cellIds.buffer, sim.cellIds.byteOffset, sim.cellIds.length);
+				const tt = sim.terrainType, TR = ST.FH.terrains, SA = structNs();
+				if (ids && tt && TR && TR.removeAt && SA && SA.getAtCell) {
+					if (!ST._orphanSeen) ST._orphanSeen = new Map();
+					const spots = [{ x: state.store.player.x / 4, y: state.store.player.y / 4 }];
+					for (const p of ST.peers.values()) spots.push({ x: p.tx / 4, y: p.ty / 4 });
+					const widziane = new Set();
+					let usuniete = 0;
+					for (const sp of spots) {
+						const cx = sp.x | 0, cy = sp.y | 0;
+						if (!(cx > 0 && cy > 0 && cx < W)) continue;
+						const x0 = Math.max(1, cx - 160), x1 = Math.min(W - 2, cx + 160);
+						const y0 = Math.max(1, cy - 120), y1 = Math.min(sim.height - 2, cy + 120);
+						for (let y = y0; y <= y1 && usuniete < 300; y++) for (let x = x0; x <= x1 && usuniete < 300; x++) {
+							const i = x + y * W, id = ids[i];
+							if (id <= 0 || id > 1000) continue;
+							const ty = tt[id];
+							if (ty < 15 || ty > 18) continue;          // tylko kafle fundamentu/bloku
+							try { if (SA.getAtCell(state, x, y)) continue; } catch (e) { continue; }
+							widziane.add(i);
+							const od = ST._orphanSeen.get(i);
+							if (!od) { ST._orphanSeen.set(i, now); continue; }   // pierwszy raz — daj mu szanse
+							if (now - od < 6000) continue;
+							try { TR.removeAt(state, x, y); markCellDirty(state, x, y); usuniete++; ST._orphanSeen.delete(i); } catch (e) {}
+						}
+					}
+					for (const k of ST._orphanSeen.keys()) if (!widziane.has(k)) ST._orphanSeen.delete(k); // juz nie osierocony
+					if (usuniete) log("SPRZATANIE: usunieto", usuniete, "osieroconych kafli fundamentu (czerwone klocki bez struktury)");
+				}
+			} catch (e) { if (!ST._orphanErrLogged) { ST._orphanErrLogged = true; log("sprzatanie osieroconych kafli blad:", e.message); } }
+		}
 		// SPRZĄTANIE MARTWYCH KOMÓREK (0.9.100): komórka wskazuje na element, którego nie ma w tablicy
 		// (typ = 0) => nic za nią nie stoi: rysuje się na czerwono, nie da się jej usunąć ani podnieść.
 		// Skanujemy okno wokół graczy, nie całą mapę.
@@ -4251,6 +4295,25 @@
 		}
 		// 0.9.130: znaczniki cooldownow potrafia trafic "w przyszlosc" po kazdym imporcie swiata/profilu
 		if (now - (ST._cdFixT || 0) > 5000) { ST._cdFixT = now; fixFutureCooldowns(state, "kontrola cykliczna"); }
+		// 0.9.137: dokoncz odbudowe struktur odlozonych przez ciecie pracy (patrz wyzej).
+		if (isClientSync() && ST._snapRest && ST._snapRest.length && !ST._loadingWorld) {
+			try {
+				const t0 = performance.now();
+				let n = 0;
+				while (ST._snapRest.length && performance.now() - t0 < 6) {
+					const s2 = ST._snapRest.pop();
+					if (!s2) continue;
+					const k2 = structKey(s2);
+					const sig2 = (s2.t != null ? s2.t : "") + "|" + (s2.v != null ? s2.v : "") + "|" + (s2.q ? 1 : 0);
+					if (ST._structSig && ST._structSig.get(k2) === sig2) continue;
+					buildOne(state, s2, true);
+					if (ST._structSig) ST._structSig.set(k2, sig2);
+					if (ST._structApplied) ST._structApplied.set(k2, Date.now());
+					n++;
+				}
+				if (n && (ST._restDiag = (ST._restDiag || 0) + 1) <= 20) log("SNAP: dokonczono", n, "odlozonych struktur, zostalo", ST._snapRest.length);
+			} catch (e) { if (!ST._restErr) { ST._restErr = 1; log("dokanczanie struktur blad:", e.message); } }
+		}
 		if (isClientSync()) {
 			// Heartbeat re-pauzy (fix G1): ESC-menu gry śle własne SetPaused(false) przy zamknięciu i cicho
 			// wznawiało symulację klienta (nasza flaga wciąż true → setClientPaused nie re-pauzowało) →

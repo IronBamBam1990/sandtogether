@@ -1,3 +1,21 @@
+## 0.9.137-beta
+
+**The client was silently missing structures — measured: host 1019, client 841.** Foundation tiles arrive
+through the world mirror, but the structures themselves are rebuilt on the client from snapshots. 0.9.102
+added slicing so a 90k-structure snapshot could not freeze a frame, deferring the remainder "to the next
+snapshot" — while the host skips sending a snapshot at all when its structure set has not changed. The
+deferred remainder therefore had nowhere to come from and those structures were never built, leaving their
+tiles rendered red. The client now keeps the remainder and finishes it over the following frames on its
+own; verified live going from 841 back to 1019 with the mirror untouched.
+
+**Orphaned foundation tiles are swept continuously, not only inside a remembered demolition rectangle.**
+A tile of a building type with no live structure is garbage that renders red and that the game will not
+clean up itself. Measured after a client-side deletion: 12 such tiles at identical coordinates on host and
+client, so the mirror was faithful and the garbage was real, sitting in the host world. Host and solo now
+scan around the players every 5 seconds and remove tiles confirmed orphaned across two passes, six seconds
+apart, so a tile that is merely queued for placement is never taken. Verified with nine synthetic orphans:
+all nine removed on the next pass.
+
 ## 0.9.135-beta
 
 **Progression now travels from the host instead of being chased through world ids.** 0.9.132 made the
