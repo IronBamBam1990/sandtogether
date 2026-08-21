@@ -20,7 +20,7 @@ const DESCRIPTION = `[h1]SandTogether — Co-op Multiplayer for Sandustry[/h1]
 Play Sandustry together in ONE living world — the same sand, the same factory, the same fluids, streamed live between players. Up to 4 players, over the internet or on a LAN.
 
 [h2]⚠ AFTER SUBSCRIBING — READ THIS (ONE-TIME setup)[/h2]
-[b]Installed between Aug 18 and Aug 20?[/b] Run the installer ONE more time — a bug in those builds silently broke the auto-updater, so your game kept an old copy of the mod no matter what the Workshop delivered. Fixed from v0.9.72; after that single re-run, updates are automatic again.
+[b]Installed an early August build and never see updates?[/b] Run the installer ONE more time — a bug in those builds silently broke the auto-updater, so the game kept an old copy of the mod. Every build since fixes itself no matter what the Workshop delivered. Fixed from v0.9.72; after that single re-run, updates are automatic again.
 
 Sandustry has no mod loader yet, so after subscribing you run the installer [b]once[/b]:
 [olist]
@@ -51,11 +51,14 @@ Then press [b]Load last save & PLAY[/b] (or pick a save) — your world is sent 
 [*] One shared factory: build, demolish, move, copy-paste blueprints, pipes, signal wiring and buttons — from both sides
 [*] Shared team progression: research and upgrades pool, tech tree, story steps, objectives, critter collection, factory processes — with automatic repair of research broken by older versions
 [*] See your teammates: real player models with equipped tools, build ghosts, grabber crosshairs, off-screen arrows, team chat
-[*] Per-player memory: rejoin a world and you are back where you left off, with your inventory
+[*] Rejoin a world and you are back where you left off. Progression — tools, research, upgrades and unlocked buildings — belongs to the host world, so everyone in the session shares it
 [*] Steam achievements keep working; the panel warns in red if mod versions or game builds differ
 [*] Trilingual UI: English / Polski / 简体中文 (Simplified Chinese by NanYu_sad.), picked from your system language
 [*] Windows, macOS and Linux
 [/list]
+
+[h2]Performance[/h2]
+The world is streamed as changed rows only, compressed, and — between players on the same mod over LAN or a direct connection — as raw binary frames instead of text, which removes a quarter of the bytes and all of the encoding work. Incoming world data is applied in slices across frames, so a big packet never freezes the picture: measured on a full-size world, the worst client frame dropped from 237 ms to about 16 ms while throughput rose past 20 MB/s. The host adapts its send rate to what the link and the slowest client can actually take.
 
 [h2]The SandTogether panel (top-right)[/h2]
 [list]
