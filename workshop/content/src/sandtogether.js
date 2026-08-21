@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.120-beta";
+	const VER = "0.9.126-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -719,7 +719,7 @@
 		} else if (msg.t === "vacres") {
 			if (ST.net.role === "client") clientFillTanks(msg.types || []);
 		} else if (msg.t === "grabres") {
-			if (ST.net.role === "client") clientFillGrabTank(msg.types || [], msg.offs || null, msg.sl || null);
+			if (ST.net.role === "client") { ST._grabInFlight = false; clientFillGrabTank(msg.types || [], msg.offs || null, msg.sl || null, msg.bx, msg.by); }
 		} else if (msg.t === "grabRef") {
 			// REFUND odkładania (R5): host nie zdołał położyć elementu (komórka zajęta) → oddaj do tanku
 			if (ST.net.role === "client" && typeof msg.et === "number" && msg.et > 0) clientFillGrabTank([msg.et], null);
@@ -2181,12 +2181,21 @@
 			if (!isClientSync() || !ST.wsx.paused) return false; // host/offline lub klient poza światem hosta
 			const B = tool && tool.data && tool.data.matrix;
 			if (!B) return false;
-			if (B[1] > 0) return false; // tank ma zawartość → tryb PLACE → nie przechwytuj (odkładanie działa)
+			// 0.9.121: zawartość tanku NIE kończy zbierania. W grze liczy się TYLKO trzymanie przycisku
+			// (action.state[Active]) — dosypujemy do wolnych slotów aż do pełna. Wcześniejszy skrót
+			// "tank niepusty = tryb odkładania" zatrzymywał klienta po pierwszym złapanym elemencie.
+			const size = tankSize(tool, B);              // ILE slotow jest aktywnych (ustawienie gracza)
+			const tankCount = syncTankHeader(B, size);   // naglowek zgodny z gra (jak z() + kontrola w H())
+			const tankFull = tankCount >= size;
+			if (tankFull) return false; // pełny tank → nic nie zbierzemy, oddaj sterowanie grze (odkładanie)
 			// KLUCZ: zbieraj TYLKO gdy gracz aktywnie grabuje (trzyma przycisk) → action.state[qy.Active=2].
 			// Bez tego forwardowaliśmy w kółko i grabber "brał" bez klikania (element od razu spadał). (fix user)
 			const ast = state.session && state.session.action && state.session.action.state;
 			if (!ast || !ast[2]) return false; // brak akcji → pozwól z() zrobić hover (bez pobierania)
 			const now = performance.now();
+			// jedna prosba naraz: dopoki host nie odpowie, nasza mapa wolnych slotow jest nieaktualna,
+			// a host zbieralby w sloty, ktore juz sa zajete — i material by przepadal.
+			if (ST._grabInFlight && now - (ST._grabInFlightT || 0) < 500) return true;
 			if (now - (ST._lastGrabH || 0) > 33) { // gra zbiera co klatke — 10 impulsow/s bylo za wolno przy przeciaganiu
 				ST._lastGrabH = now;
 				const m = state.session && state.session.input && state.session.input.mouse;
@@ -2195,12 +2204,12 @@
 					// policz WOLNE sloty tanku i wyślij hostowi — host zbierze najwyżej tyle
 					// (bez tego host niszczył do 48 elementów, a nadmiar ponad pojemność tanku PRZEPADAŁ)
 					let free = 0;
-					const slots = B.length - 2;
+					const slots = size; // tylko aktywne sloty — reszta tablicy to alokacja, gra jej nie widzi
 					const mask = new Uint8Array((slots + 7) >> 3);
 					for (let i = 0; i < slots; i++) if (B[i + 2] === 0) { free++; mask[i >> 3] |= 1 << (i & 7); }
 					if (free > 0) {
 						ST._grabTool = tool; // zapamiętaj do wypełnienia tanku po odpowiedzi hosta
-						try { net.send({ t: "act", k: "grabH", x: cp.x | 0, y: cp.y | 0, f: free, lt: B[0] || 0, n: Math.round(Math.sqrt(slots)), fm: b64enc(mask) }); } catch (e) {} // n = bok siatki tanku, fm = mapa wolnych slotow
+						try { net.send({ t: "act", k: "grabH", x: cp.x | 0, y: cp.y | 0, f: free, lt: B[0] || 0, n: Math.round(Math.sqrt(slots)), fm: b64enc(mask) }); ST._grabInFlight = true; ST._grabInFlightT = now; if (ST._grabStat) ST._grabStat.prosby++; else ST._grabStat = { przyslane: 0, wTanku: 0, oddane: 0, przepadle: 0, prosby: 1 }; } catch (e) {} // n = bok siatki tanku, fm = mapa wolnych slotow
 						if ((ST._grabHDiag = (ST._grabHDiag || 0) + 1) <= 40) log("CLIENT grabH forward @", cp.x | 0, cp.y | 0, "free=" + free, "lock=" + (B[0] || 0));
 					}
 				}
@@ -2209,6 +2218,19 @@
 		} catch (e) { return false; }
 	};
 	// HOST: zbierz grabbable elementy w promieniu wokół (x,y), usuń, odeślij typy klientowi (jak vacuum).
+	// Czastka scalona: elementType mowi tylko "to czastka", material jest pod linkedElementIndex.
+	// Bez tego tank klienta dostawal typ techniczny zamiast np. zlota (user: "nie merguje sie poprawnie").
+	function resolveGrabType(state, info) {
+		let ty = info && info.elementType ? info.elementType | 0 : 0;
+		try {
+			if (info && info.isParticle && typeof info.elementIndex === "number") {
+				const ed = state.shared.sim.elementData;
+				const li = ed && ed.linkedElementIndex ? ed.linkedElementIndex[info.elementIndex] : -1;
+				if (li >= 0 && ed && ed.type) { const rt = ed.type[li] | 0; if (rt > 0) ty = rt; }
+			}
+		} catch (e) {}
+		return ty;
+	}
 	function hostHarvestGrab(msg, fromId) {
 		const state = ST.state;
 		if (!state || !ST.FH) return;
@@ -2262,14 +2284,16 @@
 					const info = getInfo(state, x, y);
 					if (!info || !info.elementType) continue;
 					if (info.isGrabbable === false) continue;
-					const cfg = el.getConfig ? el.getConfig(info.elementType) : null;
+					const ety = resolveGrabType(state, info); // czastka scalona -> prawdziwy material
+					if (!ety) continue;
+					const cfg = el.getConfig ? el.getConfig(ety) : null;
 					if (cfg && cfg.isGrabbable === false) continue;
 					if (ST._mtLiquid !== null && cfg && cfg.matterType === ST._mtLiquid && !canLiquid) { gateSkipped++; continue; }
-					if (lockType && info.elementType !== lockType) continue;
-					if (!lockType) lockType = info.elementType;
+					if (lockType && ety !== lockType) continue; // tank przyjmuje jeden typ — porownujemy typ ROZWIAZANY
+					if (!lockType) lockType = ety;
 					removeAt(state, x, y);
 					markCellDirty(state, x, y);
-					types.push(info.elementType);
+					types.push(ety);
 					offs.push(col - mid, row - mid);
 					sl.push(idx);
 					taken++;
@@ -2284,31 +2308,57 @@
 					const info = getInfo(state, x, y);
 					if (!info || !info.elementType) continue;
 					if (info.isGrabbable === false) continue; // szanuj flagę gdy jest; gdy brak — bierz (klient celował)
-					const cfg = el.getConfig ? el.getConfig(info.elementType) : null;
+					const ety = resolveGrabType(state, info); // czastka scalona -> prawdziwy material
+					if (!ety) continue;
+					const cfg = el.getConfig ? el.getConfig(ety) : null;
 					if (cfg && cfg.isGrabbable === false) continue;
 					if (ST._mtLiquid !== null && cfg && cfg.matterType === ST._mtLiquid && !canLiquid) { gateSkipped++; continue; } // płyn bez badania waterGrab
-					if (lockType && info.elementType !== lockType) continue; // tank przyjmuje tylko JEDEN typ (jak vanilla)
-					if (!lockType) lockType = info.elementType;
+					if (lockType && ety !== lockType) continue; // tank przyjmuje tylko JEDEN typ (jak vanilla)
+					if (!lockType) lockType = ety;
 					removeAt(state, x, y);
 					markCellDirty(state, x, y);
-					types.push(info.elementType);
+					types.push(ety);
 					offs.push(dx, dy); // pozycja wzgl. kursora → klient mapuje na właściwy slot siatki tanku
 					taken++;
 				} catch (e) {}
 			}
 		}
-		if (types.length) { net.send({ t: "grabres", types, offs, sl }, fromId); if ((ST._grabHostDiag = (ST._grabHostDiag || 0) + 1) <= 40) log("HOST grabH @", msg.x, msg.y, "→ zebrano", types.length, "elementów" + (gateSkipped ? " (pominięto " + gateSkipped + " płynów — brak waterGrab)" : "")); }
+		if (types.length) { net.send({ t: "grabres", types, offs, sl, bx: msg.x, by: msg.y }, fromId); if ((ST._grabHostDiag = (ST._grabHostDiag || 0) + 1) <= 40) log("HOST grabH @", msg.x, msg.y, "→ zebrano", types.length, "elementów" + (gateSkipped ? " (pominięto " + gateSkipped + " płynów — brak waterGrab)" : "")); }
 		else if (gateSkipped && (ST._grabGateDiag = (ST._grabGateDiag || 0) + 1) <= 10) log("HOST grabH: 0 zebranych,", gateSkipped, "płynów zablokowanych (brak badania waterGrab)");
 	}
 	// KLIENT: wypełnij tank grabbera (matrix) typami zebranymi przez hosta. B[0]=locked type, B[1]=count, B[2..]=sloty.
-	function clientFillGrabTank(types, offs, slotIdx) {
+	// Niezmiennik tanku wg gry: T[1] = liczba pelnych slotow, T[0] = typ blokady (0 gdy pusto).
+	// Przeliczamy zamiast zliczac przyrostowo — przyrostowy licznik rozjezdzal sie z gra i chwytak
+	// wygladal na pusty mimo pelnych slotow.
+	// AKTYWNE sloty tanku = tool.data.size (macierz bywa wieksza — alokacja na maksymalne ulepszenie).
+	function tankSize(tool, B) {
+		const d = tool && tool.data;
+		const n = d && typeof d.size === "number" && d.size > 0 ? d.size | 0 : 0;
+		return n && n <= B.length - 2 ? n : B.length - 2;
+	}
+	function syncTankHeader(B, size) {
+		const act = size && size > 0 ? size : B.length - 2;
+		let n = 0, first = 0;
+		for (let i = 2; i < act + 2; i++) if (B[i] !== 0) { n++; if (!first) first = B[i]; }
+		// poza aktywnym oknem gra niczego nie widzi — nie zostawiamy tam zawartosci (inaczej "wraca"
+		// po powiekszeniu siatki albo wisi jako niewidzialny material).
+		for (let i = act + 2; i < B.length; i++) if (B[i] !== 0) { B[i] = 0; ST._tankTrim = (ST._tankTrim || 0) + 1; }
+		B[1] = n;
+		if (n === 0) B[0] = 0;
+		else if (!B[0]) B[0] = first;
+		return n;
+	}
+	function clientFillGrabTank(types, offs, slotIdx, bx, by) {
 		const tool = ST._grabTool;
 		const B = tool && tool.data && tool.data.matrix;
+		if (!ST._grabStat) ST._grabStat = { przyslane: 0, wTanku: 0, oddane: 0, przepadle: 0, prosby: 0 };
+		const size = B ? tankSize(tool, B) : 0;
+		ST._grabStat.przyslane += types ? types.length : 0;
 		if (!B || !types || !types.length) return;
 		// SLOT WG POZYCJI (fix TCentraL: itemy lądowały w lewym-górnym rogu pickera): siatka tanku jest
 		// przestrzenna — slot odpowiada pozycji komórki względem kursora (vanilla: A = w + t*v). Host
 		// przysyła offsety (dx,dy); slot = (dx+mid) + (dy+mid)*v. Zajęty/poza siatką → pierwszy wolny.
-		const v = Math.max(1, Math.round(Math.sqrt(B.length - 2)));
+		const v = Math.max(1, Math.round(Math.sqrt(size)));
 		const mid = v >> 1;
 		let filledAny = false;
 		for (let ti2 = 0; ti2 < types.length; ti2++) {
@@ -2317,19 +2367,30 @@
 			// host przyslal numer slotu wyliczony na tej samej siatce — kladziemy dokladnie tam
 			if (slotIdx && slotIdx.length > ti2) {
 				const idx = 2 + (slotIdx[ti2] | 0);
-				if (idx >= 2 && idx < B.length && B[idx] === 0) { B[idx] = ty; B[1] = (B[1] || 0) + 1; if (!B[0]) B[0] = ty; filled = true; filledAny = true; }
+				if (idx >= 2 && idx < size + 2 && B[idx] === 0) { B[idx] = ty; filled = true; filledAny = true; }
 			}
 			if (!filled && offs && offs.length >= (ti2 + 1) * 2) {
 				const col = offs[ti2 * 2] + mid, row = offs[ti2 * 2 + 1] + mid;
 				if (col >= 0 && col < v && row >= 0 && row < v) {
 					const idx = 2 + col + row * v;
-					if (idx < B.length && B[idx] === 0) { B[idx] = ty; B[1] = (B[1] || 0) + 1; if (!B[0]) B[0] = ty; filled = true; filledAny = true; }
+					if (idx < B.length && B[idx] === 0) { B[idx] = ty; filled = true; filledAny = true; ST._grabStat.wTanku++; }
 				}
 			}
-			if (!filled) for (let i = 2; i < B.length; i++) { if (B[i] === 0) { B[i] = ty; B[1] = (B[1] || 0) + 1; if (!B[0]) B[0] = ty; filled = true; filledAny = true; break; } }
-			if (!filled) break; // tank pełny
+			if (!filled) for (let i = 2; i < size + 2; i++) { if (B[i] === 0) { B[i] = ty; filled = true; filledAny = true; ST._grabStat.wTanku++; break; } }
+			if (!filled) {
+				// tank pelny albo slot zajety — element JUZ zostal usuniety u hosta, wiec musi wrocic na mape,
+				// inaczej material po prostu znika (zgloszenie usera).
+				let back = false;
+				if (typeof bx === "number" && typeof by === "number" && offs && offs.length >= (ti2 + 1) * 2) {
+					try { net.send({ t: "act", k: "grabPlace", x: bx + offs[ti2 * 2], y: by + offs[ti2 * 2 + 1], et: ty }); back = true; ST._grabStat.oddane++; } catch (e) {}
+				}
+				if (!back) ST._grabStat.przepadle++;
+				if ((ST._grabBackDiag = (ST._grabBackDiag || 0) + 1) <= 20) log("GRAB: brak miejsca w tanku dla typu", ty, back ? "— oddaje na mape" : "— BRAK pozycji, sztuka przepadla");
+			}
 		}
-		if (filledAny && (ST._grabFillDiag = (ST._grabFillDiag || 0) + 1) <= 20) log("CLIENT tank grabbera wypełniony:", types.length, "typów, count=" + B[1]);
+		const tankN = syncTankHeader(B, size); // naglowek zgodny z gra: licznik = faktyczna zawartosc
+		if (filledAny) ST._grabStat.wTanku = (ST._grabStat.wTanku || 0) + 0; // (statystyka nizej, po przeliczeniu)
+		if (filledAny && (ST._grabFillDiag = (ST._grabFillDiag || 0) + 1) <= 20) log("CLIENT tank grabbera:", types.length, "przyslanych, w tanku teraz " + tankN + " / " + size + " slotow (siatka " + v + "x" + v + ")");
 	}
 
 	// Flamethrower/cryoblaster: kolejkujemy komórki (dużo/tick) i wysyłamy batchami co ~60ms — nie zalewamy sieci.
@@ -2371,7 +2432,7 @@
 					if (msg.f !== null && msg.f !== undefined && info.elementType !== msg.f) continue;
 					removeAt(state, x, y);
 					markCellDirty(state, x, y); // wymuś wysyłkę lustrem (zassany element znika u klienta)
-					types.push(info.elementType);
+					types.push(ety);
 					taken++;
 				} catch (e) {}
 			}

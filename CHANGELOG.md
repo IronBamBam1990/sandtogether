@@ -1,3 +1,23 @@
+## 0.9.126-beta
+
+**The client grabber now behaves like the host one.** Root cause: the game allocates the grabber tank
+matrix at its maximum size and reports how many slots are actually active through `tool.data.size`
+(measured: size 225 = 15x15 while the array held 400 slots). The bridge read the array length instead,
+so the client harvested at the allocation size no matter what the player had set, and everything that
+landed outside the active window was invisible to the game - material simply vanished.
+
+Four more differences against the vanilla grabber were closed along the way:
+
+- collecting continues while the button is held, into free slots, instead of stopping as soon as the tank
+  held anything (the bridge treated "tank not empty" as "placing mode"),
+- the tank header follows the game invariant: count equals the number of filled active slots, and the type
+  lock clears when the tank is empty (a broken invariant made the game see a full tank as empty),
+- merged particles resolve to their real material through `linkedElementIndex`, exactly like the game,
+  instead of being stored as the technical "Particle" type,
+- harvest maps to tank slots by position relative to the cursor (closest first), each slot bound to one
+  cell, with pulses every 33 ms instead of every 100 ms; anything the client cannot store is put back on
+  the map instead of being destroyed.
+
 ## 0.9.120-beta
 
 **Fixed a deadlock that froze the client world.** When the client renderer restarted (which the mod itself
