@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.132-beta";
+	const VER = "0.9.135-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -58,6 +58,7 @@
 			world_imported_loaded: (n) => "Joined host's world '" + n + "' — you're in!",
 			tech_rejected: (id) => "Research '" + id + "' rejected by the host (requirements/cost) — try again",
 			tech_repaired: (n) => "Repaired " + n + " broken research unlock(s) — buildings/items restored",
+			hairpin_hint: "Connection refused. If the host is on the SAME network as you, use their local address (192.168.x.x) — routers usually refuse connections to your own public IP.",
 			waiting_host_world: "Connected — waiting for host to enter a world (it'll load automatically)...",
 			receiving: (a, b) => "Receiving world: " + a + "/" + b,
 			other_world: "⚠ NOT on host's world! Host: click 'Send world'. You: menu → Load Game → load the received save.",
@@ -119,7 +120,8 @@
 			world_imported: (n) => "Świat '" + n + "' zaimportowany! Wczytaj go: menu → Load Game",
 			world_imported_loaded: (n) => "Dołączono do świata hosta '" + n + "' — jesteś w grze!",
 			tech_rejected: (id) => "Badanie '" + id + "' odrzucone przez hosta (wymagania/koszt) — spróbuj ponownie",
-			tech_repaired: (n) => "Naprawiono " + n + " uszkodzonych badań — budynki/przedmioty przywrócone",
+			tech_repaired: (n) => "Naprawiono " + n + " uszkodzonych badań — budynki/przedmioty przywrócone",
+			hairpin_hint: "Połączenie odrzucone. Jeśli host jest w TEJ SAMEJ sieci co Ty, użyj jego adresu lokalnego (192.168.x.x) — routery zwykle nie pozwalają łączyć się z własnym publicznym IP.",
 			waiting_host_world: "Połączono — czekam aż host wejdzie do świata (wczyta się automatycznie)...",
 			receiving: (a, b) => "Odbieranie świata: " + a + "/" + b,
 			other_world: "⚠ NIE jesteś na świecie hosta! Host: kliknij 'Wyślij świat'. Ty: menu → Load Game → wczytaj otrzymany save.",
@@ -487,7 +489,7 @@
 				ST.net.role = "client"; ST.net.transport = ev.transport;
 				ST.wsx.everApplied = false; ST.wsx.mismatchLogged = false; ST.wsx.wasInWorld = false; // nowa sesja klienta
 				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
-				ST._mirrorKickN = 0; ST._mirrorKickT = 0; if (ST._structSig) ST._structSig.clear(); if (ST._applyQ) ST._applyQ.length = 0; ST._greeted.clear(); ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
+				ST._mirrorKickN = 0; ST._mirrorKickT = 0; if (ST._structSig) ST._structSig.clear(); try { sessionStorage.removeItem("st_rescue_n"); } catch (e) {} if (ST._applyQ) ST._applyQ.length = 0; ST._greeted.clear(); ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
 				ST._directMode = false; ST._directAddr = null; autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
@@ -538,7 +540,14 @@
 				setClientPaused(false);
 			} else if (ev.kind === "reconnecting") { setStatus(t("reconnecting", ev.attempt), "#fd5");
 			} else if (ev.kind === "version-mismatch") setStatus(t("ver_mismatch"), "#f66");
-			else if (ev.kind === "error") setStatus(t("error", ev.message), "#f66");
+			else if (ev.kind === "error" && /ECONNREFUSED/i.test(String(ev.message || "")) && /(d{1,3}).(d{1,3}).(d{1,3}).(d{1,3})/.test(String(ev.message || ""))) {
+				// 0.9.133: publiczny adres + odmowa = najczesciej proba polaczenia z wlasnym IP z tej samej sieci
+				const ip = String(ev.message).match(/(d{1,3}).(d{1,3}).(d{1,3}).(d{1,3})/);
+				const A = ip ? +ip[1] : 0, B = ip ? +ip[2] : 0;
+				const priv = A === 127 || A === 10 || (A === 192 && B === 168) || (A === 172 && B >= 16 && B <= 31);
+				if (!priv) { setStatus(t("hairpin_hint"), "#fd5"); log("PODPOWIEDZ: odmowa polaczenia z publicznym IP — z tej samej sieci uzyj adresu lokalnego hosta (router nie robi petli zwrotnej)"); }
+			}
+			if (ev.kind === "error") setStatus(t("error", ev.message), "#f66");
 			updatePanel(); // badge/przyciski/lista graczy odzwierciedlają KAŻDĄ zmianę stanu sieci
 			if (ST._lobbyOpen) renderLobby(false);
 		});
@@ -829,10 +838,14 @@
 				// Bez tego klient po restarcie renderera zostaje z zamrozonym obrazem az do recznego Load Game.
 				// 0.9.132: samo lustro nie wystarcza — gracz musi BYC w swiecie hosta, inaczej jego postep
 				// (ekwipunek, badania, budynki) zostaje z poprzedniej gry.
-				const inWrongWorld = ST._hostWidSeen &&
+				// 0.9.134: wczytanie przeslanego zapisu nadaje NOWY worldId, wiec nie gonimy zgodnosci ID
+				// (0.9.132 robil z tego petle przeladowan). Ratunkowe wczytanie tylko gdy lustro nigdy nie ruszylo.
+				let rescueN = 0;
+				try { rescueN = Number(sessionStorage.getItem("st_rescue_n") || 0); } catch (e) {}
+				const inWrongWorld = rescueN < 1 && !ST.wsx.everApplied && ST._hostWidSeen &&
 					ST.state && ST.state.store.meta && ST.state.store.meta.worldId !== ST._hostWidSeen &&
 					Date.now() - (ST._rescueLoadT || 0) > 30000;
-				if (inWrongWorld) { ST._rescueLoadT = Date.now(); log("WCZYTUJE SWIAT HOSTA: jestem w", ST.state.store.meta.worldId, "host gra w", ST._hostWidSeen, "— bez tego moj postep zostalby z poprzedniej gry"); }
+				if (inWrongWorld) { ST._rescueLoadT = Date.now(); try { sessionStorage.setItem("st_rescue_n", String(rescueN + 1)); } catch (e) {} log("WCZYTUJE SWIAT HOSTA: jestem w", ST.state.store.meta.worldId, "host gra w", ST._hostWidSeen, "— bez tego moj postep zostalby z poprzedniej gry"); }
 				if (!inWrongWorld && saveId && autoLoadDoneBefore(saveId)) { log("auto-load POMINIĘTY (ten save hosta był już auto-wczytany w tej sesji — guard po reloadzie) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
 				// PĘTLA PRZEŁADOWAŃ (fix TCentraL "reloading the same map over and over"): kolejny transfer
 				// tego samego świata NIE wyrywa gracza z gry — gdy lustro już działa albo load w toku, nie ładujemy.
@@ -1875,6 +1888,8 @@
 				up: state.store.upgrades || null,       // WSPÓLNA pula ulepszeń (fix G2)
 				th: techFlagsForNet(state), // tech tree (bez śmieciowego klucza "undefined")
 				pg: state.store.progression || null,    // progression (upgradesUnlocked, dungeons)
+				bl: (state.store.player && state.store.player.buildings) || null, // odblokowane budynki (pomysl: Cr0ss0vr, PR #13)
+				iv: invForNet(state),                   // odblokowane przedmioty — tylko gdy lista sie zmienila
 			});
 		} catch (e) {}
 	}
@@ -2005,6 +2020,17 @@
 		return fixed;
 	}
 	ST.repairTech = () => (ST.state ? techRepair(ST.state, "manual") : 0); // ręcznie z konsoli: SandTogether.repairTech()
+	// Lista przedmiotow gracza jedzie tylko wtedy, gdy sie ZMIENILA (inaczej kilka KB co 2 s bez powodu).
+	function invForNet(state) {
+		try {
+			const inv = state.store.player && state.store.player.inventory;
+			if (!Array.isArray(inv)) return null;
+			const sig = inv.map((i) => i && i.id).join(",");
+			if (sig === ST._lastInvSig) return null;
+			ST._lastInvSig = sig;
+			return JSON.parse(JSON.stringify(inv));
+		} catch (e) { return null; }
+	}
 	function techFlagsForNet(state) {
 		const t = state.store.player && state.store.player.tech;
 		if (!t) return null;
@@ -2062,6 +2088,35 @@
 			if (msg.pg && state.store.progression) Object.assign(state.store.progression, msg.pg);
 			// tech od hosta TYLKO gdy klient jest w swiecie z dzialajacym lustrem (0.9.72): w menu/loadzie
 			// unlockTech gry odmawia (tutorial/scena), a po reloadzie i tak wszystko przepada -> burza odmow w logu
+			// POSTEP OD HOSTA (0.9.134): odblokowane budynki i przedmioty naleza do sesji, nie do lokalnego
+			// zapisu klienta. Scalanie listy budynkow — pomysl Cr0ss0vr (PR #13).
+			if ((msg.bl || msg.iv) && ST.wsx.everApplied && !ST._loadingWorld && state.store.scene && state.store.scene.active !== 1 && state.store.player) {
+				try {
+					const pl = state.store.player;
+					if (msg.bl && Array.isArray(pl.buildings)) {
+						let dodane = 0;
+						for (const b of msg.bl) if (!pl.buildings.includes(b)) { pl.buildings.push(b); dodane++; }
+						if (dodane) log("POSTEP: doszlo", dodane, "odblokowanych budynkow od hosta");
+					}
+					if (msg.iv && Array.isArray(pl.inventory)) {
+						const mam = new Set(pl.inventory.map((i) => i && i.id));
+						const uHosta = new Set(msg.iv.map((i) => i && i.id));
+						let dodane = 0, usuniete = 0;
+						for (const it of msg.iv) {
+							if (mam.has(it && it.id)) continue;   // mamy — NIE nadpisujemy (tank chwytaka, amunicja sa lokalne)
+							const kopia = JSON.parse(JSON.stringify(it));
+							for (const ab of kopia.abilities || []) { if (ab.cooldown) ab.cooldown.last = 0; if (ab.ammo && ab.ammo.reload) ab.ammo.reload.last = 0; }
+							if (kopia.data && kopia.data.cooldown) kopia.data.cooldown.last = 0;
+							pl.inventory.push(kopia); dodane++;
+						}
+						for (let i = pl.inventory.length - 1; i >= 0; i--) {
+							const it = pl.inventory[i];
+							if (it && !uHosta.has(it.id)) { pl.inventory.splice(i, 1); usuniete++; }
+						}
+						if (dodane || usuniete) log("POSTEP: przedmioty wyrownane do hosta — dodane", dodane, "usuniete", usuniete);
+					}
+				} catch (e) { log("sync postepu blad:", e.message); }
+			}
 			if (msg.th && ST.wsx.everApplied && !ST._loadingWorld && state.store.scene && state.store.scene.active !== 1 && state.store.player && state.store.player.tech) {
 				// KOLEJNOŚĆ ZALEŻNOŚCI (0.9.89): drzewko ma wymagania wstępne, a klucze obiektu przychodzą
 				// w dowolnej kolejności — próba "dziecka" przed "rodzicem" jest odrzucana przez grę.

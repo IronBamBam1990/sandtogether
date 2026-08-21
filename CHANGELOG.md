@@ -1,3 +1,21 @@
+## 0.9.135-beta
+
+**Progression now travels from the host instead of being chased through world ids.** 0.9.132 made the
+client load the host world whenever the ids differed, but loading a transferred save assigns a *new* world
+id, so the condition could never be satisfied and the client reloaded in a loop until it dropped out of the
+session. The rescue load is back to a single attempt per session (stored in sessionStorage so a reload
+cannot reset it), and the host now sends its unlocked buildings and item list in the state packet: the
+client adds what it is missing and drops what the host does not have, without overwriting items it already
+holds (the grabber tank and ammo are local state). Verified live: client at 11,16 / 0 tech pulled up to
+11,16,4 / 1 tech while sitting in a differently numbered world. Merging the unlocked-buildings list is
+**Cr0ss0vr's idea from PR #13**.
+
+**A hint when you try to reach your own public address from inside your network.** Direct internet hosting
+was verified end to end from an outside machine: UPnP opened the port, the WebSocket handshake completed,
+and the host streamed a full save transfer plus 969 mirror packets - 11.37 MB in 20 seconds. From the same
+LAN, though, connecting to your own public IP is refused by most routers (no hairpin NAT), which looks
+exactly like a broken mod. The panel now says so and points at the local address instead.
+
 ## 0.9.132-beta
 Credit where it is due: **Cr0ss0vr** reported this as issue #12 and sent PR #13 ("allow building unlock
 state to propagate"), which merged the host's unlocked-buildings list into the client. I closed that PR as
