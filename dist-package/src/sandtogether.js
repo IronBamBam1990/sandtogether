@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.139-beta";
+	const VER = "0.9.140-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1897,6 +1897,7 @@
 				pg: state.store.progression || null,    // progression (upgradesUnlocked, dungeons)
 				bl: (state.store.player && state.store.player.buildings) || null, // odblokowane budynki (pomysl: Cr0ss0vr, PR #13)
 				iv: invForNet(state),                   // odblokowane przedmioty — tylko gdy lista sie zmienila
+				tz: tzForNet(state),                     // strefy teleportacji (klient chodzi po terenie hosta)
 			});
 		} catch (e) {}
 	}
@@ -2028,6 +2029,17 @@
 	}
 	ST.repairTech = () => (ST.state ? techRepair(ST.state, "manual") : 0); // ręcznie z konsoli: SandTogether.repairTech()
 	// Lista przedmiotow gracza jedzie tylko wtedy, gdy sie ZMIENILA (inaczej kilka KB co 2 s bez powodu).
+	// Strefy teleportacji jada tylko wtedy, gdy zbior sie zmienil (identyfikatory + liczba).
+	function tzForNet(state) {
+		try {
+			const tz = state.store.world && state.store.world.teleportZones;
+			if (!Array.isArray(tz)) return null;
+			const sig = tz.length + ":" + tz.map((z) => z && z.id).join(",");
+			if (sig === ST._lastTzSig) return null;
+			ST._lastTzSig = sig;
+			return JSON.parse(JSON.stringify(tz));
+		} catch (e) { return null; }
+	}
 	function invForNet(state) {
 		try {
 			const inv = state.store.player && state.store.player.inventory;
@@ -2095,6 +2107,23 @@
 			if (msg.pg && state.store.progression) Object.assign(state.store.progression, msg.pg);
 			// tech od hosta TYLKO gdy klient jest w swiecie z dzialajacym lustrem (0.9.72): w menu/loadzie
 			// unlockTech gry odmawia (tutorial/scena), a po reloadzie i tak wszystko przepada -> burza odmow w logu
+			// STREFY TELEPORTACJI (0.9.140): klient renderuje swiat hosta, wiec i przejscia musza byc hosta.
+			if (msg.tz && ST.net.role === "client" && ST.wsx.everApplied && !ST._loadingWorld && state.store.world) {
+				try {
+					const przed = (state.store.world.teleportZones || []).length;
+					state.store.world.teleportZones = msg.tz;
+					const cache = state.session && state.session.teleportZoneCache;
+					if (cache) {
+						try { if (typeof cache.clear === "function") cache.clear(); } catch (e) {}
+						if (typeof cache.set === "function") for (const z of msg.tz) {
+							if (!z || !Number.isFinite(z.entryX)) continue;
+							for (let x = z.entryX; x < z.entryX + (z.entryWidth | 0); x++)
+								for (let y = z.entryY; y < z.entryY + (z.entryHeight | 0); y++) { try { cache.set(x, y, z); } catch (e) {} }
+						}
+					}
+					if (przed !== msg.tz.length) log("STREFY: mialem", przed, "-> od hosta", msg.tz.length, "(przejscia zgodne z jego swiatem)");
+				} catch (e) { log("sync stref teleportacji blad:", e.message); }
+			}
 			// POSTEP OD HOSTA (0.9.134): odblokowane budynki i przedmioty naleza do sesji, nie do lokalnego
 			// zapisu klienta. Scalanie listy budynkow — pomysl Cr0ss0vr (PR #13).
 			if ((msg.bl || msg.iv) && ST.wsx.everApplied && !ST._loadingWorld && state.store.scene && state.store.scene.active !== 1 && state.store.player) {

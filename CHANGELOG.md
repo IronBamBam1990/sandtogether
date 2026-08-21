@@ -1,3 +1,17 @@
+## 0.9.140-beta (not published yet - awaiting a live check)
+
+**Teleport zones now come from the host.** Measured: host 27 zones, client 18. Zones live in
+`store.world.teleportZones` and are appended as the game reveals prefabs, so a client - which walks on the
+host's terrain but keeps its own world - ends up with a different set, meaning a passage can simply not
+work for them or lead somewhere else than it does for the host. The host now sends the zone list in the
+state packet whenever it changes, and the client replaces its own and rebuilds the entry-cell cache the
+game consults when you step into a zone.
+
+Not a bug, for the record: the client showing no entity sprites (host 38, client 0) is not missing
+creatures. That container holds visual effects - sparks, lights, lasers, timed particles - which are
+spawned by the simulation. The client's simulation is deliberately stopped, so it spawns none. Cosmetic,
+and inherent to the mirror design.
+
 ## 0.9.139-beta
 
 **Deleting a conveyor could leave a red line behind.** The cleanup added in 0.9.136 only looked at
