@@ -1,3 +1,13 @@
+## 0.9.138-beta
+
+**A teammate's build preview could stay on your screen forever, looking like garbage you could not
+remove.** The mod draws what another player is about to place, in their colour. That preview is cleared
+when their next position packet arrives without a build intent - but position packets are only sent while
+a player moves, so someone who placed something and then stood still never sent the clearing packet.
+Verified from the report: the cell under the cursor was empty and byte-identical on host and client, with
+no orphaned tiles, dead cells, unknown element types or projectiles anywhere near - the red bar was never
+in the world at all. The preview now expires two seconds after the last confirmed intent.
+
 ## 0.9.137-beta
 
 **The client was silently missing structures — measured: host 1019, client 841.** Foundation tiles arrive
