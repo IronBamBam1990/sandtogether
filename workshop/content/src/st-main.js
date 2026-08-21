@@ -621,7 +621,16 @@ function autoUpdateFromWorkshop() {
     try {
       const pl = path.join(appDir, 'preload.js');
       let ps = fs.readFileSync(pl, 'utf8');
-      if (ps.indexOf('sandtogetherNet') < 0) { ps += '\n' + fs.readFileSync(path.join(ws, 'src', 'st-preload-append.js'), 'utf8'); fs.writeFileSync(pl, ps); }
+      // 0.9.142: mostek IPC WYMIENIAMY miedzy markerami (jak patch.js). Samo "jest sandtogetherNet" zostawialo
+      // stary mostek bez hostDirect → "net.hostDirect is not a function" u graczy z instalacja sprzed 0.9.79.
+      const fresh = fs.readFileSync(path.join(ws, 'src', 'st-preload-append.js'), 'utf8');
+      const B0 = '// --- SandTogether by Kamil Padula: network bridge (appended by patch.js) ---', B1 = '// --- /SandTogether ---';
+      const i0 = ps.indexOf(B0), i1 = ps.indexOf(B1);
+      const want = fresh.slice(fresh.indexOf(B0)).trim();
+      if (i0 >= 0 && i1 > i0) {
+        if (ps.slice(i0, i1 + B1.length).trim() !== want) { fs.writeFileSync(pl, ps.slice(0, i0) + want + ps.slice(i1 + B1.length)); log('AUTO-UPDATE: preload.js — mostek IPC wymieniony na aktualny'); }
+      } else if (ps.indexOf('sandtogetherNet') < 0) { fs.writeFileSync(pl, ps + '\n' + fresh); log('AUTO-UPDATE: preload.js — mostek IPC dodany'); }
+      else log('AUTO-UPDATE: preload.js ma mostek bez markerow — uruchom patch.js recznie');
     } catch (e) {}
     const patches = JSON.parse(fs.readFileSync(path.join(ws, 'src', 'patches.json'), 'utf8'));
     const res = applyBundlePatches(path.join(appDir, 'dist', 'js', 'bundle.js'), patches);

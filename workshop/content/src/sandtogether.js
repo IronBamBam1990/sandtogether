@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.141-beta";
+	const VER = "0.9.142-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -86,6 +86,7 @@
 			lb_host_direct_d: "Full speed, no Steam relay. Opens the port on your router automatically (UPnP).",
 			direct_ready: "DIRECT hosting — give your friend the address below",
 			direct_no_upnp: "Port not opened automatically — forward TCP {0} on your router, then share the address",
+			bridge_old: "Mod bridge outdated — restart the game (auto-update) or re-run the installer / patch.js",
 			direct_addr: "Your address", direct_show: "show", direct_hide: "hide", direct_copied: "Address copied!",
 			direct_hidden_hint: "hidden on purpose — safe to stream",
 			lb_steps: "1) Invite friends   2) Hit PLAY — they will join your map automatically",
@@ -149,6 +150,7 @@
 			lb_host_direct_d: "Pełna prędkość, bez relaya Steama. Sam otwiera port na routerze (UPnP).",
 			direct_ready: "Hostujesz BEZPOŚREDNIO — podaj koledze adres poniżej",
 			direct_no_upnp: "Port nie otworzył się sam — przekieruj TCP {0} na routerze, potem podaj adres",
+			bridge_old: "Mostek moda nieaktualny — zrestartuj grę (auto-update) albo uruchom ponownie instalator / patch.js",
 			direct_addr: "Twój adres", direct_show: "pokaż", direct_hide: "ukryj", direct_copied: "Adres skopiowany!",
 			direct_hidden_hint: "celowo ukryty — bezpieczne na streamie",
 			lb_steps: "1) Zaproś znajomych   2) Wciśnij GRAJ — dołączą na Twoją mapę automatycznie",
@@ -211,6 +213,7 @@
 			lb_host_direct_d: "全速直连,不经过Steam中继。自动在路由器上开放端口(UPnP)。",
 			direct_ready: "直连主机模式 — 把下面的地址发给朋友",
 			direct_no_upnp: "端口未自动开放 — 请在路由器上转发 TCP {0},然后分享地址",
+			bridge_old: "模组桥接已过期 — 请重启游戏(自动更新)或重新运行安装程序 / patch.js",
 			direct_addr: "你的地址", direct_show: "显示", direct_hide: "隐藏", direct_copied: "地址已复制!",
 			direct_hidden_hint: "已刻意隐藏 — 直播安全",
 			lb_steps: "1) 邀请朋友   2) 点击开始游戏——他们会自动加入你的地图",
@@ -1500,31 +1503,46 @@
 	// ------------------------------------------------------------------
 	// STRUKTURY — replikacja event-driven + okresowe uzgadnianie (snapshot)
 	// ------------------------------------------------------------------
-	const slimStruct = (s) => ({ type: s.type, x: s.x, y: s.y, data: s.data });
+	// 0.9.142: structure.filter (filtry, shakery, growery, filter wall) tez jedzie po sieci — wczesniej tylko data,
+	// wiec filtr ustawiony przez klienta nigdy nie docieral do hosta (i odwrotnie): "filters only work when host configures them".
+	const slimStruct = (s) => { const o = { type: s.type, x: s.x, y: s.y, data: s.data }; if (s.filter != null) o.f = s.filter; return o; };
+	const structSig = (s) => { try { return JSON.stringify([s.data == null ? null : s.data, s.filter == null ? null : s.filter]); } catch (e) { return ""; } };
 	const structKey = (s) => s.type + "@" + s.x + "," + s.y;
 	// KONFIG MASZYN przez klienta (G5b): edycje structure.data w UI maszyn nie mają eventu — wykrywamy
 	// je diffem JSON w POBLIŻU gracza (tam się klika; pełny skan tysięcy struktur co klatkę = za drogo).
-	const dataSeenSet = (k, d) => { if (!ST._dataSeen) ST._dataSeen = new Map(); try { ST._dataSeen.set(k, JSON.stringify(d == null ? null : d)); } catch (e) {} };
+	const dataSeenSet = (k, s) => { if (!ST._dataSeen) ST._dataSeen = new Map(); ST._dataSeen.set(k, structSig(s)); };
 	function scanDataEditsIfDue(state) {
 		const now = performance.now();
 		if (now - (ST._dataScanT || 0) < 800) return;
 		ST._dataScanT = now;
 		try {
-			if (!ST._dataSeen) return;
+			const role = ST.net.role;
+			if (role === "client" && !ST._dataSeen) return; // baza bierze sie ze snapshotu hosta
+			if (role === "host" && !ST.peers.size) return;
+			if (!ST._dataSeen) ST._dataSeen = new Map();
 			if (!ST._dataEdited) ST._dataEdited = new Map();
 			const px = state.store.player.x / 4, py = state.store.player.y / 4, R = 48; // ~ekran wokół gracza (komórki)
 			for (const s of state.store.structures || []) {
 				if (Math.abs(s.x - px) > R || Math.abs(s.y - py) > R) continue;
 				const k = structKey(s);
 				const prev = ST._dataSeen.get(k);
-				if (prev === undefined) { dataSeenSet(k, s.data); continue; }
-				let cur; try { cur = JSON.stringify(s.data == null ? null : s.data); } catch (e) { continue; }
-				if (cur !== prev) {
-					ST._dataSeen.set(k, cur);
-					ST._dataEdited.set(k, now);
-					try { net.send({ t: "act", k: "sdata", x: s.x, y: s.y, type: s.type, data: JSON.parse(cur) }); } catch (e) {}
-					log("CLIENT config maszyny →", k);
+				if (prev === undefined) { dataSeenSet(k, s); continue; }
+				const cur = structSig(s);
+				if (cur === prev) continue;
+				ST._dataSeen.set(k, cur);
+				if (role === "host") {
+					// 0.9.142: HOST rozsyla tylko zmiany FILTRA (data maszyn hosta zmienia sie co chwila — to idzie snapshotem);
+					// bez tego klient widzial stary filtr po edycji u hosta
+					let pf = null; try { pf = JSON.parse(prev)[1]; } catch (e) {}
+					const cf = s.filter == null ? null : s.filter;
+					if (JSON.stringify(pf) === JSON.stringify(cf)) continue;
+					try { net.send({ t: "st", k: "add", list: [slimStruct(s)] }); } catch (e) {}
+					log("HOST filtr zmieniony →", k);
+					continue;
 				}
+				ST._dataEdited.set(k, now);
+				try { const m = { t: "act", k: "sdata", x: s.x, y: s.y, type: s.type, data: s.data }; if (s.filter != null) m.f = s.filter; net.send(m); } catch (e) {}
+				log("CLIENT config maszyny →", k, s.filter != null ? "(+filtr)" : "");
 			}
 			// higiena okna ochronnego
 			for (const [k, ts] of ST._dataEdited) if (now - ts > 10000) ST._dataEdited.delete(k);
@@ -1684,23 +1702,27 @@
 			const SA = structNs(); if (!SA) return null;
 			const existing = SA.getAtCell(state, s.x, s.y);
 			if (existing && existing.type === s.type) {
-				if (s.data && JSON.stringify(existing.data) !== JSON.stringify(s.data)) {
-					// KONFIG MASZYN (G5b): świeżo edytowane przez klienta data chronimy przed nadpisaniem
-					// przez snapshot hosta (act sdata jest w drodze; host potwierdzi w następnym snapie)
-					const k = structKey(s);
-					const edited = ST._dataEdited && ST._dataEdited.get(k);
-					if (!(ST.net.role === "client" && edited != null && performance.now() - edited < 6000)) {
-						existing.data = s.data;
-						if (SA.update) SA.update(state, existing, { propagateToWorkers: ST.net.role === "host" });
-						if (ST.net.role === "client") dataSeenSet(k, s.data); // baza do wykrywania edycji klienta
-					}
-				} else if (ST.net.role === "client") dataSeenSet(structKey(s), existing.data);
+				// KONFIG MASZYN (G5b): świeżo edytowane przez klienta data/filtr chronimy przed nadpisaniem
+				// przez snapshot hosta (act sdata jest w drodze; host potwierdzi w następnym snapie)
+				const k = structKey(s);
+				const edited = ST._dataEdited && ST._dataEdited.get(k);
+				const chroniony = ST.net.role === "client" && edited != null && performance.now() - edited < 6000;
+				const dataDiff = !!s.data && JSON.stringify(existing.data) !== JSON.stringify(s.data);
+				// 0.9.142: filtr (structure.filter) tez synchronizujemy — patrz slimStruct
+				const filtDiff = s.f !== undefined && JSON.stringify(existing.filter == null ? null : existing.filter) !== JSON.stringify(s.f);
+				if ((dataDiff || filtDiff) && !chroniony) {
+					if (dataDiff) existing.data = s.data;
+					if (filtDiff) existing.filter = s.f;
+					if (SA.update) SA.update(state, existing, { propagateToWorkers: ST.net.role === "host" });
+				}
+				if (ST.net.role === "client" && !chroniony) dataSeenSet(k, existing); // baza do wykrywania edycji klienta
 				return existing;
 			}
 			const pos = force ? { x: s.x, y: s.y, clearance: CLEARANCE_AVAILABLE } : { x: s.x, y: s.y };
 			const built = SA.build(state, pos, s.type, {});
 			if (built) {
 				if (s.data) built.data = s.data;
+				if (s.f !== undefined) built.filter = s.f;
 				// HOST: ZAWSZE propaguj strukturę do workerów symulacji (nie tylko gdy jest data!). Bez tego
 				// struktura jest w store, ale działająca sim hosta jej "nie zna" → NIE renderuje się u hosta
 				// (klient z sim w PAUZIE i tak ją rysuje ze store — stąd "klient widzi, host nie widzi").
@@ -1829,7 +1851,8 @@
 				let built = 0, skipped = 0, deferred = 0;
 				for (const s of hostList) {
 					const k = structKey(s);
-					const sig = (s.t != null ? s.t : "") + "|" + (s.v != null ? s.v : "") + "|" + (s.q ? 1 : 0);
+					// 0.9.142: sygnatura z data+filtr (wczesniej z nieistniejacych pol → stala → zmiany konfigu hosta nie docieraly)
+					const sig = (s.data != null ? JSON.stringify(s.data) : "") + "|" + (s.f != null ? JSON.stringify(s.f) : "");
 					if (ST._structSig.get(k) === sig) { skipped++; ST._structApplied.set(k, nowS); continue; }
 					if (built > 200 && performance.now() - tSlice > 8) {
 						// 0.9.137: NIE porzucamy reszty — host moze nigdy nie przyslac kolejnego snapshotu
@@ -2606,13 +2629,25 @@
 	// _dig: przekazujemy TYLKO kopanie gracza (flaga _pd z patcha I) i trafienia
 	// WŁASNYCH pocisków klienta (flaga _projCtx; zdalne pociski nie trafiają do store).
 	// DN wywoływane przez stworki/drony NIE jest forwardowane (host liczy je sam).
+	// 0.9.142: profil wykopu (fromDrill/fromRocketExplosion/...) decyduje o TIERZE materialu — bez niego host odtwarzal
+	// kazde kopanie klienta jak LOPATE, wiec laser/wiertlo/void gun klienta nie ruszaly twardych materialow.
+	const DIG_OPT_KEYS = ["fromGun", "fromRocketExplosion", "fromDrill", "useLiteralOutVelocity", "destroyNonDestructible", "forceRemoveAll", "drillTierDamage"];
+	function digOptsForNet(opts) {
+		if (!opts || typeof opts !== "object") return null;
+		let o = null;
+		for (const k of DIG_OPT_KEYS) { const v = opts[k]; if (v === true || (k === "drillTierDamage" && typeof v === "number")) { if (!o) o = {}; o[k] = v; } }
+		return o;
+	}
 	ST._dig = (state, x, y, mask, vel, dmg, opts) => {
 		if (!isClientSync() || !ST.wsx.paused) return false; // host/offline/poza lustrem: kop normalnie
 		// Pociski są symulowane AUTORYTATYWNIE po stronie hosta (patrz ST._proj) → NIE forwardujemy kopań
 		// z kontekstu pocisku (_projCtx), inaczej podwójne dziury (pocisk klienta + pocisk hosta).
 		if (ST._projCtx) return true; // pomiń: eksplozję/dziurę zrobi pocisk hosta
 		try {
-			net.send({ t: "act", k: "dig", x, y, m: mask, v: vel, d: dmg });
+			const m = { t: "act", k: "dig", x, y, m: mask, v: vel, d: dmg };
+			const o = digOptsForNet(opts); if (o) m.o = o;
+			if (ST._pendEn > 0) { m.en = ST._pendEn; ST._pendEn = 0; } // energia zuzyta przez narzedzie w tej klatce (laser/wiertlo) — host odejmie autorytatywnie
+			net.send(m);
 			if (!ST._digFwdLogged) { ST._digFwdLogged = true; log("DIG: pierwszy forward do hosta @", x, y, "(host powinien zalogować 'pierwsze kopanie klienta odtworzone')"); }
 		} catch (e) {}
 		return true; // pomiń lokalne wykonanie (i tak zapauzowane)
@@ -2763,7 +2798,13 @@
 		try {
 			if (msg.k === "dig") {
 				const ex = findApi("excavate", ["excavation", "patterns"]); // nazwa ns różni się między buildami (obecny=excavation, 0.5.3=patterns)
-				if (ex) { ex(state, msg.x, msg.y, msg.m, msg.v, msg.d); markUrgent(state, msg.x, msg.y, 1); if (!ST._digLogged) { ST._digLogged = true; log("HOST: pierwsze kopanie klienta odtworzone @", msg.x, msg.y); } }
+				if (msg.en > 0) {
+					// 0.9.142: energia autorytatywnie u hosta (laser/wiertlo klienta) — brak pradu = brak wykopu
+					let got = msg.en;
+					try { if (ST.FH.energy && typeof ST.FH.energy.consume === "function") got = ST.FH.energy.consume(state, msg.en, { allOrNothing: true }); } catch (e) { got = msg.en; }
+					if (!(got >= msg.en)) { if ((ST._enDenyN = (ST._enDenyN || 0) + 1) <= 5) log("HOST: wykop klienta odrzucony — brak energii (" + msg.en + ")"); return; }
+				}
+				if (ex) { ex(state, msg.x, msg.y, msg.m, msg.v, msg.d, msg.o || {}); markUrgent(state, msg.x, msg.y, 1); if (!ST._digLogged) { ST._digLogged = true; log("HOST: pierwsze kopanie klienta odtworzone @", msg.x, msg.y); } }
 				else if (!ST._digErrLogged) { ST._digErrLogged = true; log("BŁĄD: brak API excavate — FH klucze:", Object.keys(ST.FH || {}).join(",")); }
 			} else if (msg.k === "set") {
 				const isElem = msg.c >= ELEMENTS_MIN && msg.c <= ELEMENTS_MAX;
@@ -2941,8 +2982,11 @@
 					const ex = SA3 && SA3.getAtCell(state, msg.x, msg.y);
 					if (ex && ex.type === msg.type) {
 						ex.data = msg.data;
+						if (msg.f !== undefined) ex.filter = msg.f; // 0.9.142: filtr klienta
 						if (SA3.update) SA3.update(state, ex, { propagateToWorkers: true });
-						log("HOST: config maszyny od klienta:", msg.type, "@", msg.x, msg.y);
+						try { dataSeenSet(structKey(ex), ex); } catch (e) {}
+						try { if (ST.peers.size > 1) net.send({ t: "st", k: "add", list: [slimStruct(ex)] }); } catch (e) {} // pozostali klienci od razu
+						log("HOST: config maszyny od klienta:", msg.type, "@", msg.x, msg.y, msg.f !== undefined ? "(+filtr)" : "");
 					}
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "aug") {
@@ -3620,6 +3664,7 @@
 					setStatus(t("creating_lobby"));
 					try {
 						ST._directMode = true;
+						if (typeof net.hostDirect !== "function") { ST._directMode = false; setStatus(t("bridge_old"), "#f66"); log("hostDirect: brak w mostku preload (stara instalacja) — auto-update/patch.js wymieni mostek"); renderLobby(true); return; }
 						const r = await net.hostDirect(27777);
 						if (!r || !r.ok) setStatus(t("error", (r && r.error) || "?"), "#f66");
 						else {
@@ -4106,7 +4151,40 @@
 	// ------------------------------------------------------------------
 	// Hook per-frame (patch w bundle.js)
 	// ------------------------------------------------------------------
+	// 0.9.142: haki na wspolny obiekt FH (ten sam dla calego bundle) — narzedzia klienta, ktore omijaja hak DN:
+	//  - energy.consume: podczas AKTYWNEJ akcji narzedzia u klienta-lustra nie liczymy z lokalnej (bywa nieaktualnej) kopii
+	//    baterii → falszywe "Not enough power"; zbieramy kwote i doklejamy do wykopu (host odejmuje autorytatywnie),
+	//  - world.excavate: wiertlo reczne kopie przez kolejke mutacji Lu (u klienta porzucana) → forward jako wykop 1x1.
+	function installFhHooks(FH) {
+		ST._fhHooked = true;
+		try {
+			if (FH.energy && typeof FH.energy.consume === "function" && !FH.energy.consume._st) {
+				const orig = FH.energy.consume;
+				const w = function (state, amt, opts) {
+					try {
+						if (isClientSync() && ST.wsx.paused && state && state.session && state.session.action && state.session.action.state && state.session.action.state[2]) {
+							ST._pendEn = (ST._pendEn || 0) + (amt > 0 ? amt : 0);
+							return amt;
+						}
+					} catch (e) {}
+					return orig.apply(this, arguments);
+				};
+				w._st = true; FH.energy.consume = w;
+			}
+			if (FH.world && typeof FH.world.excavate === "function" && !FH.world.excavate._st) {
+				const orig = FH.world.excavate;
+				const w = function (state, x, y, vel, dmg, opts) {
+					if (isClientSync() && ST.wsx.paused && !ST._projCtx) { try { ST._dig(state, x, y, [[1]], vel, dmg, opts || {}); } catch (e) {} return; }
+					return orig.apply(this, arguments);
+				};
+				w._st = true; FH.world.excavate = w;
+			}
+			log("FH hooks: energy.consume=" + !!(FH.energy && FH.energy.consume && FH.energy.consume._st) + " world.excavate=" + !!(FH.world && FH.world.excavate && FH.world.excavate._st));
+		} catch (e) { log("installFhHooks error:", e.message); }
+	}
 	ST._frame = (state, FH) => {
+		ST._pendEn = 0; // energia narzedzia liczona per klatka (patrz installFhHooks)
+		if (FH && !ST._fhHooked) installFhHooks(FH);
 		if (!ST.state) {
 			ST.state = state;
 			if (FH) ST.FH = FH;
@@ -4252,6 +4330,7 @@
 			scanDirty(state);
 			maybeSendBatch(state);
 			sendSnapshotIfDue(state);
+			scanDataEditsIfDue(state); // 0.9.142: host: zmiana filtra przy graczu → natychmiast do klientow
 			sendResourcesIfDue(state);
 			sendEntitiesIfDue(state);
 			sendWorldItemsIfChanged(state); // szybkie dropy (G12)

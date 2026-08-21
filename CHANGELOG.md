@@ -1,3 +1,45 @@
+## 0.9.142-beta
+
+Three reports from the Workshop page, all reproduced and fixed the same day.
+
+**"Error: net.HostDirect is not a function" when hosting direct (Tobi1Kenobi).** The renderer talks to
+the network process through a small bridge appended to the game's `preload.js`. The Workshop auto-updater
+only ever *added* that bridge when it was missing - it never *replaced* an existing one - so anyone who
+installed before 0.9.79 (when direct hosting and `hostDirect` were added) kept the old bridge forever,
+even though every other file was current. The auto-updater now swaps the bridge between its markers
+exactly like the installer does, and the lobby button explains itself instead of throwing if it ever
+meets a stale bridge again.
+
+**"I can't destroy the world with the Laser when I join my friend" (Lecker Bierchen).** Every excavation
+in Sandustry carries a *profile* (`fromDrill`, `fromRocketExplosion`, `destroyNonDestructible`,
+`drillTierDamage`...) and that profile decides the material tier the dig can break - the shovel tier
+cannot touch what the laser, drill or void gun are made for. The client forwarded its digs without the
+profile, so the host replayed the laser as a shovel and hard materials stayed put. The profile now travels
+with the dig and the host replays it verbatim. Verified live: a client dig with `{fromDrill:true}` and one
+with `{fromRocketExplosion:true, drillTierDamage:3}` both arrived on the host with their options intact.
+
+Two more things the laser needed, found on the way. The laser pays 60 energy per pulse out of the
+batteries; a joining player's copy of the batteries is a mirror that could be stale, so the game could
+refuse with "Not enough power" while the host had plenty. During an active tool action the client now
+treats energy as the host's: the amount is attached to the dig and the host deducts it authoritatively -
+no power on the host, no hole (also verified live: a 60-energy dig on a world with no batteries was
+rejected with "wykop klienta odrzucony - brak energii"). And the handheld drill excavates through a
+different code path (the mutation queue, which a joining player deliberately discards), so it did nothing
+at all for a client; it is now forwarded as a 1x1 dig with its profile.
+
+**"Filters only work when host configures them" (Spiddy).** A filter's setting does not live in the
+structure's `data` - the game keeps it in a separate `structure.filter` object (filters, shakers,
+growers, filter walls all use it). The mod only ever synchronised `data`, so a filter set by a joining
+player never reached the host, and one changed by the host never reached the others. `filter` is now part
+of the structure packets in both directions: the client's near-player config scan sends it, the host
+applies it and propagates it to the simulation, and the host runs the same scan for its own filter edits
+and pushes them to everyone. Verified live both ways (client set Water, host had Water 0.8 s later; host
+set Sand, client showed Sand).
+
+While there: the snapshot "changed?" signature compared fields that the packets never contained, so it
+was constant and configuration changes coming from the host were never re-applied on a client after the
+first sight. It now hashes data+filter.
+
 ## 0.9.140-beta
 
 **Teleport zones now come from the host.** Measured: host 27 zones, client 18. Zones live in
