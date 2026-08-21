@@ -1,3 +1,13 @@
+## 0.9.139-beta
+
+**Deleting a conveyor could leave a red line behind.** The cleanup added in 0.9.136 only looked at
+foundation tiles (terrain types 15-18), but conveyors, shakers, velocity soakers and growers each lay down
+their own terrain type. Measured in a live world, identical on host and client so the garbage was real:
+132 orphaned ConveyorLeft tiles and 36 ConveyorRight tiles with no structure on them - a row of those is
+exactly the red line. The sweep now covers every terrain type that only ever comes from a structure
+(15-22, 24, 26) and still never touches natural ground like stone or ice. After the change those types
+disappear from the orphan count entirely.
+
 ## 0.9.138-beta
 
 **A teammate's build preview could stay on your screen forever, looking like garbage you could not

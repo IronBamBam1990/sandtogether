@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.138-beta";
+	const VER = "0.9.139-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2445,6 +2445,8 @@
 		const n = d && typeof d.size === "number" && d.size > 0 ? d.size | 0 : 0;
 		return n && n <= B.length - 2 ? n : B.length - 2;
 	}
+	// Typy terenu, ktore powstaja WYLACZNIE pod strukturami — tylko takie wolno sprzatac.
+	const TEREN_STRUKTUR = new Set([15, 16, 17, 18, 19, 20, 21, 22, 24, 26]);
 	function syncTankHeader(B, size) {
 		const act = size && size > 0 ? size : B.length - 2;
 		let n = 0, first = 0;
@@ -4174,7 +4176,7 @@
 							const i = x + y * W, id = ids[i];
 							if (id <= 0 || id > 1000) continue;
 							const ty = tt[id];
-							if (ty < 15 || ty > 18) continue;          // tylko kafle fundamentu/bloku
+							if (!TEREN_STRUKTUR.has(ty)) continue;      // kafle struktur: fundamenty, przenosniki, wstrzasarki...
 							try { if (SA.getAtCell(state, x, y)) continue; } catch (e) { continue; }
 							widziane.add(i);
 							const od = ST._orphanSeen.get(i);
@@ -4275,7 +4277,7 @@
 									const n = sim[xx + yy * W];
 									if (n <= 0 || n > 1000) return false;
 									const ty2 = tt[n];
-									if (ty2 < 15 || ty2 > 18) return false;
+									if (!TEREN_STRUKTUR.has(ty2)) return false;
 									try { if (SA.getAtCell(state, xx, yy)) return false; } catch (e) { return false; }
 									return true;
 								};
