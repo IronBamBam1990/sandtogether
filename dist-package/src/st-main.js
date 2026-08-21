@@ -57,12 +57,15 @@ const emitMsg = (from, obj) => sendRenderer('st:msg', { from, msg: obj });
 // Minimalny WebSocket (RFC6455) — serwer i klient na surowym net, bez zależności
 // ---------------------------------------------------------------------------
 function wsEncodeFrame(payload, mask) {
-  const data = Buffer.from(payload, 'utf8');
+  // 0.9.111: ta sama funkcja obsluguje teraz ramki tekstowe (opcode 1) i binarne (opcode 2).
+  const isBin = Buffer.isBuffer(payload) || payload instanceof Uint8Array;
+  const data = isBin ? (Buffer.isBuffer(payload) ? payload : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength)) : Buffer.from(payload, "utf8");
+  const op = isBin ? 0x82 : 0x81;
   const len = data.length;
   let header;
-  if (len < 126) header = Buffer.from([0x81, len | (mask ? 0x80 : 0)]);
-  else if (len < 65536) { header = Buffer.alloc(4); header[0] = 0x81; header[1] = 126 | (mask ? 0x80 : 0); header.writeUInt16BE(len, 2); }
-  else { header = Buffer.alloc(10); header[0] = 0x81; header[1] = 127 | (mask ? 0x80 : 0); header.writeBigUInt64BE(BigInt(len), 2); }
+  if (len < 126) header = Buffer.from([op, len | (mask ? 0x80 : 0)]);
+  else if (len < 65536) { header = Buffer.alloc(4); header[0] = op; header[1] = 126 | (mask ? 0x80 : 0); header.writeUInt16BE(len, 2); }
+  else { header = Buffer.alloc(10); header[0] = op; header[1] = 127 | (mask ? 0x80 : 0); header.writeBigUInt64BE(BigInt(len), 2); }
   if (!mask) return Buffer.concat([header, data]);
   const key = crypto.randomBytes(4);
   const masked = Buffer.from(data);
@@ -71,7 +74,7 @@ function wsEncodeFrame(payload, mask) {
 }
 
 // Parser strumienia ramek; onText(str), zwraca funkcję feed(chunk)
-function wsFrameParser(sock, onText) {
+function wsFrameParser(sock, onText, onBinary) {
   let buf = Buffer.alloc(0);
   return (chunk) => {
     buf = Buffer.concat([buf, chunk]);
@@ -93,6 +96,8 @@ function wsFrameParser(sock, onText) {
       if (opcode === 8) { try { sock.end(); } catch (e) {} return; }
       if (opcode === 9) { try { sock.write(Buffer.concat([Buffer.from([0x8a, payload.length]), payload])); } catch (e) {} continue; }
       if (opcode === 1 && fin) onText(payload.toString('utf8'));
+      // 0.9.111: ramka binarna = paczka swiata bez base64 (kopiujemy, bo bufor parsera jest wspoldzielony)
+      if (opcode === 2 && fin && onBinary) onBinary(Buffer.from(payload));
       // fragmentacja i binarne pomijamy — protokół używa krótkich ramek tekstowych
     }
   };
@@ -118,7 +123,7 @@ function startWsServer(port) {
       upgraded = true;
       const peer = { id: peerId, kind: 'ws', sock, nick: '?' };
       S.peers.set(peerId, peer);
-      const feed = wsFrameParser(sock, (text) => handleIncoming(peerId, text));
+      const feed = wsFrameParser(sock, (text) => handleIncoming(peerId, text), (bin) => handleIncomingBin(peerId, bin));
       const rest = headerBuf.subarray(idx + 4);
       sock.on('data', feed);
       if (rest.length) feed(rest);
@@ -153,7 +158,7 @@ function joinWs(host, port, _retry) {
     if (!/ 101 /.test(headerBuf.toString('utf8', 0, idx))) { emitEvent('error', { where: 'ws-join', message: 'handshake failed' }); sock.end(); return; }
     upgraded = true;
     S.peers.set('host', { id: 'host', kind: 'ws', sock, nick: 'Host' });
-    const feed = wsFrameParser(sock, (text) => handleIncoming('host', text));
+    const feed = wsFrameParser(sock, (text) => handleIncoming('host', text), (bin) => handleIncomingBin('host', bin));
     const rest = headerBuf.subarray(idx + 4);
     sock.on('data', feed);
     if (rest.length) feed(rest);
@@ -354,16 +359,29 @@ function handleIncoming(peerId, text, steamSid) {
   }
 }
 
-function sendToPeer(peer, obj) {
-  const text = JSON.stringify(obj);
+// 0.9.111: pakiet binarny = [2B dlugosc naglowka JSON][naglowek][dane]. Naglowek trafia do renderera
+// jako zwykla wiadomosc, dane jako Uint8Array obok — bez zadnej konwersji tekstowej po drodze.
+function handleIncomingBin(peerId, buf) {
   try {
-    if (peer.kind === 'ws') peer.sock.write(wsEncodeFrame(text, S.role === 'client'));
+    if (!buf || buf.length < 2) return;
+    const hl = buf.readUInt16BE(0);
+    if (buf.length < 2 + hl) return;
+    const obj = JSON.parse(buf.subarray(2, 2 + hl).toString("utf8"));
+    sendRenderer("st:msg", { from: peerId, msg: obj, bin: buf.subarray(2 + hl) });
+  } catch (e) { log("bin frame blad:", e.message); }
+}
+function sendToPeer(peer, obj) {
+  const isBin = Buffer.isBuffer(obj) || obj instanceof Uint8Array;
+  const text = isBin ? null : JSON.stringify(obj);
+  try {
+    if (peer.kind === 'ws') peer.sock.write(wsEncodeFrame(isBin ? obj : text, S.role === 'client'));
     else if (peer.kind === 'steam') {
       // ping, pong and wcack MUST bypass the reliable channel. Steam's reliable channel is ORDERED, so
       // neither can overtake a backlog of world packets: the HUD would report send queue depth instead of
       // RTT, and the mirror ack would feed the congestion controller state from tens of seconds ago,
       // which defeats the whole point of measuring. Losing one is harmless, ping goes out every 1 s and
       // wcack 10x per second, and both carry absolute state rather than a delta.
+      if (isBin) return; // binarne tylko po WS (LAN/direct); Steam trzyma sciezke tekstowa
       const reliable = obj.t !== 'pos' && obj.t !== 'ping' && obj.t !== 'pong' && obj.t !== 'wcack';
       S.steam.networking.sendP2PPacket(BigInt(peer.steamId64), reliable ? S.steam.networking.SendType.Reliable : S.steam.networking.SendType.UnreliableNoDelay, Buffer.from(text, 'utf8'));
     }

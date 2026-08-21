@@ -1,3 +1,27 @@
+## 0.9.120-beta
+
+**Fixed a deadlock that froze the client world.** When the client renderer restarted (which the mod itself
+triggers when auto-loading the host world), its ack counter went back to zero while the host was at packet
+2651. The host read that as "client is 26 batches behind", paused sending, and the client could never ack
+because nothing arrived. Both sides waited forever. Hello/resync now reset the ack baseline, and the host
+self-heals if acks stop advancing for 8 s.
+
+**World packets now travel as binary frames instead of base64 inside JSON.** Same data, 25% fewer bytes, and
+no encode/decode work on either side (used on LAN/direct links between peers on the same mod version; Steam
+relay keeps the text path).
+
+**Large packets no longer freeze the client.** Incoming world data is applied in time-sliced portions across
+frames instead of one blocking pass — worst client frame dropped from 237 ms to ~16 ms while throughput went
+up, not down.
+
+**Grabber on the client collects as much as it does for the host.** The bridge scanned a fixed 9x9 area and
+took at most 48 items; the game actually harvests into a 20x20 tank grid where each slot is bound to a
+position relative to the cursor. The client now sends its free-slot map, the host harvests exactly into those
+slots (closest first), and pulses run every 33 ms instead of every 100 ms.
+
+**Client no longer strands itself in the wrong world.** If the mirror never starts and the client is in a
+different world than the host, it loads the host save instead of waiting for a manual Load Game.
+
 # Changelog — SandTogether (Sandustry co-op mod)
 
 *Translated from the original Polish development journal.*
