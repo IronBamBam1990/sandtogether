@@ -1,3 +1,26 @@
+## 0.9.131-beta
+
+**Tools worked once and then died on the client - digging in particular.** Weapon cooldowns are game-time
+stamps compared against `store.meta.time`, and every world has its own clock. The client was handed an
+inventory restored from local storage, so it also inherited cooldown stamps from a different session:
+measured `meta.time` 1,043,848 against a shovel cooldown stamped 3,106,579 - half an hour in the future,
+so "667 ms have passed" was never true again. Future-dated cooldowns are now straightened out on world
+load and on a periodic check, and the local profile no longer restores the inventory at all: progression
+(tools, upgrades, buildings) belongs to the host world the client loads, and only the player position is
+kept locally.
+
+**Half the screen turned yellow on the client with the shovel out.** Not world data - the mirror matched
+the host byte for byte - but the pause mechanism itself. The mod stopped the client with the manager
+`paused` flag, which also gates work the renderer needs every frame. Clearing that flag while holding the
+simulation at speed 0 made the artifact vanish instantly with the sand still frozen, so the client now
+brakes with simulation speed instead. The same change removes the post-autosave desync for free: saving
+toggles the `paused` flag and the game clears it when the save finishes, but nothing in the game touches
+the speed multiplier.
+
+**Grabber shaking works on the client.** Shaking is checked before harvesting in the game and takes
+priority, and the tutorial has you hold the button while shaking - so the mod's harvest hook swallowed it
+and wet sand never turned into gold or residue.
+
 ## 0.9.127-beta
 
 **No more desync after an automatic save.** The game pauses the simulation worker while saving and resumes

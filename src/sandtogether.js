@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.127-beta";
+	const VER = "0.9.131-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -358,7 +358,7 @@
 			const p = state.store.player;
 			if (!p || typeof p.x !== "number") return;
 			const prof = { x: p.x, y: p.y, t: Date.now() };
-			try { if (Array.isArray(p.inventory)) prof.inv = JSON.parse(JSON.stringify(p.inventory)); } catch (e) {}
+			// 0.9.131: ekwipunku NIE zapisujemy — nalezy do swiata hosta, nie do lokalnego profilu
 			localStorage.setItem("st_prof_" + ST._trustedWid, JSON.stringify(prof));
 		} catch (e) {}
 	}
@@ -374,11 +374,11 @@
 				if (p.velocity) { p.velocity.x = 0; p.velocity.y = 0; }
 				const pp = arr(state.shared.playerPos); if (pp && pp.length >= 2) { pp[0] = prof.x; pp[1] = prof.y; }
 			}
-			// ekwipunek: przywracamy tylko gdy struktura wygląda zdrowo (plain items z id)
-			if (Array.isArray(prof.inv) && Array.isArray(p.inventory) && prof.inv.every((i) => i && typeof i === "object")) {
-				try { p.inventory.length = 0; for (const it of prof.inv) p.inventory.push(it); } catch (e) {}
-			}
-			log("Profil klienta przywrócony dla świata", wid, "(pozycja " + Math.round(prof.x) + "," + Math.round(prof.y) + (prof.inv ? " + ekwipunek)" : ")"));
+			// 0.9.131: ekwipunku NIE przywracamy. Postep (narzedzia, ulepszenia, budynki) jest wlasnoscia
+			// swiata hosta — klient dostaje go z zapisu. Podmiana na lokalna kopie dawala narzedzia
+			// z poprzedniej gry i cooldowny z obcego zegara (blokada narzedzi na zawsze).
+			if (prof.inv) { delete prof.inv; try { localStorage.setItem("st_prof_" + wid, JSON.stringify(prof)); } catch (e) {} log("Profil: usuwam zapisany ekwipunek — postep bierzemy ze swiata hosta"); }
+			log("Profil klienta przywrócony dla świata", wid, "(pozycja " + Math.round(prof.x) + "," + Math.round(prof.y) + ")");
 		} catch (e) {}
 	}
 
@@ -1270,7 +1270,10 @@
 		if (!ST.state || ST.wsx.paused === paused) return;
 		const mgr = managerWorker(ST.state);
 		if (!mgr) { log("BŁĄD: brak manager workera do pauzy"); return; }
-		mgr.postMessage([54, paused]); // SetPaused — tylko manager; session.paused zostaje false => render działa
+		// 0.9.129: hamujemy PREDKOSCIA (68), nie flaga pauzy (54) — flaga psuje renderowanie u klienta
+		// i jest ruszana przez gre przy zapisie. Flage czyscimy przy wznawianiu, gdyby zostala po starszej wersji.
+		mgr.postMessage([68, paused ? 0 : 1]);
+		if (!paused) mgr.postMessage([54, false]);
 		ST.wsx.paused = paused;
 		log("Symulacja klienta:", paused ? "ZAPAUZOWANA (lustro hosta)" : "wznowiona");
 	}
@@ -1454,6 +1457,7 @@
 		if (applied > 0 && !w.everApplied) {
 			w.everApplied = true; log("Pierwsze paczki świata zastosowane — lustro działa"); setStatus(t("players", ST.peers.size + 1));
 			techRepair(state, "client"); // zbrickowane flagi w save od hosta (0.9.71)
+			fixFutureCooldowns(state, "start lustra");
 			profileRestore(state, msg.wid || ST._trustedWid); // wróć tam, gdzie skończyłeś w TYM świecie (G7-lite)
 			// AUTO-RESYNC (fix TCentraL "big map"): initial flood (enqueueFullWorld po peer-hello) leciał
 			// gdy klient był jeszcze w MENU/loadzie i był DROPOWANY, a rowH hosta uważa go za dostarczony
@@ -1952,6 +1956,24 @@
 	// z defem OKROJONYM do brakujących unlocks (bez duplikatów itemów; `ae` budynków i tak jest idempotentne).
 	// unlockTech nie sprawdza flagi "już zbadane" (tylko lockedTechs/tutorial/wymagania), więc można.
 	// Idempotentne. Host/solo: raz na wejście w świat; klient: po starcie lustra + throttle w streamie th.
+	// Znacznik cooldownu z PRZYSZLOSCI blokuje narzedzie na zawsze (patrz 0.9.130). Prostujemy wszystkie:
+	// zdolnosci przedmiotow, cooldowny gracza i reload amunicji.
+	function fixFutureCooldowns(state, why) {
+		try {
+			const now = state.store.meta && state.store.meta.time;
+			if (typeof now !== "number") return 0;
+			let n = 0;
+			const prostuj = (cd) => { if (cd && typeof cd.last === "number" && cd.last > now) { cd.last = 0; n++; } };
+			for (const it of state.store.player.inventory || []) {
+				for (const ab of it.abilities || []) { prostuj(ab.cooldown); if (ab.ammo) prostuj(ab.ammo.reload); }
+				if (it.data && it.data.cooldown) prostuj(it.data.cooldown);
+			}
+			const pc = state.store.player.cooldowns;
+			if (pc) for (const k of Object.keys(pc)) prostuj(pc[k]);
+			if (n) log("NAPRAWA: wyprostowano", n, "cooldownow ustawionych w przyszlosci (" + why + ") — narzedzia byly zablokowane");
+			return n;
+		} catch (e) { return 0; }
+	}
 	function techRepair(state, who) {
 		let fixed = 0;
 		try {
@@ -2191,6 +2213,17 @@
 		try {
 			if (!isClientSync() || !ST.wsx.paused) return false; // host/offline lub klient poza światem hosta
 			const B = tool && tool.data && tool.data.matrix;
+			// POTRZĄSANIE (0.9.128): w grze stoi PRZED zbieraniem i ma pierwszeństwo — to nim zamienia się
+			// mokry piasek w złoto (w tanku, lokalnie) i wyrzuca odpad do świata (forward przez _shakeRes).
+			// Przechwytywanie go przez nas oznaczało, że u klienta potrząsanie nic nie dawało.
+			try {
+				const mouse = state.session && state.session.input && state.session.input.mouse;
+				if (mouse && mouse.shaken) {
+					let on = true;
+					try { const st = ST.FH && ST.FH.storage && ST.FH.storage.ensure ? ST.FH.storage.ensure(state, "grabberSizeScroll") : null; if (st && st.shakingEnabled === false) on = false; } catch (e) {}
+					if (on) return false; // oddaj sterowanie grze — ona zrobi to poprawnie
+				}
+			} catch (e) {}
 			if (!B) return false;
 			// 0.9.121: zawartość tanku NIE kończy zbierania. W grze liczy się TYLKO trzymanie przycisku
 			// (action.state[Active]) — dosypujemy do wolnych slotów aż do pełna. Wcześniejszy skrót
@@ -4158,6 +4191,8 @@
 				} catch (e) { log("demolish-dobicie error:", e.message); }
 			}
 		}
+		// 0.9.130: znaczniki cooldownow potrafia trafic "w przyszlosc" po kazdym imporcie swiata/profilu
+		if (now - (ST._cdFixT || 0) > 5000) { ST._cdFixT = now; fixFutureCooldowns(state, "kontrola cykliczna"); }
 		if (isClientSync()) {
 			// Heartbeat re-pauzy (fix G1): ESC-menu gry śle własne SetPaused(false) przy zamknięciu i cicho
 			// wznawiało symulację klienta (nasza flaga wciąż true → setClientPaused nie re-pauzowało) →
@@ -4169,11 +4204,11 @@
 				if (saving) {
 					ST._wasSaving = true;
 					const mgr = managerWorker(state);
-					if (mgr) try { mgr.postMessage([54, true]); } catch (e) {}   // trzymaj pauze przez caly zapis
+					if (mgr) try { mgr.postMessage([68, 0]); } catch (e) {}   // trzymaj pauze przez caly zapis
 				} else if (ST._wasSaving) {
 					ST._wasSaving = false;
 					const mgr = managerWorker(state);
-					if (mgr) try { mgr.postMessage([54, true]); } catch (e) {}   // gra wlasnie wznowila — pauzuj natychmiast
+					if (mgr) try { mgr.postMessage([68, 0]); } catch (e) {}   // gra wlasnie wznowila — pauzuj natychmiast
 					// i popros hosta o odswiezenie DOKLADNIE tych chunkow, ktore mogla ruszyc nasza symulacja
 					try {
 						const flags = state.shared.sim && state.shared.sim.chunkShouldUpdate;
@@ -4189,7 +4224,7 @@
 			if (ST.wsx.paused && now - (ST._rePauseT || 0) > 2000) {
 				ST._rePauseT = now;
 				const mgr = managerWorker(state);
-				if (mgr) try { mgr.postMessage([54, true]); } catch (e) {}
+				if (mgr) try { mgr.postMessage([68, 0]); } catch (e) {}
 			}
 			// Mirror ack at 10 Hz, matching the host's batch rate. The host derives its lag from this and
 			// throttles itself. Cheap (~20 B) and sent unordered, so it never queues behind world packets.
