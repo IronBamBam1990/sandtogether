@@ -1,4 +1,9 @@
 ## 0.9.132-beta
+Credit where it is due: **Cr0ss0vr** reported this as issue #12 and sent PR #13 ("allow building unlock
+state to propagate"), which merged the host's unlocked-buildings list into the client. I closed that PR as
+superseded by the 0.9.71 research fix - too early, because the symptom he described was still real. His
+report is what kept the thread alive until the actual cause showed up: the client was never in the host's
+world at all.
 
 **The client kept its own progression after joining - tools, research and buildings from its previous
 game.** The client received the host save but the reload-loop guard skipped loading it, so the save was
