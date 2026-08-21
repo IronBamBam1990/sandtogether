@@ -36,9 +36,9 @@ From then on the mod updates itself at every launch, so both players always matc
 [h2]How to play[/h2]
 Main menu → [b]Multiplayer[/b] → pick how you want to connect:
 [list]
-[*] [b]Host (Internet — direct)[/b] — recommended. The mod opens the port on your router by itself (UPnP) and shows your address [b]masked[/b], with show/hide and a copy button that never puts it on screen — safe to stream. Your friend pastes that address into Join. This is the fastest route: it does NOT go through Steam relay servers, which throttle bandwidth and add latency.
+[*] [b]Host (Internet — direct)[/b] — recommended. The mod opens the port on your router by itself (UPnP) and shows your address [b]masked[/b], with show/hide and a copy button that never puts it on screen — safe to stream. Your friend pastes that address into [b]Join by address[/b] (the same button also covers LAN and VPN). This is the fastest route: it does NOT go through Steam relay servers, which throttle bandwidth and add latency.
 [*] [b]Host (Steam)[/b] + [b]Invite[/b] — zero setup, invite straight from your Steam friend list.
-[*] [b]Host LAN[/b] / [b]Join[/b] — same network, or a VPN mesh like Tailscale.
+[*] [b]Host LAN[/b] / [b]Join by address[/b] — same network, or a VPN mesh like Tailscale. One warning: from inside your own network you cannot reach your own public address — most routers refuse it — so when you are both on the same network, use the local 192.168.x.x address.
 [*] [b]Join by Lobby ID[/b] — paste an ID from the clipboard.
 [/list]
 Then press [b]Load last save & PLAY[/b] (or pick a save) — your world is sent to everyone who joins, automatically. Set your nick in the lobby so your friends see who is who.
@@ -104,7 +104,7 @@ Full source on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]githu
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.140-beta - TELEPORT ZONES NOW COME FROM THE HOST. A joining player walks on the host world but keeps their own, and teleport zones are appended as each side reveals prefabs - measured 27 zones on the host against 18 on the client, which means a passage could simply not work for you, or lead somewhere else than it does for your friend. The host now sends its zone list whenever it changes and the client rebuilds the entry cells the game checks when you step into a zone. Verified by cutting a client list down to 5 by hand and watching the host restore all 45 within seconds. Previous build fixed red lines left behind when deleting conveyors: those are orphaned terrain tiles, and the cleanup now covers every terrain type that only comes from a structure - foundations, sliding blocks, conveyors, shakers, velocity soakers, growers - while never touching natural ground. For the record, one thing that looks like a bug is not one: a client shows no spark, light or laser effects because those are spawned by the simulation, which is deliberately stopped on the client so the host stays the single source of truth for the world.',
+    changeNote: 'v0.9.141-beta - JOINING AN INTERNET HOST IS NO LONGER HIDDEN BEHIND A BUTTON LABELLED LAN. Hosting over the internet had its own clearly named option, but the only way to join was a button called Join LAN, described as connecting to a LAN or VPN host - so nobody could guess that a friend pastes their public address there. Same transport, clearer name: it is now Join by address, and it covers an internet host, a LAN and a VPN alike. Also in this build, teleport zones now come from the host: measured 27 zones on the host against 18 on the client, which meant a passage could fail to work for the joining player or lead somewhere else than it did for the host.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

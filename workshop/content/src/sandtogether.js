@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.140-beta";
+	const VER = "0.9.141-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -38,7 +38,7 @@
 	const STRINGS = {
 		en: {
 			offline: "offline", btn_host: "Host (Steam)", btn_invite: "Invite", btn_host_lan: "Host LAN",
-			btn_join_lan: "Join LAN", btn_connect: "Connect", btn_stop: "Stop", btn_send_world: "Send world", btn_resync: "Resync",
+			btn_join_lan: "Join by address", btn_connect: "Connect", btn_stop: "Stop", btn_send_world: "Send world", btn_resync: "Resync",
 			host_paused: "Host paused (menu) — world frozen, will resume automatically", sync_stalled: "No world data from host for {0}s…",
 			reconnecting: "Connection lost — reconnecting (attempt {0}/5)…",
 			left_to_menu: "Left the co-op session (returned to title screen)",
@@ -74,7 +74,7 @@
 			lb_title: "MULTIPLAYER", lb_sub: "SandTogether co-op — up to 4 players",
 			lb_host_steam_d: "Play over the internet — invite friends from your Steam friend list",
 			lb_host_lan_d: "Local network or VPN (Tailscale, Radmin...)",
-			lb_join_lan_d: "Connect to a LAN/VPN host by address",
+			lb_join_lan_d: "Paste the address your friend gave you — works for an internet host, a LAN or a VPN",
 			lb_join_id_d: "Join with a Lobby ID copied to the clipboard",
 			lb_close: "✕", lb_disconnect: "Disconnect", lb_players: "Players", lb_you: "you",
 			lb_id: "Lobby ID", lb_copy: "copy", lb_copied: "copied!", lb_invite: "Invite a friend",
@@ -101,7 +101,7 @@
 		},
 		pl: {
 			offline: "offline", btn_host: "Host (Steam)", btn_invite: "Zaproś", btn_host_lan: "Host LAN",
-			btn_join_lan: "Dołącz LAN", btn_connect: "Połącz", btn_stop: "Stop", btn_send_world: "Wyślij świat", btn_resync: "Resync",
+			btn_join_lan: "Dołącz po adresie", btn_connect: "Połącz", btn_stop: "Stop", btn_send_world: "Wyślij świat", btn_resync: "Resync",
 			host_paused: "Host w pauzie (menu) — świat zamrożony, wznowi się sam", sync_stalled: "Brak danych świata od hosta od {0}s…",
 			reconnecting: "Zerwane połączenie — łączę ponownie (próba {0}/5)…",
 			left_to_menu: "Opuszczono sesję co-op (powrót do menu głównego)",
@@ -137,7 +137,7 @@
 			lb_title: "MULTIPLAYER", lb_sub: "SandTogether co-op — do 4 graczy",
 			lb_host_steam_d: "Graj przez internet — zaproś znajomych z listy Steam",
 			lb_host_lan_d: "Sieć lokalna albo VPN (Tailscale, Radmin...)",
-			lb_join_lan_d: "Połącz się z hostem LAN/VPN po adresie",
+			lb_join_lan_d: "Wklej adres, który dostałeś od kolegi — działa dla hosta z internetu, LAN i VPN",
 			lb_join_id_d: "Dołącz po Lobby ID skopiowanym do schowka",
 			lb_close: "✕", lb_disconnect: "Rozłącz", lb_players: "Gracze", lb_you: "ty",
 			lb_id: "Lobby ID", lb_copy: "kopiuj", lb_copied: "skopiowane!", lb_invite: "Zaproś znajomego",
@@ -164,7 +164,7 @@
 		},
 		zh: {
 			offline: "离线", btn_host: "创建房间 (Steam)", btn_invite: "邀请", btn_host_lan: "局域网主机",
-			btn_join_lan: "加入局域网", btn_connect: "连接", btn_stop: "停止", btn_send_world: "发送世界", btn_resync: "重新同步",
+			btn_join_lan: "按地址加入", btn_connect: "连接", btn_stop: "停止", btn_send_world: "发送世界", btn_resync: "重新同步",
 			host_paused: "房主已暂停(菜单中)——世界已冻结,将自动恢复", sync_stalled: "已 {0} 秒未收到房主的世界数据…",
 			reconnecting: "连接已断开——正在重新连接(第 {0}/5 次尝试)…",
 			left_to_menu: "已离开合作会话(已返回主菜单)",
@@ -199,7 +199,7 @@
 			lb_title: "多人游戏", lb_sub: "SandTogether 合作模式——最多4名玩家",
 			lb_host_steam_d: "通过互联网游玩——从Steam好友列表邀请朋友",
 			lb_host_lan_d: "局域网或VPN(Tailscale、Radmin等)",
-			lb_join_lan_d: "通过地址连接局域网/VPN房主",
+			lb_join_lan_d: "粘贴好友给你的地址 — 互联网房主、局域网和 VPN 均可",
 			lb_join_id_d: "使用复制到剪贴板的房间ID加入",
 			lb_close: "✕", lb_disconnect: "断开连接", lb_players: "玩家", lb_you: "你",
 			lb_id: "房间ID", lb_copy: "复制", lb_copied: "已复制!", lb_invite: "邀请朋友",
