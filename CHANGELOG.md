@@ -1,3 +1,14 @@
+## 0.9.127-beta
+
+**No more desync after an automatic save.** The game pauses the simulation worker while saving and resumes
+it when the save finishes. On a client that simulation must stay paused - it is the whole basis of the
+mirror - but the mod only re-asserted the pause on a 2 second heartbeat, so after every autosave the client
+simulated its own sand for up to two seconds. Worse, those two seconds stayed in the mirror permanently:
+the host keeps per-row hashes and believed the client already had current data, so it never resent those
+rows. The client now holds the pause for the whole save and re-asserts it the moment the save ends, then
+sends the host a map of the chunks its simulation could have touched; the host drops their hashes and
+streams them again.
+
 ## 0.9.126-beta
 
 **The client grabber now behaves like the host one.** Root cause: the game allocates the grabber tank

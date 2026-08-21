@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.126-beta";
+	const VER = "0.9.127-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -723,6 +723,17 @@
 		} else if (msg.t === "grabRef") {
 			// REFUND odkładania (R5): host nie zdołał położyć elementu (komórka zajęta) → oddaj do tanku
 			if (ST.net.role === "client" && typeof msg.et === "number" && msg.et > 0) clientFillGrabTank([msg.et], null);
+		} else if (msg.t === "redirty") {
+			// Klient przez chwile liczyl wlasna symulacje (zapis gry wznowil mu watek) — te chunki moga
+			// sie roznic od naszych. Kasujemy dla nich hasze wierszy, zeby poleci ponownie w calosci.
+			if (ST.net.role !== "client" && msg.m) {
+				try {
+					const m = b64dec(msg.m), total = msg.n | 0;
+					let n = 0;
+					for (let i = 0; i < total; i++) if (m[i >> 3] & (1 << (i & 7))) { if (ST.wsx.rowH) ST.wsx.rowH.delete(i); ST.wsx.pending.add(i); n++; }
+					if (n) log("redirty od", from, "-> odswiezam", n, "chunkow (klient symulowal po zapisie gry)");
+				} catch (e) { log("redirty blad:", e.message); }
+			}
 		} else if (msg.t === "resync") {
 			if (ST.net.role !== "client") resetAckBaseline(from, "resync od gracza");
 			if (ST.net.role === "host") { log("resync od", from, "-> pełny świat do kolejki"); resetAckBaseline(null, "powitanie/pelny swiat"); enqueueFullWorld(); ST._lastSnap = 0; ST._snapForce = true; }
@@ -4151,6 +4162,30 @@
 			// Heartbeat re-pauzy (fix G1): ESC-menu gry śle własne SetPaused(false) przy zamknięciu i cicho
 			// wznawiało symulację klienta (nasza flaga wciąż true → setClientPaused nie re-pauzowało) →
 			// podwójna symulacja walczyła z lustrem = masywny desync. Wysyłamy [54,true] co 2s — idempotentne.
+			// ZAPIS GRY (0.9.127): gra pauzuje watek symulacji na czas zapisu i po nim go WZNAWIA.
+			// Czekanie na heartbeat oznaczaloby do 2 s wlasnej symulacji u klienta = trwaly desync.
+			try {
+				const saving = !!(state.session && state.session.saving);
+				if (saving) {
+					ST._wasSaving = true;
+					const mgr = managerWorker(state);
+					if (mgr) try { mgr.postMessage([54, true]); } catch (e) {}   // trzymaj pauze przez caly zapis
+				} else if (ST._wasSaving) {
+					ST._wasSaving = false;
+					const mgr = managerWorker(state);
+					if (mgr) try { mgr.postMessage([54, true]); } catch (e) {}   // gra wlasnie wznowila — pauzuj natychmiast
+					// i popros hosta o odswiezenie DOKLADNIE tych chunkow, ktore mogla ruszyc nasza symulacja
+					try {
+						const flags = state.shared.sim && state.shared.sim.chunkShouldUpdate;
+						if (flags && flags.length) {
+							const m = new Uint8Array((flags.length + 7) >> 3);
+							let n = 0;
+							for (let i = 0; i < flags.length; i++) if (flags[i]) { m[i >> 3] |= 1 << (i & 7); n++; }
+							if (n) { net.send({ t: "redirty", m: b64enc(m), n: flags.length }); log("Po zapisie gry: prosze hosta o odswiezenie", n, "chunkow, ktore ruszyla moja symulacja"); }
+						}
+					} catch (e) {}
+				}
+			} catch (e) {}
 			if (ST.wsx.paused && now - (ST._rePauseT || 0) > 2000) {
 				ST._rePauseT = now;
 				const mgr = managerWorker(state);
