@@ -26,7 +26,7 @@ Sandustry has no mod loader yet, so after subscribing you run the installer [b]o
 [olist]
 [*] Let Steam finish downloading the mod.
 [*] Open the mod folder: right-click Sandustry → Manage → Browse local files, go up one level, then open steamapps\\workshop\\content\\2764460\\3784750764\\ (or search your PC for "SandTogether").
-[*] [b]Windows:[/b] right-click [b]install.bat[/b] → Run.  [b]macOS:[/b] double-click [b]install.command[/b], then launch via SandTogether-Launch.command or Steam.  [b]Linux:[/b] in a terminal run [b]bash install-linux.sh[/b].
+[*] [b]Windows:[/b] right-click [b]install.bat[/b] → Run.  [b]macOS:[/b] double-click [b]install.command[/b], then launch via SandTogether-Launch.command or Steam.  [b]Linux:[/b] open a terminal [i]in the mod folder[/i] (right-click → Open in terminal) and run [b]bash install-linux.sh[/b] — running it from another folder gives "file not found"; Flatpak Steam or a second library: [b]bash install-linux.sh /path/to/steamapps/common/Sandustry[/b].
 [*] Launch the game. A [b]Multiplayer[/b] button appears in the main menu, and a SandTogether panel in the top-right corner.
 [/olist]
 From then on the mod updates itself at every launch, so both players always match.
