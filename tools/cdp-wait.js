@@ -33,10 +33,10 @@ async function evalOnce() {
   while (Date.now() - t0 < timeoutMs) {
     try {
       const v = await evalOnce();
-      if (v) { console.log(typeof v === 'string' ? v : JSON.stringify(v)); process.exit(0); }
+      if (v) { console.log(typeof v === 'string' ? v : JSON.stringify(v)); process.exitCode = 0; return; }
     } catch (e) { lastErr = e.message; }
     await new Promise((r) => setTimeout(r, intervalMs));
   }
   console.error('TIMEOUT po ' + timeoutMs + ' ms' + (lastErr ? ' (ostatni blad: ' + lastErr + ')' : ''));
-  process.exit(1);
+  process.exitCode = 1;
 })();

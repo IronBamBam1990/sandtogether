@@ -1,3 +1,26 @@
+## 0.9.143-beta
+
+**Big-factory stall introduced in 0.9.142 - fixed.** Measured on a 90,000-structure world: every structure
+snapshot froze the joining player for ~2 s (worst 5.4 s), and the client eventually dropped. Cause: 0.9.142
+started re-applying host data changes, and for each changed structure it called the game's structure
+update, which looks the structure up with a linear scan over the whole store - thousands of changes per
+snapshot times 90,000 entries. The client now updates data/filter by plain assignment and calls the game's
+update only when a tile mode (queued/frame) actually changed. A second leak closed on the way: the
+deferred remainder of a snapshot used a different signature formula than the main loop, so it was rebuilt
+forever; both now share one.
+
+**Conveyors placed over blocks (hunters01).** A structure built where terrain already is gets the game's
+*queued* state: it sits on top, the blocks stay, nothing is carved out. The joining player's placement
+arrived at the host without that information and was forced to "available", so the host built a full
+conveyor and carved the stone away (and stone is otherwise unbreakable there). The client now forwards
+the clearance it validated with, the host builds with it (queued stays queued, terrain untouched), and the
+queued/frame flags travel in structure packets so a conveyor the host lays over blocks is queued on the
+client too. Verified live: client placed Conveyor Mk.2 inside stone, host kept terrain 42 (stone) and the
+structure flagged queued; host-placed one arrived flagged on the client.
+
+Installer/auto-updater note: the place hook in `bundle.js` gained an argument; patches.json carries an
+upgrade variant so already-patched installs are migrated in place (one more launch).
+
 ## 0.9.142-beta
 
 Three reports from the Workshop page, all reproduced and fixed the same day.

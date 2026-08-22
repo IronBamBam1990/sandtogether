@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.142-beta";
+	const VER = "0.9.143-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1505,8 +1505,13 @@
 	// ------------------------------------------------------------------
 	// 0.9.142: structure.filter (filtry, shakery, growery, filter wall) tez jedzie po sieci — wczesniej tylko data,
 	// wiec filtr ustawiony przez klienta nigdy nie docieral do hosta (i odwrotnie): "filters only work when host configures them".
-	const slimStruct = (s) => { const o = { type: s.type, x: s.x, y: s.y, data: s.data }; if (s.filter != null) o.f = s.filter; return o; };
-	const structSig = (s) => { try { return JSON.stringify([s.data == null ? null : s.data, s.filter == null ? null : s.filter]); } catch (e) { return ""; } };
+	// 0.9.143: queued (struktura "w kolejce" — postawiona NAD terenem, bloki zostaja, np. przenosnik Mk2 nad kamieniem) i frame
+	// (rama fundamentu) tez jada po sieci — bez nich klient budowal wszystko jako PELNE (kasuje teren / inna kolizja).
+	const slimStruct = (s) => { const o = { type: s.type, x: s.x, y: s.y, data: s.data }; if (s.filter != null) o.f = s.filter; if (s.queued) o.q = 1; if (s.frame) o.fr = 1; return o; };
+	const structSig = (s) => { try { return JSON.stringify([s.data == null ? null : s.data, s.filter == null ? null : s.filter, s.queued ? 1 : 0, s.frame ? 1 : 0]); } catch (e) { return ""; } };
+	// sygnatura struktury Z PAKIETU (slim: data/f/q/fr) — JEDNA dla petli snapshotu i dla dokanczania odlozonych
+	// (0.9.143: rozne wzory w obu miejscach = wieczne przebudowy odlozonej reszty przy 90 tys. struktur)
+	const snapSig = (s) => (s.data != null ? JSON.stringify(s.data) : "") + "|" + (s.f != null ? JSON.stringify(s.f) : "") + "|" + (s.q ? 1 : 0) + (s.fr ? 1 : 0);
 	const structKey = (s) => s.type + "@" + s.x + "," + s.y;
 	// KONFIG MASZYN przez klienta (G5b): edycje structure.data w UI maszyn nie mają eventu — wykrywamy
 	// je diffem JSON w POBLIŻU gracza (tam się klika; pełny skan tysięcy struktur co klatkę = za drogo).
@@ -1533,11 +1538,10 @@
 				if (role === "host") {
 					// 0.9.142: HOST rozsyla tylko zmiany FILTRA (data maszyn hosta zmienia sie co chwila — to idzie snapshotem);
 					// bez tego klient widzial stary filtr po edycji u hosta
-					let pf = null; try { pf = JSON.parse(prev)[1]; } catch (e) {}
-					const cf = s.filter == null ? null : s.filter;
-					if (JSON.stringify(pf) === JSON.stringify(cf)) continue;
+					let pv = null, cv = null; try { pv = JSON.parse(prev); cv = JSON.parse(cur); } catch (e) {}
+					if (!pv || !cv || JSON.stringify(pv.slice(1)) === JSON.stringify(cv.slice(1))) continue; // [1..] = filtr, queued, frame (0.9.143)
 					try { net.send({ t: "st", k: "add", list: [slimStruct(s)] }); } catch (e) {}
-					log("HOST filtr zmieniony →", k);
+					log("HOST filtr/queued zmieniony →", k);
 					continue;
 				}
 				ST._dataEdited.set(k, now);
@@ -1710,19 +1714,32 @@
 				const dataDiff = !!s.data && JSON.stringify(existing.data) !== JSON.stringify(s.data);
 				// 0.9.142: filtr (structure.filter) tez synchronizujemy — patrz slimStruct
 				const filtDiff = s.f !== undefined && JSON.stringify(existing.filter == null ? null : existing.filter) !== JSON.stringify(s.f);
-				if ((dataDiff || filtDiff) && !chroniony) {
+				// 0.9.143: queued/frame od hosta (snapshot/st add niosa q/fr tylko gdy ustawione → brak = zbudowana)
+				const qDiff = ST.net.role === "client" && (!!existing.queued !== !!s.q || !!existing.frame !== !!s.fr);
+				if ((dataDiff || filtDiff || qDiff) && !chroniony) {
 					if (dataDiff) existing.data = s.data;
 					if (filtDiff) existing.filter = s.f;
-					if (SA.update) SA.update(state, existing, { propagateToWorkers: ST.net.role === "host" });
+					if (qDiff) { existing.queued = s.q ? true : undefined; existing.frame = s.fr ? true : undefined; }
+					// 0.9.143: SA.update robi store.structures.findIndex (liniowo po 90 tys.) — u klienta wolamy je TYLKO gdy
+					// zmienil sie tryb kafla (queued/frame); data i filtr czyta renderer prosto z obiektu. Bez tego snapshot = 2 s zwiechy.
+					if (SA.update && (ST.net.role === "host" || qDiff)) SA.update(state, existing, { propagateToWorkers: ST.net.role === "host" });
 				}
 				if (ST.net.role === "client" && !chroniony) dataSeenSet(k, existing); // baza do wykrywania edycji klienta
 				return existing;
 			}
-			const pos = force ? { x: s.x, y: s.y, clearance: CLEARANCE_AVAILABLE } : { x: s.x, y: s.y };
+			// 0.9.143: clearance klienta (3=PartiallyBlocked, 4=CanBeReplaced) albo queued hosta (→3) — gra sama ustawi queued
+			// i NIE wpisze ksztaltu w teren. Wczesniej zawsze Available → host budowal PELNY przenosnik i kasowal bloki/kamien.
+			const cl = (s.cl === 3 || s.cl === 4) ? s.cl : (s.q ? 3 : CLEARANCE_AVAILABLE);
+			const pos = force ? { x: s.x, y: s.y, clearance: cl } : { x: s.x, y: s.y };
 			const built = SA.build(state, pos, s.type, {});
 			if (built) {
 				if (s.data) built.data = s.data;
 				if (s.f !== undefined) built.filter = s.f;
+				if (ST.net.role === "client") {
+					// 0.9.143: u klienta SA.update (O(n) po store) tylko gdy tryb kafla (queued/frame) rozni sie od tego, co gra ustawila
+					if (!!built.queued !== !!s.q || !!built.frame !== !!s.fr) { built.queued = s.q ? true : undefined; built.frame = s.fr ? true : undefined; if (SA.update) SA.update(state, built, { propagateToWorkers: false }); }
+					return built;
+				}
 				// HOST: ZAWSZE propaguj strukturę do workerów symulacji (nie tylko gdy jest data!). Bez tego
 				// struktura jest w store, ale działająca sim hosta jej "nie zna" → NIE renderuje się u hosta
 				// (klient z sim w PAUZIE i tak ją rysuje ze store — stąd "klient widzi, host nie widzi").
@@ -1783,7 +1800,7 @@
 			const step = Math.max(1, Math.floor(a.length / 512)); // próbkujemy, pełny hash 90 tys. byłby drogi
 			for (let i = 0; i < a.length; i += step) {
 				const s = a[i]; if (!s) continue;
-				h = (h ^ ((s.x | 0) * 73856093) ^ ((s.y | 0) * 19349663) ^ (typeof s.type === "number" ? s.type : 0)) >>> 0;
+				h = (h ^ ((s.x | 0) * 73856093) ^ ((s.y | 0) * 19349663) ^ (typeof s.type === "number" ? s.type : 0) ^ (s.queued ? 0x1000000 : 0) ^ (s.frame ? 0x2000000 : 0)) >>> 0; // 0.9.143: queued→zbudowana tez zmienia snapshot
 				h = (h * 16777619) >>> 0;
 			}
 			return h + ":" + a.length + ":" + b.length;
@@ -1852,9 +1869,9 @@
 				for (const s of hostList) {
 					const k = structKey(s);
 					// 0.9.142: sygnatura z data+filtr (wczesniej z nieistniejacych pol → stala → zmiany konfigu hosta nie docieraly)
-					const sig = (s.data != null ? JSON.stringify(s.data) : "") + "|" + (s.f != null ? JSON.stringify(s.f) : "");
+					const sig = snapSig(s);
 					if (ST._structSig.get(k) === sig) { skipped++; ST._structApplied.set(k, nowS); continue; }
-					if (built > 200 && performance.now() - tSlice > 8) {
+					if (built > 50 && performance.now() - tSlice > 8) {
 						// 0.9.137: NIE porzucamy reszty — host moze nigdy nie przyslac kolejnego snapshotu
 						// (pomija wysylke, gdy zbior struktur bez zmian), a wtedy te struktury nie powstana.
 						if (!ST._snapRest) ST._snapRest = [];
@@ -2698,7 +2715,7 @@
 	// zero zapisu komórek). Host stawia autorytatywnie w replayAction("place") i odsyła "st add" (lustro).
 	// Host/offline: return false → normalne stawianie lokalne. buildOne/SA.build NIE przechodzi przez ten
 	// hook (to niżej-poziomowe API), więc aplikacja struktur z sieci i budowanie hosta się nie zapętlają.
-	ST._place = (state, structureType, x, y, data) => {
+	ST._place = (state, structureType, x, y, data, clearance) => {
 		if (!isClientSync() || !ST.wsx.paused) return false; // host/offline/poza lustrem: stawiaj normalnie
 		// KLUCZOWE: gdy MOD sam stawia strukturę z sieci (applyNetStructs/applySnapshot → buildOne → SA.build,
 		// które PRZECHODZI przez building:place!), NIE przechwytuj — inaczej anulujemy własny render potwierdzonej
@@ -2716,7 +2733,8 @@
 		// ścieżka usuwania fundamentów (drag) nie umiała dopasować → nieusuwalne nawet dla hosta.
 		let d = null;
 		try { if (data != null) d = JSON.parse(JSON.stringify(data)); } catch (e) {} // tylko serializowalne pola
-		try { net.send({ t: "act", k: "place", type: structureType, x, y, data: d }); } catch (e) {}
+		// 0.9.143: clearance z walidacji klienta (3/4 = nad terenem/do zastapienia → u hosta tez "queued", teren zostaje)
+		try { const m = { t: "act", k: "place", type: structureType, x, y, data: d }; if (clearance === 3 || clearance === 4) m.cl = clearance; net.send(m); } catch (e) {}
 		return true; // anuluj lokalne stawianie — klient nic nie pisze do świata
 	};
 
@@ -2826,7 +2844,7 @@
 				if ((ST._plRxDiag = (ST._plRxDiag || 0) + 1) <= 300) log("HOST RX place:", msg.type, "@", msg.x, msg.y, "od", fromId);
 				ST._applyingNet = true;
 				let built = null;
-				try { built = buildOne(state, { type: msg.type, x: msg.x, y: msg.y, data: msg.data || undefined }, true); } finally { ST._applyingNet = false; }
+				try { built = buildOne(state, { type: msg.type, x: msg.x, y: msg.y, data: msg.data || undefined, cl: msg.cl }, true); } finally { ST._applyingNet = false; }
 				if (built) {
 					const inStore = (state.store.structures || []).indexOf(built) >= 0;
 					const list = [slimStruct(built)]; net.send({ t: "st", k: "add", list });
@@ -4415,7 +4433,7 @@
 					const s2 = ST._snapRest.pop();
 					if (!s2) continue;
 					const k2 = structKey(s2);
-					const sig2 = (s2.t != null ? s2.t : "") + "|" + (s2.v != null ? s2.v : "") + "|" + (s2.q ? 1 : 0);
+					const sig2 = snapSig(s2); // 0.9.143: ten sam wzor co w petli snapshotu
 					if (ST._structSig && ST._structSig.get(k2) === sig2) continue;
 					buildOne(state, s2, true);
 					if (ST._structSig) ST._structSig.set(k2, sig2);

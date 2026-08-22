@@ -54,12 +54,20 @@
    "name": "building place hook (_place)",
    "variants": [
     {
+     "anchor": "if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,h,t.x,t.y,m))return null;if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,h,t.x,t.y,m,t.clearance))return null;if((0,O.Im)(e,h)&&T.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:h,x:t.x,y:t.y,data:m}))return null;",
+     "patched": "if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,h,t.x,t.y,m,t.clearance))return null;if((0,O.Im)(e,h)&&T.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:h,x:t.x,y:t.y,data:m}))return null;"
+    },
+    {
+     "anchor": "if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,h,t.x,t.y,m))return null;if((0,O.Im)(e,h)&&T.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:h,x:t.x,y:t.y,data:m}))return null;",
+     "patched": "if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,h,t.x,t.y,m,t.clearance))return null;if((0,O.Im)(e,h)&&T.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:h,x:t.x,y:t.y,data:m}))return null;"
+    },
+    {
      "anchor": "if(\"string\"==typeof u&&!0===B.FH.events.emit(e,\"building:place\",{structureId:u,x:t.x,y:t.y}))return null;",
      "patched": "if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,u,t.x,t.y))return null;if(\"string\"==typeof u&&!0===B.FH.events.emit(e,\"building:place\",{structureId:u,x:t.x,y:t.y}))return null;"
     },
     {
      "anchor": "if((0,O.Im)(e,h)&&T.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:h,x:t.x,y:t.y,data:m}))return null;",
-     "patched": "if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,h,t.x,t.y,m))return null;if((0,O.Im)(e,h)&&T.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:h,x:t.x,y:t.y,data:m}))return null;"
+     "patched": "if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,h,t.x,t.y,m,t.clearance))return null;if((0,O.Im)(e,h)&&T.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:h,x:t.x,y:t.y,data:m}))return null;"
     },
     {
      "anchor": "if(\"string\"==typeof h&&!0===T.FH.events.emit(e,\"building:place\",{structureId:h,x:t.x,y:t.y}))return null;",
