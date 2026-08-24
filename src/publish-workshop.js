@@ -70,7 +70,7 @@ The world is streamed as changed rows only, compressed, and — between players 
 [h2]Trouble?[/h2]
 Both players must run the same mod version AND the same game version — the panel says so in red when they differ. If something misbehaves, send me a short description plus your log file: Windows %APPDATA%\\Sandustry\\logs\\main.log, macOS ~/Library/Logs/Sandustry/main.log, Linux ~/.config/Sandustry/logs/main.log. Reports with a log are usually fixed the same day.
 
-[b]Port forwarding, and it still will not connect?[/b] The mod listens on [b]TCP 27777[/b] — forward TCP, not UDP only, and point it at the host's local IP. Then allow [b]Sandustry.exe through the host's Windows Firewall on public networks[/b] — that one blocks more connections than routers do. The joining player types the host's [b]public[/b] address, never 192.168.x.x; if the router's WAN address is not the public IP a "what is my IP" site shows you, your provider uses CGNAT and forwarding cannot work at all. Simplest route: [b]Host (Internet — direct)[/b] opens the port itself and prints the exact address to send. The [b]LAN[/b] wording next to a join-by-address session is only a label — nothing is being rerouted.
+[b]Port forwarded and still nothing?[/b] The mod listens on [b]TCP 27777[/b] (TCP, not UDP), and the host Windows Firewall must let [b]Sandustry.exe[/b] through on public networks.
 
 [h2]💛 Thank you — this mod is community-built[/h2]
 Code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts), [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix), [b]Cr0ss0vr[/b] (precise client demolish selection, foundation cleanup after demolition, and the report and first patch for progression not reaching the client — the trail that led to the 0.9.132 root cause), [b]TCentraL[/b] (blob-expanding red-tile cleanup — our sharpest tester who then sent code), [b]AlyxiaFox[/b] (congestion control for the world sync) and [b]NanYu_sad.[/b] (the complete Simplified Chinese translation).
@@ -112,6 +112,16 @@ Full source on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]githu
     visibility: vis,
     tags: ['Mods'],
   };
+  // Steam liczy limity w BAJTACH UTF-8, nie w znakach: opis 8000 B, nota o zmianach 8000 B. Przekroczenie
+  // wraca z updateItem jako bezuzyteczne "a parameter is invalid" (stracone 30 min, 24.08.2026) — stad wlasny check.
+  for (const [name, text] of [['description', details.description], ['changeNote', details.changeNote]]) {
+    const bytes = Buffer.byteLength(text, 'utf8');
+    if (bytes > 8000) {
+      console.error('PUBLISH ABORTED: ' + name + ' = ' + bytes + ' bytes (limit 8000). Skroc o ' + (bytes - 8000) + ' B.');
+      process.exit(1);
+    }
+    console.log(name + ': ' + bytes + ' bytes / 8000');
+  }
   let result;
   try {
     result = await ws.updateItem(itemId, details);
