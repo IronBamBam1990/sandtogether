@@ -1,3 +1,22 @@
+## 0.9.144-beta
+
+**The Steam relay now announces itself.** A session invited through Steam runs over Valve's relay, which
+throttles bandwidth and can push the round trip to hundreds of seconds; the world transfer then crawls and
+player actions queue behind it, so the game looks frozen rather than slow. Once the measured round trip
+passes 5 s the panel says so in red and names the way out: the host restarts as *Host (Internet — direct)*
+and the other player joins by address. (Reported by Sessional, whose session showed 449 s round trip and
+6318 chunks still to send.)
+
+**"It keeps switching me to LAN" — it never did.** The joining side labelled every join-by-address session
+LAN, including connections across the internet, because the direct-mode flag was only ever set on the host.
+The label is now derived from the address actually connected to: public address → Internet, private or VPN
+address (RFC1918, loopback, link-local, CGNAT/Tailscale, Hamachi, Radmin) → LAN. Nothing about the
+connection changes — only the word. (Reported by Shadow City Empire.)
+
+The Workshop page also gained a port-forwarding checklist: the mod listens on **TCP 27777**, the host's
+Windows Firewall has to allow Sandustry.exe on public networks, the joining player needs the public
+address, and CGNAT makes forwarding impossible regardless.
+
 ## 0.9.143-beta
 
 **Big-factory stall introduced in 0.9.142 - fixed.** Measured on a 90,000-structure world: every structure

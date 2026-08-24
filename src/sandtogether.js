@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.143-beta";
+	const VER = "0.9.144-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -65,6 +65,7 @@
 			dims_differ: (a, b) => "⚠ Different world size (" + a + " vs host " + b + ") — load the host's save via Load Game.",
 			sync_up: (kb, ch, q) => "upload: " + kb + " KB/s, " + ch + " chunk/s, queue " + q,
 			sync_down: (kb, ch, q) => "host mirror: " + kb + " KB/s, " + ch + " chunk/s" + (q > 0 ? " — " + q + " chunks left" : ""),
+			relay_slow: (sec) => "Steam relay is throttling this session (round trip " + sec + " s). Ask the host to restart as Host (Internet — direct) and join by address — the relay cannot carry a live world.",
 			loading_world: "Loading the host's world... (a big map can take a few minutes — the game may look frozen)",
 			join_prompt: "Host address (ip or ip:port):",
 			ver_mismatch: "MOD VERSION MISMATCH — both players must update SandTogether!",
@@ -129,6 +130,7 @@
 			dims_differ: (a, b) => "⚠ Inny rozmiar świata (" + a + " vs host " + b + ") — wczytaj save hosta przez Load Game.",
 			sync_up: (kb, ch, q) => "wysyłka: " + kb + " KB/s, " + ch + " chunk/s, kolejka " + q,
 			sync_down: (kb, ch, q) => "lustro hosta: " + kb + " KB/s, " + ch + " chunk/s" + (q > 0 ? " — zostało " + q + " paczek" : ""),
+			relay_slow: (sec) => "Relay Steama dławi to połączenie (obieg " + sec + " s). Poproś hosta, żeby uruchomił Host (internet — bezpośrednio), i dołącz po adresie — relay nie udźwignie żywego świata.",
 			loading_world: "Wczytywanie świata hosta... (duża mapa może potrwać kilka minut — gra może wyglądać na zawieszoną)",
 			join_prompt: "Adres hosta (ip lub ip:port):",
 			ver_mismatch: "RÓŻNE WERSJE MODA — obaj gracze muszą zaktualizować SandTogether!",
@@ -192,6 +194,7 @@
 			dims_differ: (a, b) => "⚠ 世界大小不同(" + a + " 对比房主的 " + b + ")——请通过加载游戏来加载房主的存档。",
 			sync_up: (kb, ch, q) => "上传:" + kb + " KB/s," + ch + " 区块/s,队列 " + q,
 			sync_down: (kb, ch, q) => "房主镜像:" + kb + " KB/s," + ch + " 区块/s" + (q > 0 ? " ——还剩 " + q + " 个区块" : ""),
+			relay_slow: (sec) => "Steam 中继正在限速(往返 " + sec + " 秒)。请房主改用“主机(互联网 — 直连)”,并按地址加入 — 中继无法承载实时世界。",
 			loading_world: "正在加载房主的世界...(大地图可能需要几分钟——游戏可能看起来像卡住了)",
 			join_prompt: "房主地址(ip 或 ip:port):",
 			ver_mismatch: "模组版本不匹配——双方玩家都必须更新 SandTogether!",
@@ -494,7 +497,10 @@
 				ST._lastAppliedSq = null; ST._lastAckT = 0; // new host numbers its batches from zero, a stale ack would be wrong
 				ST._mirrorKickN = 0; ST._mirrorKickT = 0; if (ST._structSig) ST._structSig.clear(); if (ST._snapRest) ST._snapRest.length = 0; try { sessionStorage.removeItem("st_rescue_n"); } catch (e) {} if (ST._applyQ) ST._applyQ.length = 0; ST._greeted.clear(); ST._worldRxDone = false; ST._worldReqN = 0; ST._worldReqT = performance.now(); ST._autoResynced = false; ST._autoLoadedOnce = false; // świeży cykl; 1. world-req najwcześniej 15 s po join (auto-send hosta ma fory)
 				ST._trustedWid = null; ST._pendingTrustUntil = 0;
-				ST._directMode = false; ST._directAddr = null; autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
+				// Etykieta transportu u klienta: publiczny adres = "Internet", prywatny/VPN = "LAN". Wczesniej zawsze
+				// wychodzil "LAN" i gracze mysleli, ze mod ich gdzies przepina (Shadow City Empire, 24.08.2026).
+				ST._directMode = ev.transport === "ws" && !isLocalAddr(ev.host);
+				ST._directAddr = null; autoLoadClear(); // nowa sesja klienta = świeży guard auto-loadu (0.9.72)
 				ST._gotHostWorld = false; // KRYTYCZNE: zaufanie do świata NIE przenosi się między sesjami (inny host = inny świat; bez resetu lustro nadpisałoby zły świat)
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; if (ST._projSent) ST._projSent.clear(); // stan z poprzedniej sesji = inne współrzędne/świat
 				// własny nick (localStorage) rozgłaszany istniejącym protokołem hello — bez zmian w mostku IPC
@@ -3185,6 +3191,19 @@
 		if (ST.net.lobbyId) { el.textContent = "Lobby ID: ●●●●●●…" + String(ST.net.lobbyId).slice(-3) + " 📋 (click = copy)"; el.style.display = "block"; }
 		else el.style.display = "none";
 	}
+	// Adres lokalny/VPN vs publiczny — tylko do etykiety transportu w HUD i lobby. Poza RFC1918 lapiemy tez
+	// CGNAT 100.64/10 (Tailscale) oraz Hamachi 25/8 i Radmin 26/8, bo to sieci wirtualne, nie internet.
+	function isLocalAddr(h) {
+		const a = String(h || "").trim().toLowerCase().replace(/^\[|\]$/g, "");
+		if (!a || a === "localhost" || a.endsWith(".local") || a === "::1" || a.startsWith("fe80:") || a.startsWith("fc") || a.startsWith("fd")) return true;
+		const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(a);
+		if (!m) return false;   // nazwa DNS (np. DuckDNS) = traktujemy jak internet
+		const o1 = +m[1], o2 = +m[2];
+		return o1 === 10 || o1 === 127 || o1 === 25 || o1 === 26
+			|| (o1 === 192 && o2 === 168) || (o1 === 172 && o2 >= 16 && o2 <= 31)
+			|| (o1 === 169 && o2 === 254) || (o1 === 100 && o2 >= 64 && o2 <= 127);
+	}
+
 	function updatePingDisplay() {
 		if (!ST._hud) return;
 		const el = ST._hud.querySelector("#st-ping");
@@ -3193,6 +3212,19 @@
 		const parts = [];
 		for (const p of ST.peers.values()) parts.push((p.nick || "Player") + ": " + (p.ping != null ? p.ping + "ms" : "…"));
 		el.textContent = "Ping — " + parts.join("  |  ");
+		// Relay Valve: gdy obieg pakietu liczy sie w SEKUNDACH, to nie jest "slabe lacze" tylko dlawiony relay —
+		// akcje gracza stoja w tej samej kolejce co transfer swiata, wiec nic sie nie dzieje w swiecie.
+		try {
+			if (ST.net.transport === "steam" && ST.net.role !== "idle") {
+				let worst = 0;
+				for (const p of ST.peers.values()) if (p.ping != null && p.ping > worst) worst = p.ping;
+				if (worst > 5000 && performance.now() - (ST._relayWarnT || 0) > 20000) {
+					ST._relayWarnT = performance.now();
+					setStatus(t("relay_slow", Math.round(worst / 1000)), "#f66");
+					log("RELAY: RTT", Math.round(worst), "ms przez Steam — zalecany Host (Internet — direct)");
+				}
+			}
+		} catch (e) {}
 	}
 
 	function buildHud() {
