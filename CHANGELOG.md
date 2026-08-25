@@ -1,3 +1,17 @@
+## 0.9.145-beta
+
+**Rubber-band lag over the internet - our bug, not your connection.** The TCP sockets carrying a direct or
+LAN session were left with Nagle's algorithm enabled, which Node does by default. Nagle holds a small write
+until the previous small segment is acknowledged, so only one may be in flight at a time. Every message goes
+out as its own write and player positions are sent 30 times a second, which means an 80 ms link passed
+roughly twelve of them per second and delivered the rest in bursts - while digging, grabbing and placing
+queued in the same stream behind them. On a LAN the round trip is under a millisecond and none of this shows,
+which is why it survived this long; over the internet it produced exactly the symptoms players described:
+good ping, good bandwidth, strong host, and a session that still felt like rubber, with a teammate unable to
+pick anything up. Both ends now set TCP_NODELAY. (Reported by friberg, whose 80 ms ping on a 600/300 line
+ruled the connection out; the same complaint had come from others who had already tried Steam, Hamachi and
+direct hosting and found all three equally bad - which fits, since the fault was below all of them.)
+
 ## 0.9.144-beta
 
 **The Steam relay now announces itself.** A session invited through Steam runs over Valve's relay, which

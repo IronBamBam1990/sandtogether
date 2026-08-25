@@ -107,6 +107,10 @@ function startWsServer(port) {
   stopNetworking('restart');
   S.role = 'host'; S.transport = 'ws';
   S.wsServer = net.createServer((sock) => {
+    // Nagle trzyma male zapisy do czasu ACK poprzedniego segmentu — a my piszemy osobnym write() kazda
+    // wiadomosc, w tym pozycje gracza 30x/s. Przy RTT 80 ms przepuszcza to ~12 malych pakietow/s i akcje
+    // gracza stoja w tej samej kolejce (friberg, 24.08.2026). Na LAN roznicy nie widac, przez internet decyduje.
+    try { sock.setNoDelay(true); } catch (e) {}
     let upgraded = false;
     let headerBuf = Buffer.alloc(0);
     const peerId = 'ws:' + sock.remoteAddress + ':' + sock.remotePort;
@@ -145,6 +149,7 @@ function joinWs(host, port, _retry) {
   const retryCount = _retry || 0;
   const key = crypto.randomBytes(16).toString('base64');
   const sock = net.connect(port, host, () => {
+    try { sock.setNoDelay(true); } catch (e) {}   // patrz komentarz w startWsServer
     sock.write('GET / HTTP/1.1\r\nHost: ' + host + ':' + port + '\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ' + key + '\r\nSec-WebSocket-Version: 13\r\n\r\n');
   });
   S.wsClient = sock;
