@@ -1,3 +1,17 @@
+## 0.9.146-beta
+
+**Filters placed by a joining player kept coming out with the host's config (Maelle, Moonbugy).** The game
+assigns a freshly placed filter its configuration inside the *building:placed* handler, reading
+`store.options.defaultFilter` - the filter-config UI state of *whoever is placing*. In a session the host
+places everything on the joining player's behalf, so that handler ran on the host and stamped in the host's
+current selection, regardless of what the client had configured. Copy-paste lost the filter the same way:
+the game copies it from the copying player's session, which the host does not have. The placement act now
+carries the placing player's filter (from the copied structure if pasting, otherwise from their own filter
+config), and the host overwrites the freshly built structure's filter with it before mirroring it out.
+Only filter-bearing structures are touched - the game marks those itself - and pass-through pieces keep
+the affectsLiquid/affectsGas flags the game forces on them. Editing an already placed filter has worked
+since 0.9.142; this closes the placement half of the report.
+
 ## 0.9.145-beta
 
 **Rubber-band lag over the internet - our bug, not your connection.** The TCP sockets carrying a direct or

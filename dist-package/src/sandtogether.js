@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.145-beta";
+	const VER = "0.9.146-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2740,7 +2740,22 @@
 		let d = null;
 		try { if (data != null) d = JSON.parse(JSON.stringify(data)); } catch (e) {} // tylko serializowalne pola
 		// 0.9.143: clearance z walidacji klienta (3/4 = nad terenem/do zastapienia → u hosta tez "queued", teren zostaje)
-		try { const m = { t: "act", k: "place", type: structureType, x, y, data: d }; if (clearance === 3 || clearance === 4) m.cl = clearance; net.send(m); } catch (e) {}
+		try {
+			const m = { t: "act", k: "place", type: structureType, x, y, data: d };
+			if (clearance === 3 || clearance === 4) m.cl = clearance;
+			// 0.9.146: FILTR STAWIAJACEGO. Gra nadaje filtr swiezej strukturze w building:placed z
+			// e.store.options.defaultFilter — a to odpala sie U HOSTA, wiec klient dostawal konfiguracje
+			// hosta niezaleznie od wlasnej (Maelle: "gets placed in the config the host currently has").
+			// Copy-paste: rdzen bierze filtr z session.copiedStructure, ktorej host nie ma w swojej sesji.
+			// Wysylamy filtr przy KAZDYM stawianiu (host nakłada go tylko na struktury filtrowe — patrz handler).
+			try {
+				const cd = state.session && state.session.action && state.session.action.customData;
+				const cs = cd && cd.copiedStructure;
+				if (cs && cs.filter != null) m.fl = JSON.parse(JSON.stringify(cs.filter));
+				else if (state.store.options && state.store.options.defaultFilter != null) m.fl = JSON.parse(JSON.stringify(state.store.options.defaultFilter));
+			} catch (e) {}
+			net.send(m);
+		} catch (e) {}
 		return true; // anuluj lokalne stawianie — klient nic nie pisze do świata
 	};
 
@@ -2852,6 +2867,15 @@
 				let built = null;
 				try { built = buildOne(state, { type: msg.type, x: msg.x, y: msg.y, data: msg.data || undefined, cl: msg.cl }, true); } finally { ST._applyingNet = false; }
 				if (built) {
+					// 0.9.146: building:placed odpalilo sie juz U HOSTA i wpisalo hostowy defaultFilter —
+					// nadpisujemy konfiguracja STAWIAJACEGO. Tylko struktury filtrowe (built.filter != null;
+					// gra sama je znaczy). Typy przepustowe (filter wall, przenosnik przepustowy) maja
+					// affectsLiquid/affectsGas WYMUSZONE przez gre — te flagi zachowujemy z wersji hosta.
+					if (msg.fl !== undefined && built.filter != null) {
+						const forced = built.data && built.data.filterPassThrough ? { affectsLiquid: built.filter.affectsLiquid, affectsGas: built.filter.affectsGas } : null;
+						built.filter = Object.assign({}, msg.fl, forced || {});
+						if ((ST._flDiag = (ST._flDiag || 0) + 1) <= 40) log("HOST: filtr stawiajacego nalozony @", built.x, built.y);
+					}
 					const inStore = (state.store.structures || []).indexOf(built) >= 0;
 					const list = [slimStruct(built)]; net.send({ t: "st", k: "add", list });
 					if ((ST._plDiagH = (ST._plDiagH || 0) + 1) <= 300) log("HOST: postawiono", msg.type, "@", built.x, built.y, "(prośba", msg.x, msg.y + ")", inStore ? "[w store]" : "[!! NIE w store.structures]", "-> broadcast");
