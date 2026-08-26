@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.146-beta";
+	const VER = "0.9.147-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2751,7 +2751,7 @@
 			try {
 				const cd = state.session && state.session.action && state.session.action.customData;
 				const cs = cd && cd.copiedStructure;
-				if (cs && cs.filter != null) m.fl = JSON.parse(JSON.stringify(cs.filter));
+				if (cs && cs.filter != null) { m.fl = JSON.parse(JSON.stringify(cs.filter)); m.flc = 1; } // flc: filtr ze skopiowanej struktury (nie z defaultFilter)
 				else if (state.store.options && state.store.options.defaultFilter != null) m.fl = JSON.parse(JSON.stringify(state.store.options.defaultFilter));
 			} catch (e) {}
 			net.send(m);
@@ -2871,10 +2871,29 @@
 					// nadpisujemy konfiguracja STAWIAJACEGO. Tylko struktury filtrowe (built.filter != null;
 					// gra sama je znaczy). Typy przepustowe (filter wall, przenosnik przepustowy) maja
 					// affectsLiquid/affectsGas WYMUSZONE przez gre — te flagi zachowujemy z wersji hosta.
-					if (msg.fl !== undefined && built.filter != null) {
-						const forced = built.data && built.data.filterPassThrough ? { affectsLiquid: built.filter.affectsLiquid, affectsGas: built.filter.affectsGas } : null;
-						built.filter = Object.assign({}, msg.fl, forced || {});
-						if ((ST._flDiag = (ST._flDiag || 0) + 1) <= 40) log("HOST: filtr stawiajacego nalozony @", built.x, built.y);
+					if (msg.fl !== undefined) {
+						// 0.9.147: brana sa TYLKO typy z konfigurowalnym filtrem — struktury z filtrem STALYM
+						// (GloomEmitter density:1e4, critterFence mode:"allow") gra nadaje niezaleznie od
+						// defaultFilter i nadpisanie by je zepsulo. Typy filtrowe gra znaczy w configu:
+						// tooltipHover.type === "filter". Copy-paste (flc) = filtr struktury TEGO SAMEGO typu,
+						// wiec przypisujemy wprost — takze shakerom/growerom, ktore swiezo zbudowane filtra nie maja.
+						if (msg.flc) {
+							built.filter = Object.assign({}, built.filter || {}, msg.fl);
+							if ((ST._flDiag = (ST._flDiag || 0) + 1) <= 40) log("HOST: filtr z copy-paste klienta @", built.x, built.y);
+						} else if (built.filter != null) {
+							let cfgFilter = false;
+							try { const cfg = ST.FH.structures.getConfig(built.type); cfgFilter = !!(cfg && cfg.tooltipHover && cfg.tooltipHover.type === "filter"); } catch (e) {}
+							if (cfgFilter && built.type !== "critterFence") {
+								const base = built.filter;
+								const merged = Object.assign({}, base, msg.fl);
+								// Mk2/pass-through: gra WYMUSZA dzialanie na ciecze i gazy — defaultFilter klienta
+								// tych kluczy nie ma, wiec bez tego merge by je zgubil
+								if (base.affectsLiquid === true) merged.affectsLiquid = true;
+								if (base.affectsGas === true) merged.affectsGas = true;
+								built.filter = merged;
+								if ((ST._flDiag = (ST._flDiag || 0) + 1) <= 40) log("HOST: filtr stawiajacego nalozony @", built.x, built.y);
+							}
+						}
 					}
 					const inStore = (state.store.structures || []).indexOf(built) >= 0;
 					const list = [slimStruct(built)]; net.send({ t: "st", k: "add", list });

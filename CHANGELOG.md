@@ -1,3 +1,14 @@
+## 0.9.147-beta
+
+**Amends 0.9.146.** That fix applied the joining player's filter config to every freshly built structure
+with a filter - but the gloom emitter and the critter fence carry *fixed* filters the game assigns on its
+own (the emitter's sets its density), and a player config stamped over them breaks their mechanics. The
+override now applies only to structures the game itself marks filter-configurable (`tooltipHover.type ===
+"filter"`, minus the critter fence), and a copy-paste travels under its own flag: the pasted filter is
+assigned verbatim to the same structure type, which also covers machines that only ever get a filter
+through copying. Game-forced liquid/gas flags survive the merge, since the player's filter config does not
+carry those keys at all.
+
 ## 0.9.146-beta
 
 **Filters placed by a joining player kept coming out with the host's config (Maelle, Moonbugy).** The game
