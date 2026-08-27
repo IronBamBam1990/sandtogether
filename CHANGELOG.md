@@ -1,3 +1,18 @@
+## 0.9.151-beta
+
+**Client-placed filters now behave like what they display (darkalien, GitHub issue #18).** Two stacked
+bugs on top of the 0.9.146/147 fix. The override gate keyed on the structure config's tooltip marker,
+which is not reliable across the numeric vanilla types - so ordinary placements could skip the override
+entirely and only copy-paste ever carried the client's config. And even when the override applied, it
+patched only the store copy: the simulation workers - where filtering actually happens - kept the filter
+the game had stamped at build time from the host's own selection. Hence the reported symptom: the filter
+shows the client's config on both screens but behaves like whatever the host last placed. The override
+now applies to every filter-bearing structure except the fixed-filter ones (gloom emitter and critter
+fence, recognized by config name and by the density key only their filters carry), and after the
+override the structure is re-propagated to the simulation workers exactly like the edit path has done
+since 0.9.142. Verified on two instances: host config residue, client placed a gold filter - the built
+structure carries gold on the host, in the mirror, and in the workers.
+
 ## 0.9.150-beta
 
 **The joining player always gets the world the host is actually playing.** Two root causes fixed. First,

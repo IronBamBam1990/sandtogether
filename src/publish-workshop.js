@@ -106,7 +106,7 @@ Full source on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]githu
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'Description update - welcoming the testers whose reports shaped this week: Maelle, Moonbugy, Knif Boiiiiiii, Sessional, friberg, Shadow City Empire, Clavius, Golden Pan please, hunters01, Lecker Bierchen and Lurkily. No code changes; current version stays 0.9.150-beta.',
+    changeNote: 'v0.9.151-beta - CLIENT-PLACED FILTERS NOW ACTUALLY FILTER WHAT THEY SHOW (diagnosed and fixed by darkalien - thank you, that was contributor-grade work, GitHub issue #18). Two stacked problems: the filter override was skipped for the vanilla filter belts on normal placements, and even when it applied, it only corrected the displayed config - the simulation workers kept running on whatever the host had last selected, which is exactly the \'shows as gold, behaves like the host\'s last filter\' everyone was seeing. The override now applies to every filter-bearing structure except the fixed-filter ones (gloom emitter, critter fence), and the corrected filter is pushed to the simulation workers the same way an edit is. Verified machine-to-machine: host config residue, client placed gold - the built structure carries gold on both sides. Update both sides.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

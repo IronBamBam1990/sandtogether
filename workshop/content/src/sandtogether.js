@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.150-beta";
+	const VER = "0.9.151-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -3020,9 +3020,15 @@
 							built.filter = Object.assign({}, built.filter || {}, msg.fl);
 							if ((ST._flDiag = (ST._flDiag || 0) + 1) <= 40) log("HOST: filtr z copy-paste klienta @", built.x, built.y);
 						} else if (built.filter != null) {
-							let cfgFilter = false;
-							try { const cfg = ST.FH.structures.getConfig(built.type); cfgFilter = !!(cfg && cfg.tooltipHover && cfg.tooltipHover.type === "filter"); } catch (e) {}
-							if (cfgFilter && built.type !== "critterFence") {
+							// 0.9.151 (diagnoza+fix: darkalien / undeadalien1, issue #18): brama po
+							// getConfig().tooltipHover ZAWODZILA dla typow numerycznych (waniliowe Filter L/R) —
+							// nadpisanie nie dzialalo przy zwyklym stawianiu, tylko przy copy-paste. built.filter
+							// != null juz dowodzi typu filtrowego; wyjatki (filtr STALY) poznajemy po nazwie
+							// z configu i po kluczu density (ma go tylko GloomEmitter — filtr gracza go nie niesie).
+							let fixedFilter = built.type === "critterFence";
+							try { const cfg = ST.FH.structures.getConfig(built.type); const nm = String((cfg && (cfg.nameKey || cfg.id)) || ""); if (nm.indexOf("gloomEmitter") >= 0 || nm.indexOf("critterFence") >= 0) fixedFilter = true; } catch (e) {}
+							if (!fixedFilter && built.filter.density !== undefined && (msg.fl == null || msg.fl.density === undefined)) fixedFilter = true;
+							if (!fixedFilter) {
 								const base = built.filter;
 								const merged = Object.assign({}, base, msg.fl);
 								// Mk2/pass-through: gra WYMUSZA dzialanie na ciecze i gazy — defaultFilter klienta
@@ -3033,6 +3039,11 @@
 								if ((ST._flDiag = (ST._flDiag || 0) + 1) <= 40) log("HOST: filtr stawiajacego nalozony @", built.x, built.y);
 							}
 						}
+						// 0.9.151 (diagnoza: darkalien) — filtr WYSWIETLAL sie dobrze, ale DZIALAL jak ostatni filtr
+						// hosta: nadpisanie built.filter po budowie zostawalo w watku glownym, a filtruje SIM w
+						// workerach, ktore dostaly defaultFilter hosta przy budowie. Propagacja jak w sciezce sdata
+						// (ta dziala u graczy od 0.9.142).
+						try { const SAf = structNs(); if (SAf && SAf.update) SAf.update(state, built, { propagateToWorkers: true }); } catch (e) {}
 					}
 					const inStore = (state.store.structures || []).indexOf(built) >= 0;
 					const list = [slimStruct(built)]; net.send({ t: "st", k: "add", list });
