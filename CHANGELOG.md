@@ -1,3 +1,14 @@
+## 0.9.148-beta
+
+**The joining player's vacuum deleted everything it sucked up (Maelle).** A refactor in 0.9.141 renamed
+the collected-type variable in both grabber paths and, by global replace, in the vacuum handler too - but
+the vacuum handler never got the line that defines it. The host removed the element from the world, then
+hit a ReferenceError swallowed by an empty catch: the material was gone, the collected-types list stayed
+empty, the response packet was never sent, and the client's tank stayed empty. The skipped counter also
+disabled the 10-elements-per-tick intake limit, so a single pass could swallow the entire intake circle.
+The handler now resolves the grabbed type the same way the grabber does (merged particles resolve to their
+real material) and compares the vacuum's filter against that resolved type.
+
 ## 0.9.147-beta
 
 **Amends 0.9.146.** That fix applied the joining player's filter config to every freshly built structure

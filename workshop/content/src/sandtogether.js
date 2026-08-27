@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.147-beta";
+	const VER = "0.9.148-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2615,7 +2615,11 @@
 				try {
 					const info = getInfo(state, x, y);
 					if (!info || !info.elementType) continue;
-					if (msg.f !== null && msg.f !== undefined && info.elementType !== msg.f) continue;
+					// resolveGrabType jak w grabberze — refaktor 56cd9fd podmienil push(ety), ale te linie pominal:
+					// ReferenceError PO removeAt leciał do catch → material usuniety, types puste, tank klienta pusty.
+					const ety = resolveGrabType(state, info); // czastka scalona -> prawdziwy material
+					if (!ety) continue;
+					if (msg.f !== null && msg.f !== undefined && ety !== msg.f) continue;
 					removeAt(state, x, y);
 					markCellDirty(state, x, y); // wymuś wysyłkę lustrem (zassany element znika u klienta)
 					types.push(ety);
