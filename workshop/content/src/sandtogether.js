@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.149-beta";
+	const VER = "0.9.150-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -276,6 +276,7 @@
 		},
 		// struktury/zasoby/vacuum
 		_greeted: new Set(),      // komu juz przedstawilismy sie nickiem (anty-petla hello, 0.9.85)
+		_rxWorldGen: (function () { try { return sessionStorage.getItem("st_world_gen") || null; } catch (e) { return null; } })(), // token OSTATNIO wczytanego transferu (przezywa reload renderera)
 		_applyingNet: false,      // tłumik pętli eventów przy aplikowaniu zmian z sieci
 		_subscribedState: null,
 		_lastSnap: 0,
@@ -584,7 +585,7 @@
 					if (!st && ++tries < 40) return void setTimeout(announce, 500);
 					try {
 						const wid = st && st.store.meta && st.store.meta.worldId, sc = st && st.store.scene && st.store.scene.active;
-						net.send({ t: "hello", nick: ST._myNick || "Player", wid: wid || null, scene: sc || null, ready: 1 });
+						net.send({ t: "hello", nick: ST._myNick || "Player", wid: wid || null, scene: sc || null, ready: 1, gen: ST._rxWorldGen || null });
 						log("HANDSHAKE: renderer gotowy — zglaszam sie hostowi (wid=" + wid + " scene=" + sc + ")");
 					} catch (e) {}
 				};
@@ -666,7 +667,11 @@
 				// wczytany (ten sam worldId) → wysylka save = kolejny auto-load = przeladowanie = PETLA.
 				const clientInMenu = msg.scene === 1 || msg.scene == null;
 				const clientElsewhere = msg.wid != null && msg.wid !== myWid;
-				if (hostInWorld && (clientElsewhere || (clientInMenu && msg.ready))) { ST._autoSendT = 0; log("hello: klient bez mojego swiata (wid=" + msg.wid + " scene=" + msg.scene + ") — wysylam save"); sendWorld(); }
+				// 0.9.150: sam worldId to za malo — stara kopia TEGO SAMEGO swiata przechodzila jako
+				// "JUZ na moim swiecie" i klient zostawal na starej tresci (PROBLEM NR 1). gen zgodny =
+				// klient ma DOKLADNIE nasz transfer. msg.gen undefined -> stary mod: zachowanie sprzed zmiany.
+				const genOk = msg.gen !== undefined ? (msg.gen != null && msg.gen === ST._worldGen) : !clientElsewhere;
+				if (hostInWorld && (clientElsewhere || !genOk || (clientInMenu && msg.ready))) { ST._autoSendT = 0; log("hello: klient bez mojego swiata (wid=" + msg.wid + " gen=" + msg.gen + "/" + ST._worldGen + " scene=" + msg.scene + ") — wysylam save"); sendWorld(); }
 				else if (hostInWorld && !msg.ready) { ST._autoSendT = 0; log("hello: nowy gracz — wysylam save"); sendWorld(); }
 				else if (hostInWorld) log("hello: klient JUZ na moim swiecie — tylko stream, bez save");
 			}
@@ -736,6 +741,24 @@
 			if (p) p.projectiles = msg.list || [];
 		} else if (msg.t === "snd") {
 			playRemoteSound(msg);
+		} else if (msg.t === "vacrelres") {
+			// host odmowil czesci wylewu (poza swiatem / strefa) — sztuki wracaja do tanku, nie przepadaja
+			if (ST.net.role === "client" && (msg.n | 0) > 0 && msg.et) {
+				try {
+					const inv = ST.state.store.player.inventory || [];
+					const vac = inv.find((i) => i && i.data && Array.isArray(i.data.tanks));
+					if (vac) {
+						let lvl = 0; try { lvl = (ST.FH.upgrades.getLevel(ST.state, "vacuum", "capacity") | 0) || 0; } catch (e) {}
+						const CAP = VACUUM_CAPS[lvl] || VACUUM_CAPS[0];
+						for (let i = 0; i < (msg.n | 0); i++) {
+							const t = vacSlotFor(vac.data.tanks, msg.et, CAP, vac.data.activeTankIdx | 0, vac.data.onlyFillActiveTank === true);
+							if (!t) break;
+							if (t.elementType === 0) t.elementType = msg.et;
+							t.amount++;
+						}
+					}
+				} catch (e) {}
+			}
 		} else if (msg.t === "vacres") {
 			if (ST.net.role === "client") {
 				clientFillTanks(msg.types || []);
@@ -794,7 +817,7 @@
 			if (ST._worldRx && !ST._worldRx.done) log("przełączam odbiór: tid " + ST._worldRx.tid + " (" + ST._worldRx.got + "/" + ST._worldRx.total + ") → tid " + msg.tid);
 			
 			ST._gotHostWorld = true; // otrzymaliśmy świat OD hosta → ufamy jego worldId gdy oboje w grze (patrz applyWorldBatch)
-			ST._worldRx = { tid: msg.tid, name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false, t0: performance.now() };
+			ST._worldRx = { tid: msg.tid, name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false, t0: performance.now(), gen: msg.gen || null };
 			log("world-begin: tid", msg.tid, "-", msg.name, "-", msg.chunks, "paczek,", Math.round((msg.size || 0) / 1024), "KB");
 			setStatus(t("receiving", 0, msg.chunks), "#ff5");
 			scheduleRxCheck();
@@ -866,17 +889,24 @@
 					ST.state && ST.state.store.meta && ST.state.store.meta.worldId !== ST._hostWidSeen &&
 					Date.now() - (ST._rescueLoadT || 0) > 30000;
 				if (inWrongWorld) { ST._rescueLoadT = Date.now(); try { sessionStorage.setItem("st_rescue_n", String(rescueN + 1)); } catch (e) {} log("WCZYTUJE SWIAT HOSTA: jestem w", ST.state.store.meta.worldId, "host gra w", ST._hostWidSeen, "— bez tego moj postep zostalby z poprzedniej gry"); }
-				if (!inWrongWorld && saveId && autoLoadDoneBefore(saveId)) { log("auto-load POMINIĘTY (ten save hosta był już auto-wczytany w tej sesji — guard po reloadzie) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
+				// 0.9.150: transfer z NOWYM tokenem gen = host wprost stwierdzil, ze nasza kopia jest stara
+				// (PROBLEM NR 1) — taki load NIE moze byc zablokowany przez "lustro juz dziala". Limit 2 wczytania
+				// na sesje okna chroni przed petla, gdyby load ciagle zawodzil.
+				let genLoads = 0; try { genLoads = Number(sessionStorage.getItem("st_genload_n") || 0); } catch (e) {}
+				const genForce = !!(rx.gen && ST._rxWorldGen !== rx.gen && genLoads < 2);
+				if (!genForce && !inWrongWorld && saveId && autoLoadDoneBefore(saveId)) { log("auto-load POMINIĘTY (ten save hosta był już auto-wczytany w tej sesji — guard po reloadzie) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
 				// PĘTLA PRZEŁADOWAŃ (fix TCentraL "reloading the same map over and over"): kolejny transfer
 				// tego samego świata NIE wyrywa gracza z gry — gdy lustro już działa albo load w toku, nie ładujemy.
 				// auto-load TYLKO RAZ na sesję (fix ZeroHazard "reload every 10 s"): powtórzony transfer
 				// (np. cykl peer-hello przy przeciążonym P2P) nie może w kółko wyrywać gracza do loadu —
 				// kolejne save'y tylko importujemy; gracz może je wczytać ręcznie przez Load Game.
-				if (!inWrongWorld && (ST.wsx.everApplied || ST._loadingWorld || ST._autoLoadedOnce)) { log("auto-load POMINIĘTY (lustro działa / load w toku / już auto-wczytano w tej sesji) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
+				if (!genForce && !inWrongWorld && (ST.wsx.everApplied || ST._loadingWorld || ST._autoLoadedOnce)) { log("auto-load POMINIĘTY (lustro działa / load w toku / już auto-wczytano w tej sesji) — save tylko zaimportowany"); setStatus(t("world_imported", rx.name), "#5f5"); return; }
+				if (genForce && ST._loadingWorld) { log("gen-load ODROCZONY — load w toku"); return; }
 				ST._autoLoadedOnce = true;
 				if (saveId) autoLoadMark(saveId);
 				if (saveId && ST.FH && ST.FH.game && typeof ST.FH.game.load === "function" && ST.state) {
 					try {
+						if (rx.gen) { ST._rxWorldGen = rx.gen; try { sessionStorage.setItem("st_world_gen", rx.gen); if (genForce) sessionStorage.setItem("st_genload_n", String(genLoads + 1)); } catch (e) {} }
 						ST._loadingWorld = true; // lustro NIE pisze po buforach w trakcie load (fix freeze na dużej mapie)
 						setStatus(t("loading_world"), "#ff5"); // duża mapa = minuty; bez tego wygląda jak zwiecha
 						const t0 = performance.now();
@@ -1863,18 +1893,30 @@
 				// Kompromis: kasuj dopiero gdy struktura jest nieobecna w >=3 KOLEJNYCH snapshotach (~7,5 s)
 				// I nie była świeżo postawiona/potwierdzona (30 s ochrony _structApplied).
 				if (!ST._absentCount) ST._absentCount = new Map();
-				for (const s of localList) {
-					const k = structKey(s);
-					if (hostMap.has(k)) { ST._absentCount.delete(k); continue; }
-					const cnt = (ST._absentCount.get(k) || 0) + 1;
-					ST._absentCount.set(k, cnt);
-					const appliedTs = ST._structApplied.get(k);
-					const fresh = appliedTs != null && nowS - appliedTs < 30000;
-					if (cnt >= 3 && !fresh) {
-						log("RECONCILE: usuwam ducha (nieobecny w " + cnt + " snapshotach):", k);
-						removeOne(state, s);
-						ST._absentCount.delete(k); ST._structApplied.delete(k); if (ST._structSig) ST._structSig.delete(k);
+				// 0.9.150: burza duchow (log klienta: 11 055 usuniec goldBattery w jednej sesji) — kazde
+				// usuniecie synchronicznie + osobny log ZAMRAZALY renderer. Limit 50 usuniec na przebieg,
+				// jeden zbiorczy log; a gdy rozjazd > 2000 struktur, to nie duchy tylko INNY STAN swiata —
+				// nie kasujemy nic (gen-transfer i tak zaraz przyniesie wlasciwy save).
+				let absentNow = 0;
+				for (const s of localList) { if (!hostMap.has(structKey(s))) absentNow++; }
+				if (absentNow > 2000) {
+					if (performance.now() - (ST._recStormT || 0) > 30000) { ST._recStormT = performance.now(); log("RECONCILE: rozjazd zbyt duzy (" + absentNow + " lokalnych struktur nieznanych hostowi) — wstrzymuje kasowanie, czekam na save"); }
+				} else {
+					let removed = 0, sampleK = null;
+					for (const s of localList) {
+						const k = structKey(s);
+						if (hostMap.has(k)) { ST._absentCount.delete(k); continue; }
+						const cnt = (ST._absentCount.get(k) || 0) + 1;
+						ST._absentCount.set(k, cnt);
+						const appliedTs = ST._structApplied.get(k);
+						const fresh = appliedTs != null && nowS - appliedTs < 30000;
+						if (cnt >= 3 && !fresh && removed < 50) {
+							removeOne(state, s);
+							removed++; if (!sampleK) sampleK = k;
+							ST._absentCount.delete(k); ST._structApplied.delete(k); if (ST._structSig) ST._structSig.delete(k);
+						}
 					}
+					if (removed) log("RECONCILE: usunieto " + removed + " duchow (m.in. " + sampleK + ")" + (removed >= 50 ? " — limit 50/przebieg, reszta w kolejnych" : ""));
 				}
 				// dobuduj/zaktualizuj brakujące (klient: force=true — render bez kontroli kolizji/zapisu komórek)
 				// 0.9.102: odbudowujemy TYLKO to, co nowe albo zmienione. Przy 90 tys. struktur pełny przebieg
@@ -2344,6 +2386,43 @@
 	// ------------------------------------------------------------------
 	// VACUUM — klient wysyła intencję, host zbiera elementy, typy wracają do zbiorników
 	// ------------------------------------------------------------------
+	// WYLEW z tanku (prawy przycisk; vanilla: funkcja P). U klienta vanilla zdejmowala i.amount PRZED
+	// kolejka Lu, a Lu jest dropowane — tank sie oproznial, elementy nie powstawaly (Maelle, 0.9.149).
+	// Klient liczy pociski jak vanilla (cel 6 komorek od gracza w strone kursora, rozrzut 20 px,
+	// predkosc 240*(0.8..1.2) pod katem ±0.3) i wysyla vacrel; host tworzy, odmowy wracaja vacrelres.
+	ST._vacRel = (state, tool) => {
+		if (!isClientSync() || !ST.wsx.paused) return false; // host/offline: vanilla robi swoje
+		try {
+			const d = tool && tool.data;
+			const tanks = d && d.tanks;
+			if (!Array.isArray(tanks) || !tanks.length) return true;
+			const tank = tanks[Math.min(Math.max(0, d.activeTankIdx | 0), tanks.length - 1)];
+			if (!tank || tank.amount <= 0 || !tank.elementType) return true;
+			const now = performance.now();
+			if (now - (ST._lastVacRel || 0) < 50) return true; // vanilla sprayCooldown time:20 — 50 ms po sieci daje zblizona kadencje
+			ST._lastVacRel = now;
+			const pl = state.store.player;
+			const mo = state.session.input.mouse.worldPosition;
+			const cx = pl.x + pl.width / 2, cy = pl.y + pl.height / 2;
+			const u = Math.atan2(mo.y - cy, mo.x - cx);
+			const bx = cx + Math.cos(u) * 6 * 4, by = cy + Math.sin(u) * 6 * 4; // 6 komorek (po 4 px) od gracza
+			const k = tank.elementType;
+			const quads = [];
+			const p = Math.min(tank.amount, 11);
+			for (let t = 0; t < p && tank.amount > 0; t++) {
+				const tx = bx + 20 * (Math.random() - 0.5), ty = by + 20 * (Math.random() - 0.5);
+				const ang = u + 0.6 * (Math.random() - 0.5), spd = 240 * (0.8 + 0.4 * Math.random());
+				tank.amount--;
+				quads.push(Math.floor(tx / 4), Math.floor(ty / 4), Math.round(Math.cos(ang) * spd), Math.round(Math.sin(ang) * spd));
+			}
+			if (tank.amount <= 0) { tank.elementType = 0; tank.amount = 0; }
+			if (quads.length) {
+				try { net.send({ t: "act", k: "vacrel", et: k, c: quads }); } catch (e) {}
+				try { ST.FH.ui.overlays.update(state, "hotbar"); } catch (e) {}
+			}
+		} catch (e) { log("vacRel error:", e && e.message); }
+		return true; // klient NIGDY nie wylewa lokalnie (Lu dropowane — tank oproznialby sie w nicosc)
+	};
 	ST._vac = (state, item, cell, vel) => {
 		if (!isClientSync() || !ST.wsx.paused) return false; // host/offline/poza lustrem: normalnie
 		const now = performance.now();
@@ -2609,7 +2688,9 @@
 	// Klient połączony, ale na własnym/innym świecie → broń działa normalnie lokalnie i NIC nie forwardujemy
 	// (jego współrzędne nie mają sensu w świecie hosta).
 	ST._fire = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return false; if (ST._fireQ.length < 2000) ST._fireQ.push(x, y); return true; };
-	ST._cryo = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._cryoQ.length < 2000) ST._cryoQ.push(x, y); };
+	// 0.9.150: kwadruple [x,y,vx,vy] — vanilla nadaje granulce predkosc (createAt z particle.velocity =
+	// zywa czastka; bez predkosci wpis idzie wprost do siatki i moze przegrac wyscig z workerem symulacji).
+	ST._cryo = (state, x, y, vel) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._cryoQ.length < 4000) ST._cryoQ.push(x, y, vel ? Math.round(vel.x) : 0, vel ? Math.round(vel.y) : 0); };
 	// volcanizer (lawa) + caulkBlaster (spray/usuwanie caulku): ten sam wzorzec co cryo — sekwencja
 	// przed Lu (lokalne Lu i tak dropowane u klienta), batch co 60ms, host odtwarza z guardami.
 	ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = [];
@@ -3135,6 +3216,27 @@
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "vac") {
 				hostHarvestVacuum(msg, fromId);
+			} else if (msg.k === "vacrel") {
+				// wylew z tanku klienta: tworzenie jak vanilla — przez kolejke idle, z predkoscia.
+				// Odmowy (poza swiatem / brak autoryzacji strefy) wracaja vacrelres i klient oddaje je do tanku.
+				const el = ST.FH.elements, c = msg.c || [], k = msg.et | 0;
+				const mut = ST.FH.world && ST.FH.world.mutateCellWhenIdle;
+				const W = state.store.world.size.width, H = state.store.world.size.height;
+				const canGrab = ST.FH.authorization && ST.FH.authorization.canGrab;
+				let refused = 0;
+				ST._applyingNet = true;
+				try {
+					for (let i = 0; i + 3 < c.length; i += 4) {
+						const x = c[i], y = c[i + 1], v = { x: c[i + 2], y: c[i + 3] };
+						if (!(k > 0) || !(x >= 0 && y >= 0 && x < W && y < H)) { refused++; continue; }
+						try { if (canGrab && !canGrab(state, x, y)) { refused++; continue; } } catch (e) {}
+						const mk = (st) => { try { if (el && el.createAt) el.createAt(st, x, y, k, { particle: { velocity: v } }); } catch (e) {} };
+						try { if (mut) mut(state, x, y, mk); else mk(state); } catch (e) {}
+						markCellDirty(state, x, y);
+					}
+				} finally { ST._applyingNet = false; }
+				if (refused) { try { net.send({ t: "vacrelres", et: k, n: refused }, fromId); } catch (e) {} }
+				if (!ST._vacRelLogged) { ST._vacRelLogged = true; log("HOST: wylew vacuuma klienta,", c.length / 4, "szt., odmowy:", refused); }
 			} else if (msg.k === "grabH") {
 				hostHarvestGrab(msg, fromId);
 			} else if (msg.k === "drone") {
@@ -3256,10 +3358,22 @@
 				} finally { ST._applyingNet = false; }
 				if (!ST._caulkRmLogged) { ST._caulkRmLogged = true; log("HOST: usuwanie caulku klienta odtworzone,", cR.length / 2, "komórek"); }
 			} else if (msg.k === "cryoB") {
+				// 0.9.150: jak vanilla — przez kolejke idle (mutateCellWhenIdle) i Z PREDKOSCIA. Gole createAt
+				// w srodku klatki pisalo do siatki w wyscigu z workerem symulacji: granulka znikala tuz po
+				// utworzeniu ("despawns shortly after" — Moonbugy). q=1 → kwadruple [x,y,vx,vy].
 				const el = ST.FH.elements, c = msg.c || [];
+				const mut = ST.FH.world && ST.FH.world.mutateCellWhenIdle;
+				const stride = msg.q ? 4 : 2;
 				ST._applyingNet = true;
-				try { for (let i = 0; i + 1 < c.length; i += 2) { try { if (el && el.createAt) el.createAt(state, c[i], c[i + 1], RJ_FREEZINGICE); } catch (e) {} } } finally { ST._applyingNet = false; }
-				if (!ST._cryoLogged) { ST._cryoLogged = true; log("HOST: lód klienta odtworzony,", c.length / 2, "komórek"); }
+				try {
+					for (let i = 0; i + stride - 1 < c.length; i += stride) {
+						const x = c[i], y = c[i + 1];
+						const v = stride === 4 && (c[i + 2] || c[i + 3]) ? { x: c[i + 2], y: c[i + 3] } : null;
+						const mk = (st) => { try { if (el && el.createAt) el.createAt(st, x, y, RJ_FREEZINGICE, v ? { particle: { velocity: v } } : undefined); } catch (e) {} };
+						try { if (mut) mut(state, x, y, mk); else mk(state); } catch (e) {}
+					}
+				} finally { ST._applyingNet = false; }
+				if (!ST._cryoLogged) { ST._cryoLogged = true; log("HOST: lód klienta odtworzony,", c.length / stride, "komórek" + (msg.q ? " (z predkoscia)" : "")); }
 			}
 		} catch (e) { log("replay error:", msg.k, e.message); }
 	}
@@ -3519,13 +3633,34 @@
 			if (!saves || !saves.length) { setStatus(t("no_saves"), "#f66"); return; }
 			const ts = (s) => s.timestamp || s.updatedAt || s.savedAt || s.time || s.date || 0;
 			saves.sort((a, b) => (ts(a) > ts(b) ? 1 : -1));
-			const save = saves[saves.length - 1];
+			// PROBLEM NR 1: najnowszy plik z dysku to NIE swiat, w ktory host gra (starszy zapis / inny
+			// swiat / autosave sprzed godzin). Kolejnosc: (1) zapis BIEZACEGO stanu do NOWEGO pliku,
+			// (2) najnowszy zapis TEGO worldId, (3) stare zachowanie + wyrazny log.
+			let save = null, tmpId = null;
+			const myWidTx = ST.state && ST.state.store.meta && ST.state.store.meta.worldId;
+			try {
+				if (ST.FH && ST.FH.game && typeof ST.FH.game.save === "function" && ST.state) {
+					tmpId = ST.FH.game.save(ST.state, "SandTogether transfer", undefined);
+					for (let w = 0; tmpId && w < 40 && !save; w++) {  // czekaj na plik (max ~10 s)
+						await new Promise((r) => setTimeout(r, 250));
+						const cur = await window.electron.getSaveFiles();
+						save = (cur || []).find((s2) => s2 && s2.id === tmpId) || null;
+					}
+					if (tmpId && !save) log("sendWorld: live-save nie pojawil sie na dysku po 10 s — fallback");
+				}
+			} catch (e) { log("sendWorld: live-save nieudany (" + (e && e.message) + ") — fallback"); }
+			if (!save && myWidTx) {
+				const mine = saves.filter((s2) => s2 && s2.worldId === myWidTx);
+				if (mine.length) { save = mine[mine.length - 1]; log("sendWorld: fallback — najnowszy zapis biezacego swiata: " + save.id); }
+			}
+			if (!save) { save = saves[saves.length - 1]; log("sendWorld: UWAGA — zaden zapis nie pasuje do biezacego swiata (" + myWidTx + "), wysylam najnowszy plik: " + save.id); }
 			setStatus(t("exporting", save.name || save.id), "#ff5");
 			const t0 = performance.now();
 			const res = await window.electron.exportSave(save.id);
 			if (!res || !res.success) { setStatus(t("export_err", res && res.error), "#f66"); log("sendWorld: exportSave FAILED:", res && res.error); return; }
 			log("sendWorld: eksport", save.name || save.id, "w", Math.round(performance.now() - t0), "ms");
 			const bytes = new Uint8Array(res.data.data || res.data);
+			if (tmpId && save.id === tmpId) { try { window.electron.deleteSave(tmpId); } catch (e) {} } // porzadek: transferowy zapis nie smieci w Load Game
 			const b64 = b64enc(bytes);
 			const CH = 49152; // 48 KB/paczkę — bezpiecznie pod limitami Steam P2P
 			const total = Math.ceil(b64.length / CH);
@@ -3539,7 +3674,7 @@
 			ST._wtxSeq = (ST._wtxSeq || 0) + 1;
 			ST._wtx = { tid: ST._wtxSeq, name: save.name || save.id, parts, total, queue: [], sent: 0, sizeKB: Math.round(bytes.length / 1024) };
 			for (let i = 0; i < total; i++) ST._wtx.queue.push(i);
-			net.send({ t: "world-begin", tid: ST._wtx.tid, name: ST._wtx.name, size: bytes.length, chunks: total });
+			net.send({ t: "world-begin", tid: ST._wtx.tid, name: ST._wtx.name, size: bytes.length, chunks: total, gen: ST._worldGen || null });
 			setStatus(t("world_sent", ST._wtx.sizeKB, total), "#5f5");
 			pumpWtx();
 		} catch (e) { setStatus(t("export_err", e.message), "#f66"); log("sendWorld error:", e); }
@@ -4339,6 +4474,10 @@
 		if (!ST.state) {
 			ST.state = state;
 			if (FH) ST.FH = FH;
+			// 0.9.150: token sesji swiata — nowy przy KAZDYM przechwyceniu stanu (= kazdy load/scena).
+			// Wedruje z transferem save i wraca w hello: sam worldId nie odroznia biezacego stanu od
+			// starej kopii tego samego swiata u klienta (PROBLEM NR 1).
+			ST._worldGen = Math.random().toString(36).slice(2, 10);
 			log("Stan gry przechwycony! scene:", state.store && state.store.scene && state.store.scene.active,
 				"worldId:", state.store && state.store.meta && state.store.meta.worldId,
 				"FH:", FH ? Object.keys(FH).slice(0, 25).join(",") : "BRAK");
@@ -4621,7 +4760,7 @@
 			sendResourceDeltaIfDue(state); // wyślij hostowi przyrosty zasobów klienta (dotNine)
 			// flush batchy ognia/lodu co ~60 ms
 			if (ST._fireQ.length && now - (ST._lastFireB || 0) > 60) { ST._lastFireB = now; try { net.send({ t: "act", k: "fireB", c: ST._fireQ }); } catch (e) {} ST._fireQ = []; }
-			if (ST._cryoQ.length && now - (ST._lastCryoB || 0) > 60) { ST._lastCryoB = now; try { net.send({ t: "act", k: "cryoB", c: ST._cryoQ }); } catch (e) {} ST._cryoQ = []; }
+			if (ST._cryoQ.length && now - (ST._lastCryoB || 0) > 60) { ST._lastCryoB = now; try { net.send({ t: "act", k: "cryoB", c: ST._cryoQ, q: 1 }); } catch (e) {} ST._cryoQ = []; }
 			if (ST._volcQ.length && now - (ST._lastVolcB || 0) > 60) { ST._lastVolcB = now; try { net.send({ t: "act", k: "volcB", c: ST._volcQ }); } catch (e) {} ST._volcQ = []; }
 			if (ST._caulkQ.length && now - (ST._lastCaulkB || 0) > 60) { ST._lastCaulkB = now; try { net.send({ t: "act", k: "caulkB", c: ST._caulkQ }); } catch (e) {} ST._caulkQ = []; }
 			if (ST._caulkRmQ.length && now - (ST._lastCaulkRmB || 0) > 60) { ST._lastCaulkRmB = now; try { net.send({ t: "act", k: "caulkRmB", c: ST._caulkRmQ }); } catch (e) {} ST._caulkRmQ = []; }

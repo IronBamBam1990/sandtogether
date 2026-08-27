@@ -1,3 +1,32 @@
+## 0.9.150-beta
+
+**The joining player always gets the world the host is actually playing.** Two root causes fixed. First,
+the world transfer exported the *newest save file on disk*, not the world the host had loaded - a host on
+an older save (or a different world) sent something else entirely. The host now saves its live world to a
+temporary file and sends exactly that, falling back to the newest save of the current world's id, and
+cleans the temporary file up afterwards. Second, the join handshake compared only the world id, so a
+returning player with a *stale copy of the same world* was waved through with no save at all - the mirror
+and the ghost-reconciler then spent hours stitching two different states together (one captured client log
+held 11,055 ghost-removal lines, freezing the game). Every state capture now mints a session token that
+travels with the world transfer and comes back in the handshake; a client whose token does not match gets
+the save, and a transfer carrying a new token is allowed to reload the client even while the mirror is
+running (capped at two such reloads per session). Verified machine-to-machine: a client holding a
+three-day-newer copy of the same world converged to the host's exact structure count within seconds.
+
+**Reconcile hardened.** Ghost removals are capped at 50 per snapshot with one summary log line, and when
+more than 2000 local structures are unknown to the host it stops deleting entirely - that is not ghosts,
+that is a different world state, and the new transfer logic delivers the right save instead.
+
+**The joining player's cryo gun makes snow again (Moonbugy).** Pellets were recreated on the host with a
+bare mid-frame write and no velocity, racing the simulation workers - they vanished shortly after landing.
+They now carry the client-computed velocity and go through the game's own when-idle mutation queue, the
+same path vanilla uses. Verified: 22/24 pellets persisted and mirrored.
+
+**Emptying the vacuum tank works for the joining player (Maelle).** Vanilla decrements the tank before a
+deferred queue creates the elements - and that queue is deliberately disabled on the joining side, so the
+tank drained into nothing. The release is now computed on the client (vanilla spread, angle and speed),
+replayed by the host through the when-idle queue, and anything the host refuses comes back to the tank.
+
 ## 0.9.149-beta
 
 **The joining player's vacuum now mirrors the base game's logic exactly.** 0.9.148 fixed the crash that

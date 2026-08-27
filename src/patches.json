@@ -204,12 +204,16 @@
    "critical": false,
    "variants": [
     {
-     "anchor": "const b=i;(0,u.Lu)(e,s,r,e=>{if(!(0,f.lV)(e,s,r))return",
-     "patched": "const b=i;window.SandTogether&&window.SandTogether._cryo&&window.SandTogether._cryo(e,s,r),(0,u.Lu)(e,s,r,e=>{if(!(0,f.lV)(e,s,r))return"
+     "anchor": "x={x:Math.cos(b)*U,y:Math.sin(b)*U};window.SandTogether&&window.SandTogether._cryo&&window.SandTogether._cryo(e,i,l),(0,h.Lu)(e,i,l,e=>{if(!(0,u.lV)(e,i,l))return",
+     "patched": "x={x:Math.cos(b)*U,y:Math.sin(b)*U};window.SandTogether&&window.SandTogether._cryo&&window.SandTogether._cryo(e,i,l,x),(0,h.Lu)(e,i,l,e=>{if(!(0,u.lV)(e,i,l))return"
     },
     {
      "anchor": "x={x:Math.cos(b)*U,y:Math.sin(b)*U};(0,h.Lu)(e,i,l,e=>{if(!(0,u.lV)(e,i,l))return",
-     "patched": "x={x:Math.cos(b)*U,y:Math.sin(b)*U};window.SandTogether&&window.SandTogether._cryo&&window.SandTogether._cryo(e,i,l),(0,h.Lu)(e,i,l,e=>{if(!(0,u.lV)(e,i,l))return"
+     "patched": "x={x:Math.cos(b)*U,y:Math.sin(b)*U};window.SandTogether&&window.SandTogether._cryo&&window.SandTogether._cryo(e,i,l,x),(0,h.Lu)(e,i,l,e=>{if(!(0,u.lV)(e,i,l))return"
+    },
+    {
+     "anchor": "const b=i;(0,u.Lu)(e,s,r,e=>{if(!(0,f.lV)(e,s,r))return",
+     "patched": "const b=i;window.SandTogether&&window.SandTogether._cryo&&window.SandTogether._cryo(e,s,r),(0,u.Lu)(e,s,r,e=>{if(!(0,f.lV)(e,s,r))return"
     }
    ]
   },
@@ -338,6 +342,16 @@
     {
      "anchor": "function m(e,t,n,a){o.push({x:t,y:n,apply:a}),i.add(h(t,n))}function p(e){s.push(e)}",
      "patched": "function m(e,t,n,a){if(window.SandTogether&&window.SandTogether._dropLu&&window.SandTogether._dropLu())return;o.push({x:t,y:n,apply:a}),i.add(h(t,n))}function p(e){if(window.SandTogether&&window.SandTogether._dropLu&&window.SandTogether._dropLu())return;s.push(e)}"
+    }
+   ]
+  },
+  {
+   "name": "vacuum release hook (_vacRel)",
+   "critical": false,
+   "variants": [
+    {
+     "anchor": "P=(e,t)=>{if(!(0,U.ml)(e))",
+     "patched": "P=(e,t)=>{if(window.SandTogether&&window.SandTogether._vacRel&&window.SandTogether._vacRel(e,t))return;if(!(0,U.ml)(e))"
     }
    ]
   }
