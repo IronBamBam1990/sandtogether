@@ -16,11 +16,12 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.148-beta";
+	const VER = "0.9.149-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
 	const RJ_FIRE = 11, RJ_FREEZINGICE = 12; // wartości enuma RJ z obecnego builda (do createAt na hoście)
+	const MT_LIQUID = 2, MT_GAS = 4, MT_STATIC = 5; // MatterType z obecnego builda — vacuum ich NIE zasysa (vanilla)
 	const CHUNK = 40;
 
 	// ------------------------------------------------------------------
@@ -736,7 +737,16 @@
 		} else if (msg.t === "snd") {
 			playRemoteSound(msg);
 		} else if (msg.t === "vacres") {
-			if (ST.net.role === "client") clientFillTanks(msg.types || []);
+			if (ST.net.role === "client") {
+				clientFillTanks(msg.types || []);
+				// pelne tanki: waniliowy toast (klucz i18n + cooldown — jak w F(); NIGDY golym stringiem, patrz incydent waypoints)
+				if (msg.fullT && ST.FH && ST.FH.ui && ST.FH.ui.toast) {
+					try {
+						let nm = null; try { nm = ST.FH.elements.getName(ST.state, msg.fullT); } catch (e) {}
+						ST.FH.ui.toast(ST.state, { key: "ui|vacuum|tanksFullToast", params: { name: nm || "?" } }, { cooldown: 1500, cooldownKey: "vacuum-tanks-full" });
+					} catch (e) {}
+				}
+			}
 		} else if (msg.t === "grabres") {
 			if (ST.net.role === "client") { ST._grabInFlight = false; clientFillGrabTank(msg.types || [], msg.offs || null, msg.sl || null, msg.bx, msg.by); }
 		} else if (msg.t === "grabRef") {
@@ -2340,7 +2350,20 @@
 		if (now - ST._lastVac > 120) {
 			ST._lastVac = now;
 			const f = item && item.data && item.data.filter ? item.data.filter.elementType : null;
-			try { net.send({ t: "act", k: "vac", x: cell.x, y: cell.y, f }); } catch (e) {}
+			try {
+				const m = { t: "act", k: "vac", x: cell.x, y: cell.y, f };
+				// 0.9.149: stan tankow — host znajduje slot PRZED usunieciem elementu (jak vanilla) i nie
+				// zasysa niczego, co sie nie miesci. Bez tego nadmiar znikal ze swiata (Maelle, ciag dalszy).
+				const d = item && item.data;
+				if (d && Array.isArray(d.tanks)) {
+					m.tk = d.tanks.map((k) => [k.elementType | 0, k.amount | 0]);
+					m.ti = d.activeTankIdx | 0;
+					if (d.onlyFillActiveTank === true) m.to = 1;
+					let lvl = 0; try { lvl = (ST.FH.upgrades.getLevel(state, "vacuum", "capacity") | 0) || 0; } catch (e) {}
+					m.cap = VACUUM_CAPS[lvl] || VACUUM_CAPS[0];
+				}
+				net.send(m);
+			} catch (e) {}
 		}
 		return true; // pomiń lokalny tick (czyta nieaktualne cellIds)
 	};
@@ -2605,28 +2628,58 @@
 		const getInfo = el.getInfoAtPos;
 		const removeAt = el.removeAtDeferred || el.removeAt;
 		if (!getInfo || !removeAt) { log("BŁĄD vacuum: brak API elements.getInfoAtPos/removeAt — dostępne:", Object.keys(el).join(",")); return; }
+		// Wirtualne tanki klienta: symulujemy wypelnianie w ramach tej paczki, wiec usuwamy ze swiata
+		// TYLKO to, co sie zmiesci (vanilla: slot przed usunieciem). Stary klient bez tk → jak 0.9.148.
+		const cap = (msg.cap | 0) > 0 ? (msg.cap | 0) : VACUUM_CAPS[0];
+		const tanks = Array.isArray(msg.tk) ? msg.tk.map((p) => ({ elementType: p[0] | 0, amount: p[1] | 0 })) : null;
+		const canGrab = ST.FH.authorization && ST.FH.authorization.canGrab;
 		const types = [];
 		const R = 4;
-		let taken = 0;
+		let taken = 0, fullT = 0;
 		for (let dy = -R; dy <= R && taken < 10; dy++)
 			for (let dx = -R; dx <= R && taken < 10; dx++) {
 				if (dx * dx + dy * dy > R * R) continue;
 				const x = msg.x + dx, y = msg.y + dy;
 				try {
+					if (canGrab && !canGrab(state, x, y)) continue; // strefy autoryzacji (vanilla tez sprawdza)
 					const info = getInfo(state, x, y);
 					if (!info || !info.elementType) continue;
-					// resolveGrabType jak w grabberze — refaktor 56cd9fd podmienil push(ety), ale te linie pominal:
-					// ReferenceError PO removeAt leciał do catch → material usuniety, types puste, tank klienta pusty.
 					const ety = resolveGrabType(state, info); // czastka scalona -> prawdziwy material
 					if (!ety) continue;
+					// vanilla: ciecze, gazy, statyki i nietransportowalne NIE sa zasysane
+					const cfg = el.getConfig ? el.getConfig(ety) : null;
+					if (cfg && (cfg.matterType === MT_LIQUID || cfg.matterType === MT_GAS || cfg.matterType === MT_STATIC)) continue;
+					if (cfg && cfg.isTransportable === false) continue;
 					if (msg.f !== null && msg.f !== undefined && ety !== msg.f) continue;
+					if (tanks) {
+						const slot = vacSlotFor(tanks, ety, cap, msg.ti, msg.to === 1);
+						if (!slot) { if (!fullT) fullT = ety; continue; } // pelne tanki: element ZOSTAJE w swiecie
+						if (slot.elementType === 0) slot.elementType = ety;
+						slot.amount++;
+					}
 					removeAt(state, x, y);
 					markCellDirty(state, x, y); // wymuś wysyłkę lustrem (zassany element znika u klienta)
 					types.push(ety);
 					taken++;
 				} catch (e) {}
 			}
-		if (types.length) net.send({ t: "vacres", types }, fromId);
+		if (types.length || fullT) net.send({ t: "vacres", types, fullT: fullT || undefined }, fromId);
+	}
+
+	// Odpowiednik j() z gry: slot dla elementu ety w tablicy tankow [{elementType,amount}] przy pojemnosci cap.
+	// onlyActive ogranicza do aktywnego tanku (vanilla: t.data.onlyFillActiveTank). Zwraca tank albo null.
+	function vacSlotFor(tanks, ety, cap, ti, onlyActive) {
+		if (!Array.isArray(tanks) || !tanks.length) return null;
+		if (onlyActive) {
+			const t = tanks[Math.min(Math.max(0, ti | 0), tanks.length - 1)];
+			if (!t) return null;
+			if (t.elementType === ety && t.amount < cap) return t;
+			if (t.elementType === 0 && t.amount === 0) return t;
+			return null;
+		}
+		for (const t of tanks) if (t.elementType === ety && t.amount < cap) return t;
+		for (const t of tanks) if (t.elementType === 0 && t.amount === 0) return t;
+		return null;
 	}
 
 	function clientFillTanks(types) {
@@ -2640,11 +2693,12 @@
 			let lvl = 0;
 			try { if (ST.FH && ST.FH.upgrades && ST.FH.upgrades.getLevel) lvl = ST.FH.upgrades.getLevel(state, "vacuum", "capacity") || 0; } catch (e) {}
 			const CAP = VACUUM_CAPS[lvl] || VACUUM_CAPS[0]; // prawdziwa tabela pojemności z kodu gry
+			// Ta sama logika slotow co u hosta (vacSlotFor) — host usuwa tylko to, co sie miesci, wiec
+			// kazdy typ z vacres MA slot; rozjazd (edycja tanku w locie) konczy sie pominieciem, nie strata nowa.
 			for (const ty of types) {
-				let tank = tanks.find((k) => k.elementType === ty && k.amount < CAP);
-				if (!tank) tank = tanks.find((k) => 0 === k.elementType && 0 === k.amount);
+				const tank = vacSlotFor(tanks, ty, CAP, vac.data.activeTankIdx | 0, vac.data.onlyFillActiveTank === true);
 				if (!tank) continue;
-				tank.elementType = ty;
+				if (tank.elementType === 0) tank.elementType = ty;
 				tank.amount++;
 			}
 		} catch (e) { log("fillTanks error:", e.message); }

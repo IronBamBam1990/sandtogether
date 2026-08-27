@@ -106,7 +106,7 @@ Full source on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]githu
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.148-beta - THE JOINING PLAYER\'S VACUUM NO LONGER DELETES WHAT IT SUCKS UP (report: Maelle). Since 0.9.141 the host removed the vacuumed material from the world, then crashed on an internal one-word mistake before recording what it had taken - the error was silently swallowed, so the material vanished, nothing came back over the network, and the joining player\'s tank stayed empty. The same slip also disabled the per-tick intake limit, so one pass could swallow the whole intake circle at once. Both host and joining player should update. Materials already lost cannot be restored - sorry about those.',
+    changeNote: 'v0.9.149-beta - THE JOINING PLAYER\'S VACUUM NOW WORKS EXACTLY LIKE THE HOST\'S. 0.9.148 stopped it from deleting everything, but one hole remained: with full tanks the overflow still vanished from the world, because the host removed material first and only then the joining player tried to fit it into tanks. The order now matches the base game - a tank slot is found BEFORE anything is removed, honouring tank capacity, the active-tank setting and one-type-per-tank, so whatever does not fit simply stays in the world and you get the vanilla tanks-full message. The vacuum also respects the same rules as the host\'s now: liquids, gases and static materials are not vacuumed, non-transportable materials are skipped, and zone authorization is checked. Update both sides.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

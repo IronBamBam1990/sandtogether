@@ -1,3 +1,16 @@
+## 0.9.149-beta
+
+**The joining player's vacuum now mirrors the base game's logic exactly.** 0.9.148 fixed the crash that
+deleted everything, but the order of operations was still backwards: the host removed up to ten elements
+and sent the types over, and the joining player's side silently discarded whatever did not fit into the
+tanks - so with full tanks, material still vanished from the world. The vacuum act now carries the tank
+state (types, amounts, capacity, active-tank setting), and the host finds a tank slot *before* removing
+anything, simulating the fill within the batch the same way the game's own slot function does. What does
+not fit stays in the world, and the client shows the vanilla "tanks full" toast. The host also applies
+the game's intake rules that were missing from the reimplementation: liquids, gases and static materials
+are never vacuumed, materials flagged non-transportable are skipped, and zone authorization is checked
+per cell.
+
 ## 0.9.148-beta
 
 **The joining player's vacuum deleted everything it sucked up (Maelle).** A refactor in 0.9.141 renamed
