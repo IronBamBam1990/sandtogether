@@ -1,3 +1,16 @@
+## 0.9.152-beta
+
+**The frozen-world-on-join case that survived 0.9.150 (Quadbro).** The joining player saw a static
+world while the host received their every action. Loading the transferred world reloads the joining
+player's game, which wipes the mod's in-memory trust state - and importing a world the player already
+had a copy of assigns it a NEW local world id, so every mirror packet failed the world-id check forever
+after; the one-shot rescue reload imported yet another new id and hit the same wall. The 0.9.150 world
+session token (which survives the reload) now rides in every mirror packet: a client that loaded exactly
+the host's transfer is trusted regardless of local world ids. The host also stops re-sending the world
+on every handshake when the token already matches - a new local id after import is normal, not a reason
+to transfer again. Verified by forcing a foreign world id and a wiped trust state on a live client: the
+mirror kept applying.
+
 ## 0.9.151-beta
 
 **Client-placed filters now behave like what they display (darkalien, GitHub issue #18).** Two stacked

@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.151-beta";
+	const VER = "0.9.152-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -671,7 +671,9 @@
 				// "JUZ na moim swiecie" i klient zostawal na starej tresci (PROBLEM NR 1). gen zgodny =
 				// klient ma DOKLADNIE nasz transfer. msg.gen undefined -> stary mod: zachowanie sprzed zmiany.
 				const genOk = msg.gen !== undefined ? (msg.gen != null && msg.gen === ST._worldGen) : !clientElsewhere;
-				if (hostInWorld && (clientElsewhere || !genOk || (clientInMenu && msg.ready))) { ST._autoSendT = 0; log("hello: klient bez mojego swiata (wid=" + msg.wid + " gen=" + msg.gen + "/" + ST._worldGen + " scene=" + msg.scene + ") — wysylam save"); sendWorld(); }
+				// 0.9.152: zgodny gen wystarcza — import nadaje klientowi NOWA lokalna wid, wiec "inna wid"
+				// przy zgodnym gen to norma, nie powod do ponownego transferu (petla resendow na kazdym hello).
+				if (hostInWorld && (!genOk || (clientInMenu && msg.ready))) { ST._autoSendT = 0; log("hello: klient bez mojego swiata (wid=" + msg.wid + " gen=" + msg.gen + "/" + ST._worldGen + " scene=" + msg.scene + ") — wysylam save"); sendWorld(); }
 				else if (hostInWorld && !msg.ready) { ST._autoSendT = 0; log("hello: nowy gracz — wysylam save"); sendWorld(); }
 				else if (hostInWorld) log("hello: klient JUZ na moim swiecie — tylko stream, bez save");
 			}
@@ -1302,7 +1304,7 @@
 			if (!w.unacked) w.unacked = new Map();
 			w.unacked.set(w.seq, { idx: take.slice(0), t: now });
 			// q = rozmiar kolejki hosta (odliczanie postępu u klienta, 0.9.62) + sq = numer paczki (wcack, PR #8)
-			sendWorldPacket({ t: "wc", v: 5, z: w.rawMode ? 0 : 1, sq: w.seq, wid: state.store.meta && state.store.meta.worldId, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, q: w.pending.size }, packed, sameVerAll && ST.net.transport === "ws"); // binarnie tylko gdy peer ma ten sam mod i siedzimy na WS
+			sendWorldPacket({ t: "wc", v: 5, z: w.rawMode ? 0 : 1, sq: w.seq, wid: state.store.meta && state.store.meta.worldId, g: ST._worldGen || undefined, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, q: w.pending.size }, packed, sameVerAll && ST.net.transport === "ws"); // binarnie tylko gdy peer ma ten sam mod i siedzimy na WS
 			// EMA of what a chunk really costs on the wire, drives the batch budget above. Cheap chunks
 			// (few changed rows) earn a bigger portion, expensive ones a smaller one, so the byte ceiling
 			// holds regardless of what the sim is doing.
@@ -1447,7 +1449,13 @@
 			// zaufanie wiąże wid HOSTA z widem ŚWIATA KLIENTA w momencie zaufania (_trustedMyWid).
 			// Klient wczytuje INNY świat → para nie pasuje → REJECT (lustro nie maluje po cudzym save'ie).
 			// _gotHostWorld jest JEDNORAZOWE (konsumowane przy pierwszej akceptacji).
-			const trusting = (ST._trustedWid === msg.wid && ST._trustedMyWid === myWid)
+			// 0.9.152: token sesji swiata PRZEBIJA wid. Auto-load to PRZELADOWANIE strony — caly stan
+			// zaufania wyzej ginie, a import u gracza z istniejaca kopia swiata nadaje NOWA lokalna wid:
+			// bez tego kazda paczka konczyla jako REJECT i swiat klienta byl statyczny (Quadbro, 0.9.150).
+			// gen z sessionStorage przezywa reload i dowodzi: wczytalem DOKLADNIE ten transfer hosta.
+			const genTrust = !!(msg.g && ST._rxWorldGen && msg.g === ST._rxWorldGen) && bothInWorld;
+			const trusting = genTrust
+				|| (ST._trustedWid === msg.wid && ST._trustedMyWid === myWid)
 				|| (ST._pendingTrustUntil && performance.now() < ST._pendingTrustUntil)
 				|| (ST._gotHostWorld && bothInWorld)
 				|| (ST._lastGoodWid === msg.wid && ST._lastGoodMyWid === myWid && bothInWorld);
