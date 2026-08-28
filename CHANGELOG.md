@@ -1,3 +1,17 @@
+## 0.9.155-beta
+
+**Host frame spikes: 80 ms -> 34 ms (profiler-guided).** The per-subsystem frame profiler
+added in 0.9.154 named two culprits on a big factory with players inside it. The mirror batch builder
+had a byte budget but no time budget: hashing hundreds of constantly-dirty belt chunks produces zero
+output bytes when rows are unchanged, so the byte valve never fired and single frames burned up to
+80 ms in row hashing - the loop now hard-stops after 10 ms and returns the remainder to the queue
+(the existing stoppedAt mechanism). And the resources sync serialized and IPC-cloned the entire
+upgrades tree, tech flags, progression, story state and building list every second, changed or not -
+those heavy sections now ship every 5 s and only when their JSON actually differs (cached compare;
+the scalar lane - resources, gold, energy, belt animation, factory process counters - stays at 1 s,
+and a newly joined peer forces a fresh heavy send). Client-side handlers already guard every field,
+so omitted sections are backward-safe.
+
 ## 0.9.154-beta
 
 **Sliced structure snapshots - the ~140 ms hitch is gone.** Whenever the set of structures changed

@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.154-beta";
+	const VER = "0.9.155-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1227,6 +1227,9 @@
 			let stoppedAt = -1;
 			for (let ti = 0; ti < take.length; ti++) {
 				if (size >= rawBudgetEff) { stoppedAt = ti; break; } // budżet wyczerpany — reszta wróci do kolejki
+				// 0.9.155: budzet CZASU. Hashowanie brudnych-ale-niezmienionych chunkow nie produkuje bajtow,
+				// wiec budzet bajtowy nie strzelal, a klatka plonela (zmierzone: 80 ms przy fabryce).
+				if (ti > 0 && performance.now() - buildT0 > 10) { stoppedAt = ti; break; }
 				const idx = take[ti];
 				const ccx = idx % d.cx, ccy = Math.floor(idx / d.cx);
 				const x0 = ccx * CHUNK, y0 = ccy * CHUNK;
@@ -2071,7 +2074,8 @@
 		try {
 			const sh = state.shared;
 			const conv = arr(sh.conveyorBeltsAnimationIndex);
-			net.send({
+			// skalary — tanie, co 1 s jak dotad
+			const m = {
 				t: "res",
 				r: state.store.resources,
 				pp: state.store.productionPoints,
@@ -2079,16 +2083,29 @@
 				e: arr(sh.energy) ? arr(sh.energy)[0] : null,
 				p: arr(sh.productionPoints) ? arr(sh.productionPoints)[0] : null,
 				c: conv ? Array.from(conv) : null,
-				st: state.store.mods || null,          // postęp fabuły (storyProgression)
-				gl: state.store.gloom || null,          // stan gloomu
 				fp: fpCounters(state),                  // liczniki procesów fabryki (ShakeWetSand itd.) — SAB nie-lustrzany
-				up: state.store.upgrades || null,       // WSPÓLNA pula ulepszeń (fix G2)
-				th: techFlagsForNet(state), // tech tree (bez śmieciowego klucza "undefined")
-				pg: state.store.progression || null,    // progression (upgradesUnlocked, dungeons)
-				bl: (state.store.player && state.store.player.buildings) || null, // odblokowane budynki (pomysl: Cr0ss0vr, PR #13)
 				iv: invForNet(state),                   // odblokowane przedmioty — tylko gdy lista sie zmienila
 				tz: tzForNet(state),                     // strefy teleportacji (klient chodzi po terenie hosta)
-			});
+			};
+			// 0.9.155: sekcje CIEZKIE (drzewo ulepszen, tech, progresja, fabula, gloom, budynki) co 1 s
+			// kosztowaly 26 ms klatki (budowa + klon IPC), choc zmieniaja sie rzadko. Teraz: co 5 s
+			// liczymy ich JSON i wysylamy TYLKO gdy sie zmienil. Handler klienta gate'uje kazde pole.
+			if (now - (ST._lastResHeavy || 0) >= 5000) {
+				ST._lastResHeavy = now;
+				const heavy = {
+					st: state.store.mods || null,          // postęp fabuły (storyProgression)
+					gl: state.store.gloom || null,          // stan gloomu
+					up: state.store.upgrades || null,       // WSPÓLNA pula ulepszeń (fix G2)
+					th: techFlagsForNet(state), // tech tree (bez śmieciowego klucza "undefined")
+					pg: state.store.progression || null,    // progression (upgradesUnlocked, dungeons)
+					bl: (state.store.player && state.store.player.buildings) || null, // odblokowane budynki (pomysl: Cr0ss0vr, PR #13)
+				};
+				let hj = null; try { hj = JSON.stringify(heavy); } catch (e) {}
+				if (hj !== null && hj !== ST._resHeavyJson) { ST._resHeavyJson = hj; Object.assign(m, heavy); }
+			}
+			// nowy peer musi dostac sekcje ciezkie od razu — reset cache przy zmianie liczby peerow
+			if (ST.peers.size !== (ST._resPeerN || 0)) { ST._resPeerN = ST.peers.size; ST._resHeavyJson = null; ST._lastResHeavy = 0; }
+			net.send(m);
 		} catch (e) {}
 	}
 	// Liczniki "factory.processing" (SAB per-instancja, NIE objęty lustrem świata!): postęp procesów
@@ -2518,7 +2535,7 @@
 	ST._vac = (state, item, cell, vel) => {
 		if (!isClientSync() || !ST.wsx.paused) return false; // host/offline/poza lustrem: normalnie
 		const now = performance.now();
-		if (now - ST._lastVac > 120) {
+		if (now - ST._lastVac > 60) { // 0.9.155: 120 ms dawalo ~83 szt./s — odkurzacz "ssal przez slomke" (user)
 			ST._lastVac = now;
 			const f = item && item.data && item.data.filter ? item.data.filter.elementType : null;
 			try {
@@ -2809,8 +2826,8 @@
 		const types = [];
 		const R = 4;
 		let taken = 0, fullT = 0;
-		for (let dy = -R; dy <= R && taken < 10; dy++)
-			for (let dx = -R; dx <= R && taken < 10; dx++) {
+		for (let dy = -R; dy <= R && taken < 24; dy++)
+			for (let dx = -R; dx <= R && taken < 24; dx++) {
 				if (dx * dx + dy * dy > R * R) continue;
 				const x = msg.x + dx, y = msg.y + dy;
 				try {
@@ -2874,6 +2891,9 @@
 				if (tank.elementType === 0) tank.elementType = ty;
 				tank.amount++;
 			}
+			// 0.9.155 (user, test na zywo): zbiorniki w UI nie odswiezaly sie po dosypaniu — pasek hotbara
+			// trzeba pchnac recznie, dokladnie jak robi to sciezka grabbera.
+			try { ST.FH.ui.overlays.update(state, "hotbar"); } catch (e) {}
 		} catch (e) { log("fillTanks error:", e.message); }
 	}
 
@@ -4721,13 +4741,16 @@
 		}
 		const __hb0 = performance.now();
 		if (isHostSync() && state.store.scene && state.store.scene.active !== 1) {
-			scanDirty(state);
-			maybeSendBatch(state);
-			sendSnapshotIfDue(state);
-			scanDataEditsIfDue(state); // 0.9.142: host: zmiana filtra przy graczu → natychmiast do klientow
-			sendResourcesIfDue(state);
-			sendEntitiesIfDue(state);
-			sendWorldItemsIfChanged(state); // szybkie dropy (G12)
+			// 0.9.155: profiler per podsystem — max ms kazdego wywolania (zeby "blok hosta 43 ms" mial nazwisko)
+			const PS = ST._profSub || (ST._profSub = {});
+			const T = (nm, fn) => { const t0 = performance.now(); fn(); const d = performance.now() - t0; if (d > (PS[nm] || 0)) PS[nm] = d; };
+			T("scan", () => scanDirty(state));
+			T("batch", () => maybeSendBatch(state));
+			T("snap", () => sendSnapshotIfDue(state));
+			T("dataEd", () => scanDataEditsIfDue(state)); // 0.9.142: host: zmiana filtra przy graczu → natychmiast do klientow
+			T("res", () => sendResourcesIfDue(state));
+			T("ent", () => sendEntitiesIfDue(state));
+			T("wi", () => sendWorldItemsIfChanged(state)); // szybkie dropy (G12)
 		}
 		// PROFILER KLATKOWY (0.9.154, na stale): jedna linia "MOD-FRAME" co 10 s, TYLKO gdy sa skoki —
 		// zgloszenia "FPS dropy" przychodza odtad z danymi (ile klatek > 25 ms i czyj to koszt).
@@ -4741,7 +4764,11 @@
 			if (!ST._profT0) ST._profT0 = nowT;
 			if (nowT - ST._profT0 > 10000) {
 				if ((ST._profSpikes || 0) > 5 && ST.net.role !== "idle")
-					log("MOD-FRAME: " + ST._profSpikes + " klatek >25ms/10s; blok hosta max " + Math.round(ST._profHostMax || 0) + " ms; serializacja snapshotu " + Math.round(ST._profSnapSer || 0) + " ms/10s; snapMs klienta " + Math.round(ST.wsx.snapMs || 0) + " ms");
+					{
+					let sub = "";
+					try { const PS = ST._profSub || {}; sub = Object.keys(PS).map((k) => k + " " + Math.round(PS[k]) + "ms").join(" "); ST._profSub = {}; } catch (e) {}
+					log("MOD-FRAME: " + ST._profSpikes + " klatek >25ms/10s; blok hosta max " + Math.round(ST._profHostMax || 0) + " ms [" + sub + "]; snapSer " + Math.round(ST._profSnapSer || 0) + " ms/10s; snapMs klienta " + Math.round(ST.wsx.snapMs || 0) + " ms");
+				}
 				ST._profT0 = nowT; ST._profSpikes = 0; ST._profHostMax = 0; ST._profSnapSer = 0;
 			}
 		}
