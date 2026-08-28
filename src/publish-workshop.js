@@ -106,7 +106,7 @@ Full source on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]githu
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'Credits update: darkalien and Ylvakiller promoted to Contributors - the filter root-cause work and the engineering articles behind the 10x performance rounds earned it. No code changes; current version stays 0.9.155-beta.',
+    changeNote: 'v0.9.156-beta - TWO FIXES. (1) THE BACKGROUND-WINDOW FREEZE IS GONE: when the joining player\'s game window sat behind another window, Chromium throttled its render loop, the world stopped applying, and the host paused sending - the session looked frozen until the window came back to front. The apply pump now runs on a frame callback AND a 150 ms watchdog timer, whichever fires first - a backgrounded client keeps applying (browsers throttle background timers to ~1 Hz, which is still plenty). Verified: two minutes of heavy world churn with the client window fully covered - zero congestion stalls, previously it stalled within 30 seconds. (2) FULL TANKS NOW BLOW PARTICLES AWAY like vanilla instead of silently doing nothing - the vacuum\'s blow vector travels with the intake request and the host pushes non-fitting material away from the nozzle; nothing is ever deleted. Update both sides.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

@@ -1,3 +1,22 @@
+## 0.9.156-beta
+
+**The background-window freeze is gone.** The client's apply pump was scheduled exclusively with
+requestAnimationFrame, which Chromium throttles for occluded windows (even with the anti-throttling
+flags) - a client window behind another window stopped applying world packets, the host detected the
+stall and paused sending, and the whole session read as frozen. Caught live three times by the new
+log monitor, including during the author's own play session. The pump now schedules both a frame
+callback and a 150 ms watchdog timeout - whichever fires first runs the drain and cancels the other.
+Background timers are throttled to ~1 Hz, which is ample for the 10 ms drain budget; a visible window
+still runs at full frame rate. Verified e2e: two minutes of continuous world churn with the client
+window fully covered - applyCount 104 -> 1453, zero congestion stalls (previously stalled within 30 s).
+
+**Full tanks blow particles away, like vanilla.** With no room in the tanks the host used to leave
+sucked material in place silently - to the player the vacuum "did nothing". The game has always
+passed the mod a blow vector (fourth argument of the intake hook - ignored until now); it now rides
+in the intake request and the host re-creates non-fitting elements with that velocity through the
+when-idle queue, so they visibly fly away from the nozzle. Nothing is deleted: verified e2e with
+three full tanks - world sand count unchanged after suction, tanks untouched.
+
 ## 0.9.155-beta
 
 **Host frame spikes: 80 ms -> 34 ms (profiler-guided).** The per-subsystem frame profiler

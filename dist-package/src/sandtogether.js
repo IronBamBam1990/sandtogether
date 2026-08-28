@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.155-beta";
+	const VER = "0.9.156-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1411,8 +1411,15 @@
 	}
 	function scheduleApplyDrain() {
 		if (ST._applyRaf) return;
-		ST._applyRaf = requestAnimationFrame(() => {
+		ST._applyRaf = 1; // znacznik "zaplanowane" wspolny dla obu torow
+		// 0.9.156: rAF + watchdog setTimeout. Chromium dlawi rAF PRZYSLONIETEGO okna (mimo flag) —
+		// klient w tle przestawal nakladac, host wpadal w CONGESTION-pauze ("zwiecha" u usera).
+		// Timer w tle tez jest dlawiony (do ~1 Hz), ale 1 Hz wystarcza; przy widocznym oknie rAF wygrywa.
+		const run = () => {
+			if (!ST._applyRaf) return; // drugi tor juz odpalil
 			ST._applyRaf = 0;
+			if (ST._applyRafId) { try { cancelAnimationFrame(ST._applyRafId); } catch (e) {} ST._applyRafId = 0; }
+			if (ST._applyTmr) { clearTimeout(ST._applyTmr); ST._applyTmr = 0; }
 			try {
 				const q = ST._applyQ;
 				if (!q || !q.length) return;
@@ -1420,7 +1427,9 @@
 				const n = drainApplyQ(ST.state, q.length > 4 ? 10 : 6);
 				if (n > 0) ST._lastWcT = performance.now();
 			} catch (e) { if (!ST._drainErr) { ST._drainErr = 1; log("drainApplyQ blad:", e.message); } }
-		});
+		};
+		ST._applyRafId = requestAnimationFrame(run);
+		ST._applyTmr = setTimeout(run, 150);
 	}
 	// 0.9.111: wysylka paczki swiata. Gdy peer ma ten sam mod i siedzimy na WS — leci ramka binarna
 	// (bez base64: -25% bajtow, zero kodowania po obu stronach). Inaczej stara droga: base64 w JSON-ie.
@@ -2538,8 +2547,12 @@
 		if (now - ST._lastVac > 60) { // 0.9.155: 120 ms dawalo ~83 szt./s — odkurzacz "ssal przez slomke" (user)
 			ST._lastVac = now;
 			const f = item && item.data && item.data.filter ? item.data.filter.elementType : null;
+			// 0.9.156: wektor ODDMUCHNIECIA (4. argument patcha, dotad ignorowany) — gra liczy go jako
+			// 120 * -kierunek ssania; host uzyje go dla elementow, ktore nie miesza sie w tankach.
+			const bv = vel && typeof vel.x === "number" ? [Math.round(vel.x), Math.round(vel.y)] : null;
 			try {
 				const m = { t: "act", k: "vac", x: cell.x, y: cell.y, f };
+				if (bv) m.bv = bv;
 				// 0.9.149: stan tankow — host znajduje slot PRZED usunieciem elementu (jak vanilla) i nie
 				// zasysa niczego, co sie nie miesci. Bez tego nadmiar znikal ze swiata (Maelle, ciag dalszy).
 				const d = item && item.data;
@@ -2825,7 +2838,7 @@
 		const canGrab = ST.FH.authorization && ST.FH.authorization.canGrab;
 		const types = [];
 		const R = 4;
-		let taken = 0, fullT = 0;
+		let taken = 0, fullT = 0, blown = 0;
 		for (let dy = -R; dy <= R && taken < 24; dy++)
 			for (let dx = -R; dx <= R && taken < 24; dx++) {
 				if (dx * dx + dy * dy > R * R) continue;
@@ -2843,7 +2856,21 @@
 					if (msg.f !== null && msg.f !== undefined && ety !== msg.f) continue;
 					if (tanks) {
 						const slot = vacSlotFor(tanks, ety, cap, msg.ti, msg.to === 1);
-						if (!slot) { if (!fullT) fullT = ety; continue; } // pelne tanki: element ZOSTAJE w swiecie
+						if (!slot) {
+							if (!fullT) fullT = ety;
+							// 0.9.156: vanilla ODDMUCHUJE niepasujace elementy (wektor od wlotu) — bez tego
+							// wygladalo, jakby odkurzacz przy pelnym tanku "nic nie robil" (user, na zywo).
+							// Ta sama sciezka when-idle co cryo/wylew: remove + createAt z predkoscia. Material
+							// nie znika — tylko odlatuje. Limit 6/tick, zeby nie mielic w kolko tej samej sterty.
+							if (msg.bv && blown < 6) {
+								blown++;
+								const bx2 = x, by2 = y, vv = { x: msg.bv[0], y: msg.bv[1] };
+								const mkB = (st2) => { try { const i2 = getInfo(st2, bx2, by2); if (i2 && resolveGrabType(st2, i2) === ety) { removeAt(st2, bx2, by2); el.createAt(st2, bx2, by2, ety, { particle: { velocity: vv } }); } } catch (e) {} };
+								try { const mut2 = ST.FH.world && ST.FH.world.mutateCellWhenIdle; if (mut2) mut2(state, bx2, by2, mkB); else mkB(state); } catch (e) {}
+								markCellDirty(state, bx2, by2);
+							}
+							continue;
+						}
 						if (slot.elementType === 0) slot.elementType = ety;
 						slot.amount++;
 					}
