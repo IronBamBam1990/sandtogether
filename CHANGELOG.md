@@ -1,3 +1,21 @@
+## 0.9.154-beta
+
+**Sliced structure snapshots - the ~140 ms hitch is gone.** Whenever the set of structures changed
+(anyone building or demolishing), the host serialized the whole structure list in a single frame and
+the client parsed and applied it in a single frame - measured at ~140 ms on an 84,228-structure world,
+recurring every 2.5 s during active building. The snapshot now travels as parts of 4,000 structures:
+the host serializes exactly one part per frame (the view may tear across parts - harmless, since ghost
+reconciliation requires three consecutive absences plus a 30 s fresh-build shield), parts arrive and
+apply independently in any order, and the ghost reconcile walks the local list with a 4 ms per-frame
+cursor once all parts of a snapshot landed (0.9.150/153 caps kept: max 50 removals, full stop above a
+2,000-structure divergence). Measured after: worst client hitch 19 ms, average 10 ms per part.
+
+**Permanent frame profiler.** A MOD-FRAME log line (at most one per 10 s, only when frames exceeded
+25 ms) reports the spike count, the host sync block's worst cost, snapshot serialization time and the
+client's snapshot apply time - so "it stutters" reports now arrive with the culprit named. First
+finding already on record: the host sync block peaked at 43 ms on the big world - that is the next
+target.
+
 ## 0.9.153-beta
 
 **Big-factory mirror bandwidth cut ~10x (Sessional).** Items moving on conveyors dirty their

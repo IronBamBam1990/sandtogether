@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.153-beta";
+	const VER = "0.9.154-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -722,6 +722,8 @@
 			if (ST.net.role === "client") applyNetStructs(msg);
 		} else if (msg.t === "snap") {
 			if (ST.net.role === "client") applySnapshot(msg).catch((e) => log("snap error:", e.message));
+		} else if (msg.t === "snapp") {
+			if (ST.net.role === "client") applySnapPart(msg).catch((e) => log("snapp error:", e.message));
 		} else if (msg.t === "res") {
 			ST._lastResT = performance.now(); // dowod, ze host ZYJE (osobno od strumienia swiata)
 			if (ST.net.role === "client") applyResources(msg);
@@ -1872,6 +1874,33 @@
 	}
 	async function sendSnapshotIfDue(state) {
 		const now = performance.now();
+		// 0.9.154: KROJENIE. Serializacja calego store (84k struktur) w jednej klatce = przytyk ~100 ms
+		// u hosta i ~140 ms u klienta. Job robi JEDNA czesc (4000) na klatke; kazda czesc to osobna
+		// paczka "snapp" (indeksy idempotentne, kolejnosc dowolna), ostatnia niesie n + wi/dr.
+		const job = ST._snapJob;
+		if (job) {
+			try {
+				const t0 = performance.now();
+				const PART_N = 4000;
+				const src = job.phase === 0 ? (state.store.structures || []) : (state.store.pipes || []);
+				const part = [];
+				let i = job.cursor;
+				for (; i < src.length && part.length < PART_N; i++) { const s2 = src[i]; if (s2) part.push(slimStruct(s2)); }
+				job.cursor = i;
+				const donePhase = job.cursor >= src.length;
+				const isLast = donePhase && job.phase === 1;
+				const body = { sid: job.sid, i: job.sent };
+				if (job.phase === 0) body.s = part; else body.p = part;
+				if (isLast) { body.last = 1; body.n = job.sent + 1; body.wi = state.store.worldItems || []; body.dr = state.store.drones || []; }
+				job.sent++;
+				if (donePhase) { job.phase++; job.cursor = 0; }
+				if (isLast) ST._snapJob = null;
+				ST._profSnapSer = (ST._profSnapSer || 0) + (performance.now() - t0);
+				const packed = await deflate(new TextEncoder().encode(JSON.stringify(body)));
+				net.send({ t: "snapp", d: b64enc(packed) });
+			} catch (e) { ST._snapJob = null; log("snapshot part error:", e.message); }
+			return;
+		}
 		if (now - ST._lastSnap < 2500) return;
 		// 0.9.102: jesli zbior struktur sie nie zmienil, snapshot jest zbedny — oszczedzamy serializacje
 		// 90 tys. obiektow u hosta i cala prace u klienta (to on powodowal zacinki 157-445 ms).
@@ -1879,16 +1908,61 @@
 		if (sig && sig === ST._snapSig && !ST._snapForce) { ST._lastSnap = performance.now(); return; }
 		ST._snapSig = sig; ST._snapForce = false;
 		ST._lastSnap = now;
+		ST._snapJob = { sid: (ST._snapSid = (ST._snapSid || 0) + 1), phase: 0, cursor: 0, sent: 0 };
+		// Widok moze byc "rozdarty" miedzy czesciami (struktura postawiona w trakcie krojenia trafi do
+		// nastepnego snapshotu) — reconcile i tak wymaga 3 KOLEJNYCH nieobecnosci + 30 s ochrony swiezych.
+	}
+
+	// 0.9.154: aplikacja JEDNEJ czesci snapshotu — sig/build/defer jak w starym applySnapshot, ale na
+	// <=4000 wpisow na raz. Po skompletowaniu wszystkich czesci sid startuje ST._recJob (reconcile
+	// kursorem w petli klatki — patrz frame hook).
+	async function applySnapPart(msg) {
+		const __t0 = performance.now();
+		const state = ST.state;
+		if (!state || !ST.FH) return;
+		const body = JSON.parse(new TextDecoder().decode(await inflate(b64dec(msg.d))));
+		let R = ST._snapRx;
+		if (!R || R.sid !== body.sid) R = ST._snapRx = { sid: body.sid, got: 0, n: null, seenS: new Set(), seenP: new Set() };
+		if (!ST._structSig) ST._structSig = new Map();
+		if (!ST._structApplied) ST._structApplied = new Map();
+		ST._applyingNet = true;
 		try {
-			const payload = JSON.stringify({
-				s: (state.store.structures || []).map(slimStruct),
-				p: (state.store.pipes || []).map(slimStruct),
-				wi: state.store.worldItems || [],
-				dr: state.store.drones || [],
-			});
-			const packed = await deflate(new TextEncoder().encode(payload));
-			net.send({ t: "snap", d: b64enc(packed) });
-		} catch (e) { log("snapshot error:", e.message); }
+			const nowS = performance.now();
+			for (const [list, seen] of [[body.s, R.seenS], [body.p, R.seenP]]) {
+				if (!Array.isArray(list)) continue;
+				const tSlice = performance.now();
+				let built = 0;
+				for (const s2 of list) {
+					const k = structKey(s2);
+					seen.add(k);
+					const sig = snapSig(s2);
+					if (ST._structSig.get(k) === sig) { ST._structApplied.set(k, nowS); continue; }
+					if (built > 50 && performance.now() - tSlice > 8) {
+						if (!ST._snapRest) ST._snapRest = [];
+						ST._snapRest.push(s2);
+						continue;
+					}
+					buildOne(state, s2, true);
+					ST._structSig.set(k, sig);
+					ST._structApplied.set(k, nowS);
+					built++;
+				}
+			}
+			R.got++;
+			if (body.last) R.n = body.n;
+			if (body.wi) applyWorldItems(state, body.wi);
+			if (body.dr) state.store.drones = body.dr;
+			if (R.n != null && R.got >= R.n) {
+				ST._recJob = { sid: R.sid, seenS: R.seenS, seenP: R.seenP, phase: 0, cursor: 0, removed: 0, absent: 0, sample: null };
+				ST._snapRx = null;
+			}
+		} catch (e) { log("snapp apply error:", e.message); }
+		finally {
+			ST._applyingNet = false;
+			const d = performance.now() - __t0;
+			ST.wsx.snapMs = ST.wsx.snapMs ? ST.wsx.snapMs * 0.7 + d * 0.3 : d;
+			if (d > (ST.wsx.snapWorst || 0)) ST.wsx.snapWorst = d;
+		}
 	}
 
 	async function applySnapshot(msg) {
@@ -4645,6 +4719,7 @@
 				}
 			} catch (e) { if (!ST._deadErrLogged) { ST._deadErrLogged = true; log("sprzatanie martwych komorek blad:", e.message); } }
 		}
+		const __hb0 = performance.now();
 		if (isHostSync() && state.store.scene && state.store.scene.active !== 1) {
 			scanDirty(state);
 			maybeSendBatch(state);
@@ -4653,6 +4728,22 @@
 			sendResourcesIfDue(state);
 			sendEntitiesIfDue(state);
 			sendWorldItemsIfChanged(state); // szybkie dropy (G12)
+		}
+		// PROFILER KLATKOWY (0.9.154, na stale): jedna linia "MOD-FRAME" co 10 s, TYLKO gdy sa skoki —
+		// zgloszenia "FPS dropy" przychodza odtad z danymi (ile klatek > 25 ms i czyj to koszt).
+		{
+			const nowT = performance.now();
+			const hb = nowT - __hb0;
+			if (hb > (ST._profHostMax || 0)) ST._profHostMax = hb;
+			const dtF = ST._lastFrameT ? nowT - ST._lastFrameT : 16;
+			ST._lastFrameT = nowT;
+			if (dtF > 25 && ST.net.role !== "idle") ST._profSpikes = (ST._profSpikes || 0) + 1;
+			if (!ST._profT0) ST._profT0 = nowT;
+			if (nowT - ST._profT0 > 10000) {
+				if ((ST._profSpikes || 0) > 5 && ST.net.role !== "idle")
+					log("MOD-FRAME: " + ST._profSpikes + " klatek >25ms/10s; blok hosta max " + Math.round(ST._profHostMax || 0) + " ms; serializacja snapshotu " + Math.round(ST._profSnapSer || 0) + " ms/10s; snapMs klienta " + Math.round(ST.wsx.snapMs || 0) + " ms");
+				ST._profT0 = nowT; ST._profSpikes = 0; ST._profHostMax = 0; ST._profSnapSer = 0;
+			}
 		}
 		// Dobijanie po rozbiórce (patrz _demol): 250ms po przeciągnięciu sprawdź, czy w recie zostały
 		// struktury pominięte przez grę (kafle utkwione w QUEUED) i zdejmij je przez SA.removeAt.
@@ -4726,6 +4817,43 @@
 		// 0.9.130: znaczniki cooldownow potrafia trafic "w przyszlosc" po kazdym imporcie swiata/profilu
 		if (now - (ST._cdFixT || 0) > 5000) { ST._cdFixT = now; fixFutureCooldowns(state, "kontrola cykliczna"); }
 		// 0.9.137: dokoncz odbudowe struktur odlozonych przez ciecie pracy (patrz wyzej).
+		// 0.9.154: reconcile duchow KURSOREM (budzet 4 ms/klatke) — skan 84k lokalnych struktur w jednej
+		// klatce to kilkanascie ms przytyku. Limity z 0.9.150/153: max 50 usuniec na przebieg, rozjazd
+		// > 2000 nieznanych hostowi = wstrzymanie kasowania (to inny stan swiata, nie duchy).
+		if (isClientSync() && ST._recJob && !ST._loadingWorld) {
+			try {
+				const J = ST._recJob;
+				if (!ST._absentCount) ST._absentCount = new Map();
+				if (!ST._structApplied) ST._structApplied = new Map();
+				const t0r = performance.now();
+				const list = J.phase === 0 ? (ST.state.store.structures || []) : (ST.state.store.pipes || []);
+				const seen = J.phase === 0 ? J.seenS : J.seenP;
+				while (J.cursor < list.length && performance.now() - t0r < 4) {
+					const s3 = list[J.cursor++];
+					if (!s3) continue;
+					const k = structKey(s3);
+					if (seen.has(k)) { ST._absentCount.delete(k); continue; }
+					J.absent++;
+					const cnt = (ST._absentCount.get(k) || 0) + 1;
+					ST._absentCount.set(k, cnt);
+					const ts = ST._structApplied.get(k);
+					const fresh = ts != null && performance.now() - ts < 30000;
+					if (cnt >= 3 && !fresh && J.removed < 50 && J.absent <= 2000) {
+						removeOne(ST.state, s3);
+						J.removed++; if (!J.sample) J.sample = k;
+						ST._absentCount.delete(k); ST._structApplied.delete(k); if (ST._structSig) ST._structSig.delete(k);
+					}
+				}
+				if (J.cursor >= list.length) {
+					if (J.phase === 0) { J.phase = 1; J.cursor = 0; }
+					else {
+						if (J.removed) log("RECONCILE: usunieto " + J.removed + " duchow (m.in. " + J.sample + ")");
+						if (J.absent > 2000 && performance.now() - (ST._recStormT || 0) > 30000) { ST._recStormT = performance.now(); log("RECONCILE: rozjazd zbyt duzy (" + J.absent + ") — kasowanie wstrzymane, czekam na save"); }
+						ST._recJob = null;
+					}
+				}
+			} catch (e) { ST._recJob = null; }
+		}
 		if (isClientSync() && ST._snapRest && ST._snapRest.length && !ST._loadingWorld) {
 			try {
 				const t0 = performance.now();
