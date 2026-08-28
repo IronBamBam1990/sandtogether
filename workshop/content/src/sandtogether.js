@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.156-beta";
+	const VER = "0.9.157-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2865,7 +2865,11 @@
 							if (msg.bv && blown < 6) {
 								blown++;
 								const bx2 = x, by2 = y, vv = { x: msg.bv[0], y: msg.bv[1] };
-								const mkB = (st2) => { try { const i2 = getInfo(st2, bx2, by2); if (i2 && resolveGrabType(st2, i2) === ety) { removeAt(st2, bx2, by2); el.createAt(st2, bx2, by2, ety, { particle: { velocity: vv } }); } } catch (e) {} };
+								// 0.9.157 HOTFIX: alias removeAt preferuje wariant ODROCZONY — usuniecie szlo do kolejki
+							// na pozniej, createAt odpalal od razu na wciaz zajetej komorce i cicho zawodzil, a spoznione
+							// usuniecie KASOWALO material ("wszystko znika w eterze" — user na zywo). W callbacku idle
+							// musi byc SYNCHRONICZNE el.removeAt + createAt w jednym kroku (komorka juz pusta = create wejdzie).
+							const mkB = (st2) => { try { const i2 = getInfo(st2, bx2, by2); if (i2 && resolveGrabType(st2, i2) === ety) { el.removeAt(st2, bx2, by2); el.createAt(st2, bx2, by2, ety, { particle: { velocity: vv } }); } } catch (e) {} };
 								try { const mut2 = ST.FH.world && ST.FH.world.mutateCellWhenIdle; if (mut2) mut2(state, bx2, by2, mkB); else mkB(state); } catch (e) {}
 								markCellDirty(state, bx2, by2);
 							}

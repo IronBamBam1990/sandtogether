@@ -1,3 +1,17 @@
+## 0.9.157-beta
+
+**Hotfix for 0.9.156: the full-tank blow-away could delete material.** The blow step removed the
+element through the deferred (when-idle-preferring) removal alias, so inside the idle callback the
+removal was queued for later while the velocity re-create ran immediately against a still-occupied
+cell and silently failed - the late removal then erased the element. Exactly the "everything vanishes
+into the ether" the author hit within minutes of hands-on testing on a level-6 world. Removal and
+re-create are now synchronous within the single when-idle callback (cell freed, create succeeds).
+Verified with an honest measurement this time - a fixed wide region counted before and after, with
+type conversions included (sand landing in water becomes wet sand): 20 cells before, 22 sand + 6 wet
+sand after across the settle radius - zero net loss. Also recorded: the flawed measurement that let
+the 0.9.156 bug through used different scan regions before and after; the test recipe now mandates a
+fixed region plus conversion counting.
+
 ## 0.9.156-beta
 
 **The background-window freeze is gone.** The client's apply pump was scheduled exclusively with
