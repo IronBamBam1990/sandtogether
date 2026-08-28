@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.152-beta";
+	const VER = "0.9.153-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1036,7 +1036,7 @@
 		ST.wsx.priority.clear();
 		if (ST.wsx.rowH) ST.wsx.rowH.clear();   // stale hashes would suppress sends in the new world
 		ST.wsx.sweep = 0;
-		ST.wsx.bpc = 0; ST.wsx.lastNear = 0;    // re-measure chunk cost, the new world compresses differently
+		ST.wsx.bpc = 0; ST.wsx.lastNear = 0; if (ST.wsx.sentAt) ST.wsx.sentAt.clear();    // re-measure chunk cost, the new world compresses differently
 		ST.wsx.seq = 0; ST.wsx.ackSeen = false; ST.wsx.lag = 0; ST.wsx.rate = 0.25; ST.wsx.boost = 1; ST.wsx.buildMs = 0; // 0.9.78: start ostrozny, regulator sam podniesie if (ST.wsx.unacked) ST.wsx.unacked.clear(); // start un-throttled
 	}
 
@@ -1132,6 +1132,8 @@
 			const anchors = [{ x: state.store.player.x / 4, y: state.store.player.y / 4 }];
 			for (const p of ST.peers.values()) anchors.push({ x: p.tx / 4, y: p.ty / 4 });
 			const FAST_R = 24 * CHUNK; // ~2 ekrany wokół gracza (Manhattan, w komórkach)
+			const FAR_HOT_MS = 600;    // daleki chunk najwyzej ~1,6x/s (przy graczu bez zmian: pelne 10 Hz)
+			if (!w.sentAt) w.sentAt = new Map();
 			// 0.9.91: LAN/localhost to NIE Steam relay — tam sufit 24 KB/paczkę był naszym własnym hamulcem.
 			// Przy szybkim łączu (niski RTT, zero zaległości) pozwalamy na więcej; przy wolnym zostaje ostrożnie.
 			let linkPing = 0;
@@ -1196,7 +1198,15 @@
 				let dm = 1e9;
 				for (const an of anchors) { const dd = Math.abs(ax - an.x) + Math.abs(ay - an.y); if (dd < dm) dm = dd; }
 				if (dm <= FAST_R) { if (near.length < nearN) near.push(a); }  // cap is budget driven now, was a fixed 120
-				else if (far.length < slowN) far.push(a);                     // stop at slowN, was collecting every far chunk
+				else if (far.length < slowN) {
+					// 0.9.153: WOLNY ZEGAR dalekich goracych chunkow. Tasmy zmieniaja komorki co tick, wiec ich
+					// chunk wraca do wysylki ~10x/s — kosmetyka, ktorej nikt z daleka nie widzi (Sessional:
+					// "boatload of materials on conveyors" = setki KB/s). Daleki chunk wysylamy ponownie
+					// najwczesniej co FAR_HOT_MS; jednorazowa zmiana w dali (brak swiezego sentAt) idzie od razu.
+					// Chunk zostaje w pending — nic nie ginie, tylko czeka na swoj zegar.
+					const lastTx = w.sentAt && w.sentAt.get(a);
+					if (lastTx === undefined || now - lastTx >= FAR_HOT_MS) far.push(a);
+				}
 			}
 			w.lastNear = near.length; // feeds nearEst on the next batch
 			// PRIORYTET najpierw (grabber/vacuum) — ZAWSZE wysyłane, omijają limit near/far (fix "re-grab: miroir ne livre pas").
@@ -1204,7 +1214,7 @@
 			w.priority.clear();
 			// far is already capped to slowN by the loop above, so the old far.slice(0, slowN) is redundant
 			const take = prio.concat(near.filter((i) => !prio.includes(i)), far.filter((i) => !prio.includes(i)));
-			for (const i of take) w.pending.delete(i);
+			for (const i of take) { w.pending.delete(i); w.sentAt.set(i, now); }
 			// serializacja v4: [u16 cx][u16 cy][u8 cw][u8 ch] + per-komórka: 4 map + 1 wall + 1 shadow + 1 auth + 4 cellIds + 1 elemType = 12 B
 			const parts = [];
 			let size = 0;

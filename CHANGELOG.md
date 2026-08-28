@@ -1,3 +1,16 @@
+## 0.9.153-beta
+
+**Big-factory mirror bandwidth cut ~10x (Sessional).** Items moving on conveyors dirty their
+cells every tick, so a belt-heavy chunk re-entered the send queue ~10x/s forever - pure cosmetic
+churn no player was looking at. Measured on an 84,228-structure factory world with both players away
+from the base: 5136 KB/s and 1249 chunks/s of mirror traffic. Distant chunks now carry a per-chunk
+cooldown of 600 ms (~1.6 refreshes/s); chunks within ~2 screens of any player keep the full rate, and
+a one-off distant change (a placed building, a dug tunnel) still ships immediately - its chunk has no
+recent send to wait out. Same scenario after: 523 KB/s, 88 chunks/s. Near-player traffic verified
+unthrottled (1098 chunks/s with both players inside the belt city). Nothing is skipped, only
+rescheduled - the chunk stays queued until its clock allows it. Pattern borrowed from Factorio's
+FFF#421 optimization notes: lower the update rate where nobody is watching.
+
 ## 0.9.152-beta
 
 **The frozen-world-on-join case that survived 0.9.150 (Quadbro).** The joining player saw a static
