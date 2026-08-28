@@ -15,7 +15,7 @@ const PREVIEW = path.resolve(__dirname, '../workshop/preview.png');
 
 const TITLE = 'SandTogether — Co-op Multiplayer';
 const DESCRIPTION = `[h1]SandTogether — Co-op Multiplayer for Sandustry[/h1]
-[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.[/b]
+[b]Author: Kamil Padula[/b] — [b]Contributors: dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad., darkalien, Ylvakiller[/b]
 
 Play Sandustry together in ONE living world — the same sand, the same factory, the same fluids, streamed live between players. Up to 4 players, over the internet or on a LAN.
 
@@ -73,7 +73,7 @@ Both players must run the same mod version AND the same game version — the pan
 [b]Port forwarded and still nothing?[/b] The mod listens on [b]TCP 27777[/b] (TCP, not UDP), and the host Windows Firewall must let [b]Sandustry.exe[/b] through on public networks.
 
 [h2]💛 Thank you — this mod is community-built[/h2]
-Code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts), [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix), [b]Cr0ss0vr[/b] (precise client demolish selection, foundation cleanup after demolition, and the report and first patch for progression not reaching the client — the trail that led to the 0.9.132 root cause), [b]TCentraL[/b] (blob-expanding red-tile cleanup — our sharpest tester who then sent code), [b]AlyxiaFox[/b] (congestion control for the world sync) and [b]NanYu_sad.[/b] (the complete Simplified Chinese translation).
+Code contributors: [b]dotNine[/b] (player models, world auto-transfer, collision sync), [b]Knight-HD[/b] (building placement, grabber rework, teammate ghosts), [b]DwoaC[/b] (the macOS port — installer, launcher and the Steam-callback fix), [b]Cr0ss0vr[/b] (precise client demolish selection, foundation cleanup after demolition, and the report and first patch for progression not reaching the client — the trail that led to the 0.9.132 root cause), [b]TCentraL[/b] (blob-expanding red-tile cleanup — our sharpest tester who then sent code), [b]AlyxiaFox[/b] (congestion control for the world sync) [b]NanYu_sad.[/b] (the complete Simplified Chinese translation), [b]darkalien[/b] (root-caused the client-filter behaviour and filed the fix) and [b]Ylvakiller[/b] (whose Factorio engineering articles set the direction for the 10x performance work in 0.9.153-155).
 
 And to everyone whose precise reports shaped almost every release: [b]TCentraL[/b], [b]Warlow[/b], [b]derErste67[/b], [b]Akriz[/b], [b]tony.s.jennette[/b], [b]ZeroHazard[/b], [b]Tobi1Kenobi[/b], [b]Drewby[/b], [b]Spiddy[/b], [b]J.Slayer[/b], [b]Psychospark[/b] (our first Linux player), [b]MFeltmann[/b], [b]Dr. Ethulwulf Sauce[/b], [b]NanYu_sad.[/b], [b]ЗаКеЛьМан[/b], [b]星灵[/b], [b]Lofar666[/b], [b]Bobulator333[/b], [b]thatsmaik[/b], [b]uolkx[/b], [b]MIXUIL[/b], [b]Justin[/b], [b]Hooye!![/b], [b]Sprut[/b], [b]Maelle[/b], [b]Moonbugy[/b], [b]Knif Boiiiiiii[/b], [b]Sessional[/b], [b]friberg[/b], [b]Shadow City Empire[/b], [b]Clavius[/b], [b]Golden Pan please[/b], [b]hunters01[/b], [b]Lecker Bierchen[/b], [b]Lurkily[/b] — and everyone else who reported, tested and played.
 
@@ -106,7 +106,7 @@ Full source on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]githu
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'v0.9.155-beta - FPS STUTTER HUNT, ROUND TWO: THE HOST. The new frame profiler named two culprits on the host inside a big factory. First, the world-mirror batch builder had a byte budget but no TIME budget - hashing hundreds of constantly-dirty belt chunks produces no bytes when rows have not changed, so the safety valve never fired and single frames burned up to 80 ms; it now hard-stops at 10 ms and the rest simply waits its turn. Second, the resources sync cloned the ENTIRE upgrades tree, tech tree and progression across the process boundary every single second, changed or not - those heavy sections now go out every 5 seconds and only when something actually changed. Measured on the same 84,000-structure factory with both players inside it: worst host frame cost down from 80 ms to 34 ms. Combined with 0.9.153 (10x bandwidth) and 0.9.154 (client hitch 140 -> 19 ms), a big co-op factory should finally feel like the same game as singleplayer. BONUS, reported live during testing: the joining player\'s vacuum now refreshes the tank display the moment material lands in it, and sucks at roughly vanilla speed instead of through a straw (was ~83 items/s, now ~400). Update both sides.',
+    changeNote: 'Credits update: darkalien and Ylvakiller promoted to Contributors - the filter root-cause work and the engineering articles behind the 10x performance rounds earned it. No code changes; current version stays 0.9.155-beta.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,
