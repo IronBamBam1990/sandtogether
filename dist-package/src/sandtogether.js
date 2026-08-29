@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.157-beta";
+	const VER = "0.9.159-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -123,7 +123,7 @@
 			world_imported: (n) => "Świat '" + n + "' zaimportowany! Wczytaj go: menu → Load Game",
 			world_imported_loaded: (n) => "Dołączono do świata hosta '" + n + "' — jesteś w grze!",
 			tech_rejected: (id) => "Badanie '" + id + "' odrzucone przez hosta (wymagania/koszt) — spróbuj ponownie",
-			tech_repaired: (n) => "Naprawiono " + n + " uszkodzonych badań — budynki/przedmioty przywrócone",
+			tech_repaired: (n) => "Naprawiono " + n + " uszkodzonych badań — budynki/przedmioty przywrócone",
 			hairpin_hint: "Połączenie odrzucone. Jeśli host jest w TEJ SAMEJ sieci co Ty, użyj jego adresu lokalnego (192.168.x.x) — routery zwykle nie pozwalają łączyć się z własnym publicznym IP.",
 			waiting_host_world: "Połączono — czekam aż host wejdzie do świata (wczyta się automatycznie)...",
 			receiving: (a, b) => "Odbieranie świata: " + a + "/" + b,
@@ -1407,6 +1407,12 @@
 		}
 		if (q.length) scheduleApplyDrain();
 		if (applied > 0 && ST.wsx) { ST.wsx.applyCount += applied; ST._lastWcT = performance.now(); }
+		// 0.9.158: ACK takze z pompy (watchdog w tle) — frame hook w schowanym oknie chodzi ~1 Hz, wiec
+		// ack niosl ~1 s wieku = stale "26 batches behind" i host pauzowal, choc klient NADAZAL.
+		if (applied > 0 && ST._lastAppliedSq != null && performance.now() - (ST._lastAckT || 0) > 100) {
+			ST._lastAckT = performance.now();
+			try { net.send({ t: "wcack", sq: ST._lastAppliedSq, qd: (ST._applyQ || []).length }); } catch (e) {}
+		}
 		return applied;
 	}
 	function scheduleApplyDrain() {
@@ -1623,8 +1629,14 @@
 					continue;
 				}
 				ST._dataEdited.set(k, now);
-				try { const m = { t: "act", k: "sdata", x: s.x, y: s.y, type: s.type, data: s.data }; if (s.filter != null) m.f = s.filter; net.send(m); } catch (e) {}
-				log("CLIENT config maszyny →", k, s.filter != null ? "(+filtr)" : "");
+				// 0.9.159: filtr dołączamy TYLKO gdy zmienił się FILTR (sig[1]), nie same dane maszyny.
+				// Wcześniej każda zmiana danych niosła też lokalny filtr klienta — jeśli był PRZESTARZAŁY
+				// (host edytował filtr poza ekranem klienta — brak broadcastu), host COFAŁ swój filtr do
+				// starego stanu klienta → „wszystkie filtry zresetowane" (zgłoszenie MaxMasterB).
+				let fZmieniony = false;
+				try { const pv2 = JSON.parse(prev), cv2 = JSON.parse(cur); fZmieniony = JSON.stringify(pv2[1]) !== JSON.stringify(cv2[1]); } catch (e) { fZmieniony = true; }
+				try { const m = { t: "act", k: "sdata", x: s.x, y: s.y, type: s.type, data: s.data }; if (fZmieniony && s.filter != null) m.f = s.filter; net.send(m); } catch (e) {}
+				log("CLIENT config maszyny →", k, fZmieniony && s.filter != null ? "(+filtr)" : "");
 			}
 			// higiena okna ochronnego
 			for (const [k, ts] of ST._dataEdited) if (now - ts > 10000) ST._dataEdited.delete(k);
@@ -2297,12 +2309,87 @@
 				// żyje w mods.grabberSizeScroll i był nadpisywany stanem HOSTA co 1s. Lokalne preferencje
 				// zachowujemy przy nadpisie (lista rozszerzalna, gdyby gra trzymała tu więcej ustawień UI).
 				const prevMods = state.store.mods || {};
+				// 0.9.159: przed podmiana listy stworkow zdejmij duchy — obiekty starej listy nieobecne w nowej
+				// musza przejsc przez _entDrop (sprite+swiatlo), bo podmiana referencji NIE sprzata renderera.
+				try {
+					if (ST._entDrop && ST.FH && ST.FH.entities && ST.FH.entities.getAll) {
+						const oldList = ST.FH.entities.getAll(state) || [];
+						let newIds = null;
+						for (const k2 in (msg.st || {})) { const v2 = msg.st[k2]; if (v2 && Array.isArray(v2.list)) { newIds = new Set(v2.list.map((c5) => c5 && c5.id)); break; } }
+						if (newIds) for (const c6 of oldList) { if (c6 && c6.id >= 0 && !newIds.has(c6.id)) { if (ST._entCollectFx) { try { ST._entCollectFx(state, c6); } catch (e2) {} } try { ST._entDrop(c6); } catch (e2) {} } }
+					}
+				} catch (e) {}
+				// 0.9.159: TOŻSAMOŚĆ obiektów stworków przy podmianie listy — vanilla trzyma lightIndex
+				// (wieczne światło, durationMs:-1) i sprite'a NA OBIEKCIE od spawnu do Ip. Podmiana obiektu
+				// osieraca światło na zawsze (ekran jaśniał przy wciąganiu), a hostowy lightIndex na nowym
+				// obiekcie sprawiał, że Ip gasiło CUDZE światło. Scalamy dane w stare obiekty; nowym
+				// kasujemy lightIndex (światło+sprite nada im _entInit z szybkiej szyny).
+				try {
+					const EN9 = ST.FH && ST.FH.entities;
+					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []) : [];
+					const oldBy9 = new Map(oldL9.map((c9) => [c9 && c9.id, c9]));
+					for (const k9 in (msg.st || {})) {
+						const v9 = msg.st[k9];
+						if (v9 && Array.isArray(v9.list)) {
+							for (let i9 = 0; i9 < v9.list.length; i9++) {
+								const nw9 = v9.list[i9];
+								if (!nw9) continue;
+								const od9 = oldBy9.get(nw9.id);
+								if (od9) { for (const f9 in nw9) { if (f9 !== "lightIndex") od9[f9] = nw9[f9]; } v9.list[i9] = od9; }
+								else nw9.lightIndex = undefined;
+							}
+							// echa wypuszczen (id<0) przenosimy do nowej listy (młode) albo gasimy (stare) —
+							// bez tego podmiana listy osierociłaby ich światła.
+							const nowG9 = performance.now();
+							for (const og9 of oldL9) {
+								if (og9 && og9.id < 0) {
+									if (og9.__stGhostT && nowG9 - og9.__stGhostT <= 600) v9.list.push(og9);
+									else { try { ST._entDrop(og9); } catch (e2) {} }
+								}
+							}
+							break;
+						}
+					}
+				} catch (e) {}
 				state.store.mods = msg.st;
 				for (const k of ["grabberSizeScroll"]) if (prevMods[k] !== undefined) state.store.mods[k] = prevMods[k];
 				// AUGMENTY (fix TCentraL: klient uwięziony w ekranie wyboru): świeży lokalny WYBÓR klienta
 				// (act:aug w drodze) nie może być nadpisany streamem — okno ochronne 5s; poza nim host rządzi.
 				if (ST._augEditT && performance.now() - ST._augEditT < 5000 && prevMods.augments !== undefined) state.store.mods.augments = prevMods.augments;
+				// 0.9.159 (zgłoszenie MaxMasterB): pendingChoice/viewMode to flagi UI GRACZA w współdzielonym
+				// obiekcie. Gdy DRUGI gracz zamknął już swój popup (lokalnie false), a biorący orba wciąż
+				// wybiera (u hosta true), strumień przywracał mu blokadę wejścia → STUCK. pendingChoice=true
+				// przejmujemy tylko na KRAWĘDZI false→true u hosta (nowy orb); podtrzymanie ignorujemy.
+				try {
+					const aug9 = state.store.mods.augments, pAug9 = prevMods.augments;
+					if (aug9 && pAug9) {
+						const hostPend9 = !!aug9.pendingChoice;
+						const edge9 = hostPend9 && ST._augHostPend === false;
+						if (hostPend9 && !edge9 && !pAug9.pendingChoice) aug9.pendingChoice = false;
+						if (pAug9.viewMode !== undefined) aug9.viewMode = pAug9.viewMode;
+						ST._augHostPend = hostPend9;
+					} else if (aug9) ST._augHostPend = !!aug9.pendingChoice;
+				} catch (e) {}
 				try { ST._augLast = JSON.stringify(state.store.mods.augments || null); } catch (e) {}
+				// 0.9.159 (darkalien: teleporter/anomalia dopiero po restarcie): kroki fabuły przychodziły
+				// CICHO w st — gra klienta nie odpalała ich obsługi (nagrody, waypointy teleportu "Void",
+				// odblokowania). Emitujemy story:stepCompleted dla NOWYCH kroków (jak tech-sync od 0.9.89);
+				// _applyingNet blokuje odesłanie do hosta.
+				try {
+					const spN = state.store.mods && state.store.mods.storyProgression;
+					const arrN = (spN && spN.completedSteps) || [];
+					const prevSteps = ST._storySeen || null;
+					if (prevSteps) {
+						for (const stp of arrN) {
+							if (!prevSteps.has(stp)) {
+								ST._applyingNet = true;
+								try { ST.FH.events.emit(state, "story:stepCompleted", { stepId: stp }); } catch (e2) {} finally { ST._applyingNet = false; }
+								log("SYNC: krok fabuły od drużyny odtworzony lokalnie:", stp);
+							}
+						}
+					}
+					ST._storySeen = new Set(arrN);
+				} catch (e) {}
 			}
 			if (msg.gl) state.store.gloom = msg.gl;
 			if (msg.fp) { const a = fpArr(state); if (a) { const src = msg.fp; for (let i = 0; i < Math.min(a.length, src.length); i++) { try { Atomics.store(a, i, src[i]); } catch (e) { a[i] = src[i]; } } } }
@@ -2435,6 +2522,12 @@
 				pr: (state.store.projectiles || []).map(slimProj),
 				dr: state.store.drones || [],
 				cr: state.store.creatures || {},
+				// 0.9.159: POZYCJE zywych stworkow 10x/s — pelna lista (store.mods) idzie tylko co 5 s
+				// (sekcja ciezka res po 0.9.155), wiec klient celowal Zaganiaczem w pozycje sprzed 5 s.
+				// r[4]=typ: klient tworzy z niego nieznane stworki od razu (100 ms), zamiast czekać ~5 s na res.st.
+			// r[5],r[6]=vx,vy: klient integruje lokalną fizyką między pakietami (lot, odbicia od ścian —
+			// wcześniej zerowaliśmy prędkości i stworki skakały co 100 ms bez animacji).
+			en: (function () { try { const a = ST.FH.entities && ST.FH.entities.getAll ? ST.FH.entities.getAll(state) : null; return a ? a.map((c) => [c.id, Math.round(c.x), Math.round(c.y), c.capturing ? 1 : 0, c.type, Math.round((c.vx || 0) * 10) / 10, Math.round((c.vy || 0) * 10) / 10]) : undefined; } catch (e) { return undefined; } })(),
 			});
 		} catch (e) {}
 	}
@@ -2444,7 +2537,102 @@
 		try {
 			ST.remoteProjectiles = msg.pr || []; // ghost render — NIE do store (żadnej podwójnej symulacji)
 			if (msg.dr) state.store.drones = msg.dr;
-			if (msg.cr) state.store.creatures = msg.cr;
+			// 0.9.159: kubełki IN-PLACE, nie podmiana obiektu — HUD Zaganiacza trzyma referencję do
+			// starych kolekcji i po podmianie licznik "nie odświeżał się" mimo świeżych danych co 100 ms.
+			// Do tego overlays.update("hotbar") — WANILIA odświeża HUD tylko tym wołaniem (robi je przy
+			// wypuszczeniu/zmianie typu); u klienta liczniki zmienia SYNC, więc wołamy je sami (throttle 300 ms).
+			if (msg.cr) {
+				const tgtCr = (state.store.creatures = state.store.creatures || {});
+				let crZmiana = false;
+				for (const k5 in msg.cr) {
+					const s5 = msg.cr[k5], d5 = (tgtCr[k5] = tgtCr[k5] || {});
+					for (const f5 in s5) { if (d5[f5] !== s5[f5]) crZmiana = true; d5[f5] = s5[f5]; }
+				}
+				if (crZmiana) {
+					const nowCr = performance.now();
+					if (nowCr - (ST._crHudT || 0) > 300) {
+						ST._crHudT = nowCr;
+						try { ST.FH.ui && ST.FH.ui.overlays && ST.FH.ui.overlays.update && ST.FH.ui.overlays.update(state, "hotbar"); } catch (e) {}
+					}
+				}
+			}
+			// 0.9.159: pozycje stworkow z hosta (10 Hz) na lokalna liste po id — Zaganiacz celuje w PRAWDE,
+			// a stworki nie skacza co 5 s. Nieznane id pomijamy (dojda z pelna lista w res.st).
+			if (msg.en) {
+				try {
+					const all3 = ST.FH.entities && ST.FH.entities.getAll ? ST.FH.entities.getAll(state) : null;
+					if (all3) {
+						const byId = new Map(msg.en.map((r) => [r[0], r]));
+						for (const c of all3) {
+							const r = byId.get(c.id);
+							// 0.9.159: capturing WRACA z hosta — stożek wanilii pomija łapane ("if(i.capturing)
+							// continue"); bez flagi klient spamował entCap co klatkę na każdego stworka.
+							// Podwójnemu liczeniu zapobiega gate w patchu bundle: na kliencie tick NIE woła Dp
+							// (żadnych available++/entity:collected) — domyka wyłącznie host, my tylko animujemy.
+							// Prędkości z hosta (r[5],r[6]) — lokalna fizyka integruje lot i odbicia między
+							// pakietami. STWOREK W LOCIE (|v|>20, nie łapany) NIE jest przygważdżany do pozycji
+							// hosta co 100 ms (to zabijało widoczne odbicia od ścian) — pozycję korygujemy tylko
+							// przy dryfie >48 px; łapane i osadzone snapujemy normalnie (konwergencja).
+							if (r) {
+								c.capturing = !!r[3]; if (!r[3]) c.captureProgress = 0;
+								const hvx = r[5] !== undefined ? r[5] : 0, hvy = r[6] !== undefined ? r[6] : 0;
+								c.vx = hvx; c.vy = hvy;
+								const dx8 = r[1] - c.x, dy8 = r[2] - c.y;
+								const wLocie = !c.capturing && Math.abs(hvx) + Math.abs(hvy) > 20;
+								if (!wLocie || dx8 * dx8 + dy8 * dy8 > 2304) { c.x = r[1]; c.y = r[2]; }
+							}
+							// 0.9.159: stworek z synca NIE MA sprite'a (Rp odpala tylko spawn i wczytanie zapisu)
+							// = niewidzialny na zawsze (wypuszczone przez klienta, naturalne spawny hosta).
+							// _entInit (patch bundle) robi onInit+sprite+swiatlo dla pojedynczego stworka.
+							if (ST._entInit && ST.FH.entities.getSprite && !ST.FH.entities.getSprite(state, c.id)) {
+								try { ST._entInit(c); } catch (e2) {}
+							}
+						}
+						// 0.9.159: stworki NIEZNANE klientowi (świeżo wypuszczone/dzikie spawny) tworzymy OD RAZU
+						// z szybkiej szyny (r[4]=typ) — wcześniej czekały ~5 s na pełną listę w res.st i user
+						// widział "wypuszczam, a pojawiają się dopiero po chwili".
+						try {
+							const have = new Set(all3.map((c7) => c7 && c7.id));
+							for (const r7 of msg.en) {
+								if (!have.has(r7[0]) && typeof r7[4] === "string") {
+									const nc = { id: r7[0], type: r7[4], x: r7[1], y: r7[2], vx: 0, vy: 0, capturing: false, captureProgress: 0 };
+									all3.push(nc);
+									if (ST._entInit) { try { ST._entInit(nc); } catch (e2) {} }
+								}
+							}
+						} catch (e2) {}
+						// DUCHY: stworek lokalny NIEOBECNY na liscie hosta (zlapany/despawn) musi przejsc przez
+						// pelne usuniecie (_entDrop = Ip: sprite + swiatlo + wpis), inaczej jego obrazek zostaje
+						// na ekranie NA ZAWSZE — to byla "duplikacja" widziana przez usera (lista 7, ekran 99).
+						if (ST._entDrop) {
+							const nowG = performance.now();
+							for (let i3 = all3.length - 1; i3 >= 0; i3--) {
+								const c4 = all3[i3];
+								if (!c4) continue;
+								// echo wypuszczenia (id<0): zyje max 600 ms — do czasu az przyleci prawdziwy z hosta
+								if (c4.id < 0) { if (c4.__stGhostT && nowG - c4.__stGhostT > 600) { try { ST._entDrop(c4); } catch (e2) {} } continue; }
+								if (!byId.has(c4.id)) {
+									if (ST._entCollectFx) { try { ST._entCollectFx(state, c4); } catch (e2) {} }
+									try { ST._entDrop(c4); } catch (e2) {}
+								}
+							}
+							// ODŹWIERNY (0.9.159): wyścig en(100 ms)/st(5 s) potrafi zostawić sprite'a bez stworka
+							// (zacięta grafika wisząca w powietrzu). Zamiatamy rejestr: sprite bez żywego wpisu
+							// na liście = natychmiastowe zniszczenie przez Ip z obiektem zastępczym.
+							try {
+								const sprMap = state.session.rendering.pixi.sprites.entities;
+								if (sprMap) {
+									const zywe = new Set();
+									for (const cz of ST.FH.entities.getAll(state) || []) if (cz) zywe.add(String(cz.id));
+									for (const kS in sprMap) {
+										if (!zywe.has(String(kS))) { try { ST._entDrop({ id: isNaN(Number(kS)) ? kS : Number(kS), lightIndex: undefined }); } catch (e2) {} }
+									}
+								}
+							} catch (e2) {}
+						}
+					}
+				} catch (e) {}
+			}
 		} catch (e) {}
 	}
 	// klient wysyła własne pociski (host rysuje je jako ghosty)
@@ -2809,7 +2997,9 @@
 	// Warunek ST.wsx.paused: hook aktywny TYLKO gdy lustro działa (klient na świecie hosta).
 	// Klient połączony, ale na własnym/innym świecie → broń działa normalnie lokalnie i NIC nie forwardujemy
 	// (jego współrzędne nie mają sensu w świecie hosta).
-	ST._fire = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return false; if (ST._fireQ.length < 2000) ST._fireQ.push(x, y); return true; };
+	// 0.9.158: o = intensywnosc/odleglosc plomienia (patch przekazywal ja OD ZAWSZE — ignorowalismy);
+	// vanilla skaluje nia czas zycia ognia: base*max(.25, 1-o/.64). Trojki [x,y,o*1000|0].
+	ST._fire = (state, x, y, o) => { if (!isClientSync() || !ST.wsx.paused) return false; if (ST._fireQ.length < 3000) ST._fireQ.push(x, y, Math.max(0, Math.min(1000, ((o || 0) * 1000) | 0))); return true; };
 	// 0.9.150: kwadruple [x,y,vx,vy] — vanilla nadaje granulce predkosc (createAt z particle.velocity =
 	// zywa czastka; bez predkosci wpis idzie wprost do siatki i moze przegrac wyscig z workerem symulacji).
 	ST._cryo = (state, x, y, vel) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._cryoQ.length < 4000) ST._cryoQ.push(x, y, vel ? Math.round(vel.x) : 0, vel ? Math.round(vel.y) : 0); };
@@ -2820,8 +3010,9 @@
 	// (złoto w tanku ✓), ale residue leci DO ŚWIATA przez Lu (dropowane u klienta) + recordProcess
 	// bije tylko lokalny licznik. Forward per przetworzony slot → host tworzy residue i liczy proces.
 	ST._shakeRes = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._shakeQ.length < 2000) ST._shakeQ.push(x, y); };
-	ST._volc = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._volcQ.length < 2000) ST._volcQ.push(x, y); };
-	ST._caulk = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._caulkQ.length < 2000) ST._caulkQ.push(x, y); };
+	// 0.9.158: kwadruple z predkoscia (vanilla: {particle:{velocity}}) — jak cryo w 0.9.150
+	ST._volc = (state, x, y, vel) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._volcQ.length < 4000) ST._volcQ.push(x, y, vel ? Math.round(vel.x) : 0, vel ? Math.round(vel.y) : 0); };
+	ST._caulk = (state, x, y, vel) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._caulkQ.length < 4000) ST._caulkQ.push(x, y, vel ? Math.round(vel.x) : 0, vel ? Math.round(vel.y) : 0); };
 	ST._caulkRm = (state, x, y) => { if (!isClientSync() || !ST.wsx.paused) return; if (ST._caulkRmQ.length < 2000) ST._caulkRmQ.push(x, y); };
 
 	function hostHarvestVacuum(msg, fromId) {
@@ -2998,6 +3189,30 @@
 	};
 	// _dropLu: przy pauzie klienta kolejka mutacji nigdy nie drenuje — nie pozwól jej rosnąć
 	ST._dropLu = () => isClientSync() && ST.wsx.paused;
+	// 0.9.159: klient NIE spawnuje stworkow zadna sciezka (spawner prefabow, cellRevealed, debug) —
+	// jedynym zrodlem jest host (sync st/en). Lokalne spawny przez wewnetrzne _p kolidowaly id-kami
+	// z hostem i zostawaly jako podrobki ("delikatnie sie duplikuja").
+	ST._entNoSpawn = () => isClientSync() && ST.wsx.paused;
+	// 0.9.159: efekty ZŁAPANIA u klienta. Dp (dźwięk+błysk+konfetti) robi wyłącznie host — u klienta
+	// stworek znikał BEZ NICZEGO ("to nie jest to samo co ma host"). Przy zdjęciu łapanego stworka
+	// odtwarzamy kosmetykę Dp lokalnie (bez liczników!): dźwięk kolekcji, błysk, cząsteczki.
+	ST._entCollectFx = (state, c) => {
+		try {
+			if (!c || !c.capturing) return;
+			const td = ST.FH.entities && ST.FH.entities.getTypeDef && ST.FH.entities.getTypeDef(c.type);
+			if (!td) return;
+			if (td.collectSound && ST.FH.sound && ST.FH.sound.playLayers) {
+				ST.FH.sound.playLayers(state, td.collectSound, { position: { x: c.x, y: c.y }, rateLimitKey: "entity:collect:" + c.type, rateLimitMs: 40 });
+			}
+			const col = td.collectLightColor || (td.lightOptions && td.lightOptions.color);
+			if (col && ST.FH.effects && ST.FH.effects.createLight) {
+				ST.FH.effects.createLight(state, c.x, c.y, { brightness: 1.2, durationMs: 400, size: 70, color: [col[0], col[1], col[2], col[3] != null ? col[3] : 1], decay: "linear" });
+			}
+			if (td.captureColors && td.captureColors.length && ST.FH.effects && ST.FH.effects.createParticles) {
+				ST.FH.effects.createParticles(state, c.x, c.y, { count: 8, minSpeed: 50, maxSpeed: 200, color: td.captureColors[0], minLifetime: 0.3, maxLifetime: 0.9 });
+			}
+		} catch (e) {}
+	};
 	// _place (patch bundle, u ŹRÓDŁA akcji stawiania — przed runInterceptorsSafe("building:place")):
 	// KLIENT wysyła intencję do hosta i ANULUJE lokalne stawianie (return true → gra robi return null,
 	// zero zapisu komórek). Host stawia autorytatywnie w replayAction("place") i odsyła "st add" (lustro).
@@ -3171,6 +3386,23 @@
 							let fixedFilter = built.type === "critterFence";
 							try { const cfg = ST.FH.structures.getConfig(built.type); const nm = String((cfg && (cfg.nameKey || cfg.id)) || ""); if (nm.indexOf("gloomEmitter") >= 0 || nm.indexOf("critterFence") >= 0) fixedFilter = true; } catch (e) {}
 							if (!fixedFilter && built.filter.density !== undefined && (msg.fl == null || msg.fl.density === undefined)) fixedFilter = true;
+							// 0.9.159 (darkalien: planter box klienta blokuje złoto): defaultFilter STAWIAJĄCEGO wolno
+							// nałożyć tylko na filtr POCHODZĄCY z defaultFilter (struktury filtrowe). Grower i podobne
+							// dostają od gry filtr SPECYFICZNY (np. [7,18,30] = przepuszczaj złoto/nasiona) — nadpisanie
+							// go generycznym defaultem klienta (piasek+woda) blokowało złoto. Porównujemy z defaultem
+							// hosta po sortowaniu kluczy; różny = filtr specyficzny = nie ruszamy.
+							if (!fixedFilter) {
+								try {
+									// affectsLiquid/affectsGas gra WYMUSZA na typach Mk2 niezależnie od defaulta —
+									// wykluczamy z porównania, żeby nie uznać filtra Mk2 za "specyficzny".
+									const norm = (o) => { if (!o || typeof o !== "object") return JSON.stringify(o); const c8 = {}; for (const k8 of Object.keys(o).sort()) { if (k8 !== "affectsLiquid" && k8 !== "affectsGas") c8[k8] = o[k8]; } return JSON.stringify(c8); };
+									const hostDef = state.store.options && state.store.options.defaultFilter;
+									if (hostDef != null && norm(built.filter) !== norm(hostDef)) {
+										fixedFilter = true;
+										if ((ST._flSpec = (ST._flSpec || 0) + 1) <= 20) log("HOST: filtr specyficzny struktury zachowany (typ " + built.type + ")");
+									}
+								} catch (e) {}
+							}
 							if (!fixedFilter) {
 								const base = built.filter;
 								const merged = Object.assign({}, base, msg.fl);
@@ -3269,6 +3501,15 @@
 				// zbiór crittera przez klienta: found/available + bilety za PIERWSZE złapanie (jak w grze)
 				ST._applyingNet = true;
 				try {
+					// 0.9.159: stworek łapany Zaganiaczem (capturing po entCap) domknie WŁASNY tick hosta
+					// (Dp: available/found) — collect od klienta byłby DRUGIM doliczeniem. Ignorujemy.
+					try {
+						const EN0 = ST.FH.entities;
+						if (msg.eid != null && EN0 && EN0.getAll) {
+							const ce0 = (EN0.getAll(state) || []).find((en0) => en0 && en0.id === msg.eid);
+							if (ce0 && ce0.capturing) { log("HOST: collect zignorowany (id " + msg.eid + " łapany Zaganiaczem)"); ST._applyingNet = false; return; }
+						}
+					} catch (e0) {}
 					state.store.creatures = state.store.creatures || {};
 					const l = state.store.creatures;
 					l[msg.ty] = l[msg.ty] || { available: 0, found: 0 };
@@ -3356,9 +3597,23 @@
 				try {
 					if (msg.a && typeof msg.a === "object") {
 						state.store.mods = state.store.mods || {};
-						state.store.mods.augments = Object.assign(state.store.mods.augments || {}, msg.a);
+						// 0.9.159 (MaxMasterB): NIE przejmujemy obiektu w całości. Gdy obaj gracze mają otwarty
+						// ekran wyboru (wspólny pendingChoice), pełny assign kasował hostowi otwarty popup
+						// (pendingChoice=false od klienta) i cofał świeżo wybrane nody hosta starą kopią klienta.
+						// Scalanie: nody/disabledNodes = unia, poziomy = max, booleany = OR, pendingChoice
+						// hosta gaśnie tylko lokalnie (wybór hosta), z zewnątrz może się tylko ZAPALIĆ.
+						const ha = (state.store.mods.augments = state.store.mods.augments || {});
+						for (const k6 in msg.a) {
+							const v6 = msg.a[k6];
+							if (k6 === "nodes" || k6 === "disabledNodes") { ha[k6] = Object.assign({}, ha[k6] || {}, v6 || {}); }
+							else if (k6 === "pendingChoice") { ha.pendingChoice = !!ha.pendingChoice || !!v6; }
+							else if (k6 === "viewMode") { /* flaga UI gracza — nie dotykamy hosta */ }
+							else if (typeof v6 === "number" && typeof ha[k6] === "number") { ha[k6] = Math.max(ha[k6], v6); }
+							else if (typeof v6 === "boolean") { ha[k6] = !!ha[k6] || v6; }
+							else ha[k6] = v6;
+						}
 						try { ST.FH.ui && ST.FH.ui.overlays && ST.FH.ui.overlays.update && ST.FH.ui.overlays.update(state, "global"); } catch (e) {}
-						log("HOST: augmenty klienta zastosowane (wybór z ekranu augmentów)");
+						log("HOST: augmenty klienta scalone (wybór z ekranu augmentów)");
 					}
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "pipeRm") {
@@ -3370,6 +3625,53 @@
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "vac") {
 				hostHarvestVacuum(msg, fromId);
+			} else if (msg.k === "entCap") {
+				// Zaganiacz klienta: lapanie autorytatywnie u hosta (id-ki zgodne — lista stworkow plynie
+				// z hosta w res.st). Finalizacja zaliczy WSPOLNEJ kolekcji (store.creatures — synced).
+				ST._applyingNet = true;
+				try {
+					if (ST.FH.entities && ST.FH.entities.startCapture) ST.FH.entities.startCapture(state, msg.id);
+					// cel przyciagania = pozycja PIONKA lapiacego (patch bundle czyta __capX/__capY) —
+					// bez tego stworek lapany przez klienta lecial wizualnie do HOSTA.
+					const pr2 = ST.peers.get(from);
+					if (pr2 && ST.FH.entities && ST.FH.entities.getAll) {
+						for (const c3 of (ST.FH.entities.getAll(state) || [])) if (c3 && c3.id === msg.id) { c3.__capX = pr2.x; c3.__capY = pr2.y; break; }
+					}
+				} catch (e) {}
+				ST._applyingNet = false;
+				if ((ST._capDiag = (ST._capDiag || 0) + 1) <= 20) log("HOST: entCap klienta, id=" + msg.id);
+			} else if (msg.k === "entSp") {
+				// wypuszczenie stworka przez klienta: spawn + playerReleased + zdjecie licznika WSPOLNEJ
+				// kolekcji (autorytatywnie; klient zdjal juz kosmetycznie u siebie — sync st ujednolici).
+				ST._applyingNet = true;
+				ST._spN = (ST._spN || 0) + 1; // KAŻDE wejście entSp (diagnoza znikających wypuszczeń)
+				try {
+					if (ST.FH.entities && ST.FH.entities.spawn) {
+						const sp2 = ST.FH.entities.spawn(state, msg.ty, msg.x, msg.y);
+						if (!sp2) ST._spNull = (ST._spNull || 0) + 1; // spawn odmówił — licznik NIE zdjęty
+						if (sp2) {
+							sp2.playerReleased = true;
+							const col = state.store.creatures && state.store.creatures[msg.ty];
+							if (col && typeof col.available === "number") col.available = Math.max(0, col.available - 1);
+							if (!ST._lastEntSp) ST._lastEntSp = new Map();
+							ST._lastEntSp.set(from, sp2);
+							if ((ST._spDiag = (ST._spDiag || 0) + 1) <= 20) log("HOST: entSp klienta, typ=" + msg.ty + " id=" + sp2.id);
+						}
+					}
+				} catch (e) {}
+				ST._applyingNet = false;
+			} else if (msg.k === "entLn") {
+				ST._applyingNet = true;
+				try {
+					const ents2 = ST.FH.entities;
+					if (ents2 && ents2.launch) {
+						let cel = null;
+						if (msg.id === -1 && ST._lastEntSp) { cel = ST._lastEntSp.get(from) || null; ST._lastEntSp.delete(from); }
+						if (!cel && ents2.getAll) { const all2 = ents2.getAll(state) || []; for (const cr2 of all2) if (cr2 && cr2.id === msg.id) { cel = cr2; break; } }
+						if (cel) ents2.launch(state, cel, msg.a, msg.sp);
+					}
+				} catch (e) {}
+				ST._applyingNet = false;
 			} else if (msg.k === "vacrel") {
 				// wylew z tanku klienta: tworzenie jak vanilla — przez kolejke idle, z predkoscia.
 				// Odmowy (poza swiatem / brak autoryzacji strefy) wracaja vacrelres i klient oddaje je do tanku.
@@ -3459,11 +3761,20 @@
 				const WF = (shF && shF.mapData && shF.mapData.width) || 0;
 				ST._applyingNet = true;
 				try {
-					for (let i = 0; i + 1 < c.length; i += 2) {
+					// 0.9.158: q=1 → trojki [x,y,o*1000]; vanilla skaluje czas zycia plomienia: base*max(.25, 1-o/.64)
+					const strideF = msg.q ? 3 : 2;
+					const mutF = ST.FH.world && ST.FH.world.mutateCellWhenIdle;
+					let baseDur = 0.28; try { const cf = el.getConfig && el.getConfig(RJ_FIRE); if (cf && typeof cf.duration === "number") baseDur = cf.duration; } catch (e) {}
+					for (let i = 0; i + strideF - 1 < c.length; i += strideF) {
 						const x = c[i], y = c[i + 1];
+						const oI = strideF === 3 ? (c[i + 2] | 0) / 1000 : 0;
 						const cid = simF32 && WF ? simF32[x + y * WF] : 0;
 						if (cid > 0 && cid < ELEMENTS_MIN) continue; // TEREN (fundamenty, skały, piramida) — nie dotykamy
-						if (cid === 0) { try { if (el && el.createAt) el.createAt(state, x, y, RJ_FIRE); } catch (e) {} } // puste powietrze → płomień
+						if (cid === 0) {
+							const dur = baseDur * Math.max(0.25, 1 - oI / 0.64);
+							const mk = (st2) => { try { if (el && el.createAt) el.createAt(st2, x, y, RJ_FIRE, { duration: dur }); } catch (e) {} };
+							try { if (mutF) mutF(state, x, y, mk); else mk(state); } catch (e) {}
+						}
 						else { try { if (fi && fi.burnElementAt) fi.burnElementAt(state, x, y); } catch (e) {} } // element → zapal (palne zapłoną, reszta zostaje)
 					}
 				} finally { ST._applyingNet = false; }
@@ -3480,19 +3791,38 @@
 				} finally { ST._applyingNet = false; }
 				if (!ST._shakeLogged) { ST._shakeLogged = true; log("HOST: shake klienta odtworzony (residue+proces),", cS.length / 2, "slotów"); }
 			} else if (msg.k === "volcB") {
-				// lawa volcanizera klienta: TYLKO w puste komórki (jak vanilla isCellEmpty) — teren nietykalny
+				// 0.9.158: jak vanilla — kolejka idle + PREDKOSC ({particle:{velocity}}); gole createAt w srodku
+				// klatki wpisywalo lawe wprost do siatki (wyscig z workerem, zero rozprysku) — user: "LavaGun".
 				const elV = ST.FH.elements, cV = msg.c || [];
+				const mutV = ST.FH.world && ST.FH.world.mutateCellWhenIdle;
+				const strideV = msg.q ? 4 : 2;
 				ST._applyingNet = true;
-				try { for (let i = 0; i + 1 < cV.length; i += 2) { try { if (ST.FH.world && ST.FH.world.isCellEmpty && ST.FH.world.isCellEmpty(state, cV[i], cV[i + 1]) && elV && elV.createAt) elV.createAt(state, cV[i], cV[i + 1], 19 /* RJ.Lava */); } catch (e) {} } } finally { ST._applyingNet = false; }
-				if (!ST._volcLogged) { ST._volcLogged = true; log("HOST: lawa klienta odtworzona,", cV.length / 2, "komórek"); }
+				try {
+					for (let i = 0; i + strideV - 1 < cV.length; i += strideV) {
+						const x = cV[i], y = cV[i + 1];
+						const v = strideV === 4 && (cV[i + 2] || cV[i + 3]) ? { x: cV[i + 2], y: cV[i + 3] } : null;
+						const mk = (st2) => { try { if (ST.FH.world.isCellEmpty(st2, x, y) && elV && elV.createAt) elV.createAt(st2, x, y, 19 /* RJ.Lava */, v ? { particle: { velocity: v } } : undefined); } catch (e) {} };
+						try { if (mutV) mutV(state, x, y, mk); else mk(state); } catch (e) {}
+					}
+				} finally { ST._applyingNet = false; }
+				if (!ST._volcLogged) { ST._volcLogged = true; log("HOST: lawa klienta odtworzona,", cV.length / strideV, "komórek" + (msg.q ? " (idle+velocity)" : "")); }
 			} else if (msg.k === "caulkB") {
 				// spray caulku: typ elementu rozwiązywany dynamicznie (mod-element, runtime id); tylko puste komórki
 				const elC = ST.FH.elements, cC = msg.c || [];
 				let caulkTy = null;
 				try { caulkTy = elC && elC.getElementTypeFromId && elC.getElementTypeFromId(state, "caulk"); } catch (e) {}
+				const mutC = ST.FH.world && ST.FH.world.mutateCellWhenIdle;
+				const strideC = msg.q ? 4 : 2;
 				ST._applyingNet = true;
-				try { if (caulkTy != null) for (let i = 0; i + 1 < cC.length; i += 2) { try { if (ST.FH.world && ST.FH.world.isCellEmpty && ST.FH.world.isCellEmpty(state, cC[i], cC[i + 1]) && elC.createAt) elC.createAt(state, cC[i], cC[i + 1], caulkTy); } catch (e) {} } } finally { ST._applyingNet = false; }
-				if (!ST._caulkLogged) { ST._caulkLogged = true; log("HOST: caulk klienta odtworzony,", cC.length / 2, "komórek (typ=" + caulkTy + ")"); }
+				try {
+					if (caulkTy != null) for (let i = 0; i + strideC - 1 < cC.length; i += strideC) {
+						const x = cC[i], y = cC[i + 1];
+						const v = strideC === 4 && (cC[i + 2] || cC[i + 3]) ? { x: cC[i + 2], y: cC[i + 3] } : null;
+						const mk = (st2) => { try { if (ST.FH.world.isCellEmpty(st2, x, y) && elC.createAt) elC.createAt(st2, x, y, caulkTy, v ? { particle: { velocity: v } } : undefined); } catch (e) {} };
+						try { if (mutC) mutC(state, x, y, mk); else mk(state); } catch (e) {}
+					}
+				} finally { ST._applyingNet = false; }
+				if (!ST._caulkLogged) { ST._caulkLogged = true; log("HOST: caulk klienta odtworzony,", cC.length / strideC, "komórek (typ=" + caulkTy + (msg.q ? ", idle+velocity" : "") + ")"); }
 			} else if (msg.k === "caulkRmB") {
 				// usuwanie caulku: 1:1 z logiką gry — element caulk → elements.removeAt; teren TYLKO gdy
 				// isPosTerrainId 'solidite' → terrains.removeAt. Żaden inny teren nie jest dotykany.
@@ -4619,6 +4949,63 @@
 				};
 				w._st = true; FH.world.excavate = w;
 			}
+			// 0.9.159: ZAGANIACZ — encje stworkow zyja w store.mods (host nadpisuje klienta co 1 s przez res.st),
+			// wiec lokalna proba lapania u klienta byla cofana syncem (chmara przy broni, capture bez konca).
+			// Lapanie/spawn/wyrzut ida do hosta; wynik wraca istniejacym syncem st.
+			try {
+				const ents = FH.entities;
+				if (ents && ents.startCapture && !ents.__stWrapped) {
+					ents.__stWrapped = 1;
+					const oCap = ents.startCapture, oSp = ents.spawn, oLn = ents.launch;
+					ents.startCapture = (st2, id) => {
+						if (isClientSync() && ST.wsx.paused) {
+							// 0.9.159: dedup — zanim host potwierdzi capturing (~100 ms), stożek zdąży zawołać
+							// startCapture kilka klatek z rzędu dla tego samego id. Nie wysyłamy ponownie <1 s.
+							const now2 = performance.now();
+							if (!ST._capReq) ST._capReq = new Map();
+							const last2 = ST._capReq.get(id);
+							if (last2 !== undefined && now2 - last2 < 1000) return;
+							ST._capReq.set(id, now2);
+							if (ST._capReq.size > 400) { for (const [k2, t2] of ST._capReq) if (now2 - t2 > 5000) ST._capReq.delete(k2); }
+							try { net.send({ t: "act", k: "entCap", id: id }); } catch (e) {}
+							return;
+						}
+						return oCap(st2, id);
+					};
+					ents.spawn = (st2, ty, x, y) => {
+						// ATRAPA zamiast null: release gry robi if(!f)return PRZED available-- i launch — z nullem
+						// klient nie zdejmowal licznika, a host spawnowal za darmo ("zasysa, ale nie wyrzuca").
+						if (isClientSync() && ST.wsx.paused) {
+							try { net.send({ t: "act", k: "entSp", ty: ty, x: x, y: y }); } catch (e) {}
+							// 0.9.159: ECHO WIZUALNE — prawdziwy stworek wraca z hosta po ~200 ms, wiec u klienta
+							// nie bylo widac WYSTRZALU z lufy ("nie ma animacji wypuszczania"). Tworzymy natychmiast
+							// tymczasowego stworka (id ujemne, TTL 600 ms w applyEntities) z pelna lokalna fizyka.
+							try {
+								const list0 = ents.getAll ? ents.getAll(st2) : null;
+								if (list0) {
+									const ghost = { id: (ST._relGhostId = (ST._relGhostId || -500000) - 1), type: ty, x: x, y: y, vx: 0, vy: 0, capturing: false, captureProgress: 0, playerReleased: true, __stGhostT: performance.now() };
+									list0.push(ghost);
+									if (ST._entInit) { try { ST._entInit(ghost); } catch (e2) {} }
+									return ghost;
+								}
+							} catch (e) {}
+							return { id: -1, type: ty, x: x, y: y, vx: 0, vy: 0 };
+						}
+						return oSp(st2, ty, x, y);
+					};
+					ents.launch = (st2, cr, a, sp) => {
+						if (isClientSync() && ST.wsx.paused) {
+							// echo (id<0): host dostaje -1 (= wyrzuc ostatnio zespawnowanego), a echo leci LOKALNA
+							// fizyka wanilii — widac wystrzal i odbicia od razu.
+							if (cr && cr.id != null) { try { net.send({ t: "act", k: "entLn", id: cr.id < 0 ? -1 : cr.id, a: a, sp: sp }); } catch (e) {} }
+							if (cr && cr.id < 0 && cr.__stGhostT) { try { oLn(st2, cr, a, sp); } catch (e) {} }
+							return;
+						}
+						return oLn(st2, cr, a, sp);
+					};
+					log("FH hooks: entities.startCapture/spawn/launch (Zaganiacz -> host)");
+				}
+			} catch (e) { log("hook entities blad:", e && e.message); }
 			log("FH hooks: energy.consume=" + !!(FH.energy && FH.energy.consume && FH.energy.consume._st) + " world.excavate=" + !!(FH.world && FH.world.excavate && FH.world.excavate._st));
 		} catch (e) { log("installFhHooks error:", e.message); }
 	}
@@ -4974,10 +5361,10 @@
 			sendMyProjectilesIfDue(state);
 			sendResourceDeltaIfDue(state); // wyślij hostowi przyrosty zasobów klienta (dotNine)
 			// flush batchy ognia/lodu co ~60 ms
-			if (ST._fireQ.length && now - (ST._lastFireB || 0) > 60) { ST._lastFireB = now; try { net.send({ t: "act", k: "fireB", c: ST._fireQ }); } catch (e) {} ST._fireQ = []; }
+			if (ST._fireQ.length && now - (ST._lastFireB || 0) > 60) { ST._lastFireB = now; try { net.send({ t: "act", k: "fireB", c: ST._fireQ, q: 1 }); } catch (e) {} ST._fireQ = []; }
 			if (ST._cryoQ.length && now - (ST._lastCryoB || 0) > 60) { ST._lastCryoB = now; try { net.send({ t: "act", k: "cryoB", c: ST._cryoQ, q: 1 }); } catch (e) {} ST._cryoQ = []; }
-			if (ST._volcQ.length && now - (ST._lastVolcB || 0) > 60) { ST._lastVolcB = now; try { net.send({ t: "act", k: "volcB", c: ST._volcQ }); } catch (e) {} ST._volcQ = []; }
-			if (ST._caulkQ.length && now - (ST._lastCaulkB || 0) > 60) { ST._lastCaulkB = now; try { net.send({ t: "act", k: "caulkB", c: ST._caulkQ }); } catch (e) {} ST._caulkQ = []; }
+			if (ST._volcQ.length && now - (ST._lastVolcB || 0) > 60) { ST._lastVolcB = now; try { net.send({ t: "act", k: "volcB", c: ST._volcQ, q: 1 }); } catch (e) {} ST._volcQ = []; }
+			if (ST._caulkQ.length && now - (ST._lastCaulkB || 0) > 60) { ST._lastCaulkB = now; try { net.send({ t: "act", k: "caulkB", c: ST._caulkQ, q: 1 }); } catch (e) {} ST._caulkQ = []; }
 			if (ST._caulkRmQ.length && now - (ST._lastCaulkRmB || 0) > 60) { ST._lastCaulkRmB = now; try { net.send({ t: "act", k: "caulkRmB", c: ST._caulkRmQ }); } catch (e) {} ST._caulkRmQ = []; }
 			if (ST._shakeQ.length && now - (ST._lastShakeB || 0) > 60) { ST._lastShakeB = now; try { net.send({ t: "act", k: "shakeB", c: ST._shakeQ }); } catch (e) {} ST._shakeQ = []; }
 			// Podpowiedź: połączony, ale host nie wysłał jeszcze świata (brak paczek do odrzucenia = gracz widzi "nic")

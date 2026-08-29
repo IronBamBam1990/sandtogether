@@ -254,12 +254,20 @@
    "critical": false,
    "variants": [
     {
+     "anchor": "p=s;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,p),(0,At.Lu)(e,h,p,e=>{ie.FH.world.isCellEmpty(e,h,p)&&ie.FH.elements.createAt(e,h,p,D.RJ.Lava",
+     "patched": "p=s;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,p,f),(0,At.Lu)(e,h,p,e=>{ie.FH.world.isCellEmpty(e,h,p)&&ie.FH.elements.createAt(e,h,p,D.RJ.Lava"
+    },
+    {
+     "anchor": "m=r;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,m),(0,Ct.Lu)(e,h,m,e=>{ie.FH.world.isCellEmpty(e,h,m)&&ie.FH.elements.createAt(e,h,m,D.RJ.Lava",
+     "patched": "m=r;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,m,f),(0,Ct.Lu)(e,h,m,e=>{ie.FH.world.isCellEmpty(e,h,m)&&ie.FH.elements.createAt(e,h,m,D.RJ.Lava"
+    },
+    {
      "anchor": "p=s;(0,At.Lu)(e,h,p,e=>{ie.FH.world.isCellEmpty(e,h,p)&&ie.FH.elements.createAt(e,h,p,D.RJ.Lava",
-     "patched": "p=s;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,p),(0,At.Lu)(e,h,p,e=>{ie.FH.world.isCellEmpty(e,h,p)&&ie.FH.elements.createAt(e,h,p,D.RJ.Lava"
+     "patched": "p=s;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,p,f),(0,At.Lu)(e,h,p,e=>{ie.FH.world.isCellEmpty(e,h,p)&&ie.FH.elements.createAt(e,h,p,D.RJ.Lava"
     },
     {
      "anchor": "m=r;(0,Ct.Lu)(e,h,m,e=>{ie.FH.world.isCellEmpty(e,h,m)&&ie.FH.elements.createAt(e,h,m,D.RJ.Lava",
-     "patched": "m=r;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,m),(0,Ct.Lu)(e,h,m,e=>{ie.FH.world.isCellEmpty(e,h,m)&&ie.FH.elements.createAt(e,h,m,D.RJ.Lava"
+     "patched": "m=r;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,m,f),(0,Ct.Lu)(e,h,m,e=>{ie.FH.world.isCellEmpty(e,h,m)&&ie.FH.elements.createAt(e,h,m,D.RJ.Lava"
     }
    ]
   },
@@ -268,12 +276,20 @@
    "critical": false,
    "variants": [
     {
+     "anchor": "h=i;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h),(0,At.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,xu.caulkElementType",
+     "patched": "h=i;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h,u),(0,At.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,xu.caulkElementType"
+    },
+    {
+     "anchor": "h=i;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h),(0,Ct.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,ku.caulkElementType",
+     "patched": "h=i;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h,u),(0,Ct.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,ku.caulkElementType"
+    },
+    {
      "anchor": "h=i;(0,At.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,xu.caulkElementType",
-     "patched": "h=i;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h),(0,At.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,xu.caulkElementType"
+     "patched": "h=i;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h,u),(0,At.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,xu.caulkElementType"
     },
     {
      "anchor": "h=i;(0,Ct.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,ku.caulkElementType",
-     "patched": "h=i;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h),(0,Ct.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,ku.caulkElementType"
+     "patched": "h=i;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h,u),(0,Ct.Lu)(e,f,h,e=>{ie.FH.world.isCellEmpty(e,f,h)&&ie.FH.elements.createAt(e,f,h,ku.caulkElementType"
     }
    ]
   },
@@ -352,6 +368,74 @@
     {
      "anchor": "P=(e,t)=>{if(!(0,U.ml)(e))",
      "patched": "P=(e,t)=>{if(window.SandTogether&&window.SandTogether._vacRel&&window.SandTogether._vacRel(e,t))return;if(!(0,U.ml)(e))"
+    }
+   ]
+  },
+  {
+   "name": "corraller capture target (__capX)",
+   "critical": false,
+   "variants": [
+    {
+     "anchor": "a.captureProgress=n;const _cx=(a.__capX!=null?a.__capX:m),_cy=(a.__capY!=null?a.__capY:g);const o=_cx-a.x,s=_cy-a.y,i=Math.sqrt(o*o+s*s);if(n>=1||i<16){Dp(e,a);continue}",
+     "patched": "a.captureProgress=n;const _cx=(a.__capX!=null?a.__capX:m),_cy=(a.__capY!=null?a.__capY:g);const o=_cx-a.x,s=_cy-a.y,i=Math.sqrt(o*o+s*s);if(n>=1||i<16){if(!(window.SandTogether&&SandTogether._entNoSpawn&&SandTogether._entNoSpawn())){Dp(e,a);}continue}"
+    },
+    {
+     "anchor": "a.captureProgress=n;const o=m-a.x,s=g-a.y,i=Math.sqrt(o*o+s*s);if(n>=1||i<16){Dp(e,a);continue}",
+     "patched": "a.captureProgress=n;const _cx=(a.__capX!=null?a.__capX:m),_cy=(a.__capY!=null?a.__capY:g);const o=_cx-a.x,s=_cy-a.y,i=Math.sqrt(o*o+s*s);if(n>=1||i<16){if(!(window.SandTogether&&SandTogether._entNoSpawn&&SandTogether._entNoSpawn())){Dp(e,a);}continue}"
+    }
+   ]
+  },
+  {
+   "name": "entities single-init export (_entInit)",
+   "critical": false,
+   "variants": [
+    {
+     "anchor": "}window.SandTogether&&(window.SandTogether._entInit=(t2)=>{const o2=dp.get(t2.type);o2&&(o2.onInit(t2),void 0===t2.ghostTimer&&(t2.ghostTimer=0),Rp(e,t2,o2),Np(e,t2,o2))});const a=Pp(e);let r=0;for(let t=0;t<a.length;t++){const n=a[t];n.id>r&&(r=n.id);",
+     "patched": "}window.SandTogether&&(window.SandTogether._entInit=(t2)=>{const o2=dp.get(t2.type);o2&&(o2.onInit(t2),void 0===t2.ghostTimer&&(t2.ghostTimer=0),Rp(e,t2,o2),Np(e,t2,o2))},window.SandTogether._entDrop=(t2)=>Ip(e,t2));const a=Pp(e);let r=0;for(let t=0;t<a.length;t++){const n=a[t];n.id>r&&(r=n.id);"
+    },
+    {
+     "anchor": "}const a=Pp(e);let r=0;for(let t=0;t<a.length;t++){const n=a[t];n.id>r&&(r=n.id);",
+     "patched": "}window.SandTogether&&(window.SandTogether._entInit=(t2)=>{const o2=dp.get(t2.type);o2&&(o2.onInit(t2),void 0===t2.ghostTimer&&(t2.ghostTimer=0),Rp(e,t2,o2),Np(e,t2,o2))},window.SandTogether._entDrop=(t2)=>Ip(e,t2));const a=Pp(e);let r=0;for(let t=0;t<a.length;t++){const n=a[t];n.id>r&&(r=n.id);"
+    }
+   ]
+  },
+  {
+   "name": "entities spawn gate (_entNoSpawn)",
+   "critical": false,
+   "variants": [
+    {
+     "anchor": "_p=(e,t,n,a)=>{const r=dp.get(t);if(!r)return null;",
+     "patched": "_p=(e,t,n,a)=>{if(window.SandTogether&&window.SandTogether._entNoSpawn&&window.SandTogether._entNoSpawn())return null;const r=dp.get(t);if(!r)return null;"
+    }
+   ]
+  },
+  {
+   "name": "corraller release diag (call/noAvail)",
+   "critical": false,
+   "variants": [
+    {
+     "anchor": "const a=t[n];if(!a||a.available<=0)return!1;const r=vt.A.getGunArmAxis(e.store.player)",
+     "patched": "const a=t[n];window.SandTogether&&(SandTogether._rlCall=(SandTogether._rlCall||0)+1);if(!a||a.available<=0){window.SandTogether&&(SandTogether._rlNoAvail=(SandTogether._rlNoAvail||0)+1);return!1}const r=vt.A.getGunArmAxis(e.store.player)"
+    }
+   ]
+  },
+  {
+   "name": "corraller release diag (noSpot)",
+   "critical": false,
+   "variants": [
+    {
+     "anchor": "if(!d)return!1;const u=ie.FH.entities;",
+     "patched": "if(!d){window.SandTogether&&(SandTogether._rlNoSpot=(SandTogether._rlNoSpot||0)+1);return!1}const u=ie.FH.entities;"
+    }
+   ]
+  },
+  {
+   "name": "corraller release diag (spawnNull/ok)",
+   "critical": false,
+   "variants": [
+    {
+     "anchor": "const f=u.spawn(e,n,i,l);if(!f)return!1;f.playerReleased=!0,a.available--",
+     "patched": "const f=u.spawn(e,n,i,l);if(!f){window.SandTogether&&(SandTogether._rlSpawnNull=(SandTogether._rlSpawnNull||0)+1);return!1}window.SandTogether&&(SandTogether._rlOk=(SandTogether._rlOk||0)+1);f.playerReleased=!0,a.available--"
     }
    ]
   }

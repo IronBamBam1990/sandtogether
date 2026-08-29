@@ -1,3 +1,62 @@
+## 0.9.159-beta
+
+**The Corraller finally works the same on the client as on the host.** A long chain of client-side
+defects fell in one sustained session with the author testing live:
+
+- **Critter duplication is gone.** Every capture was counted twice: the client's local capture tick
+  finalized the catch (bucket +1) and forwarded a legacy "collect" to the host, which counted it
+  again next to its own authoritative finalize from the forwarded capture. The client no longer
+  finalizes captures at all (host-only; a bundle gate skips the local finalize), and the host ignores
+  collects for critters being corralled. Conservation verified live: map + bucket stays constant to
+  the single critter across mass release/capture cycles.
+- **The screen no longer brightens permanently.** Critter lights are eternal (durationMs -1) and are
+  keyed to the critter OBJECT; the entity sync replaced objects wholesale every ~5 s, orphaning the
+  real light and letting removal extinguish someone else's index. Entity sync now preserves object
+  identity (fields merged in place, host light indexes stripped). Measured: 8 released shinelets peak
+  ~92 active lights (their natural glow), back to exactly 0 after recapture, both sides.
+- **Releases show the muzzle launch.** The real critter used to appear only after the host round
+  trip (~200 ms), so the client saw no launch animation. The client now spawns an instant visual
+  echo with full local physics (flies, bounces off walls) and hands over to the host-authoritative
+  critter within 600 ms.
+- **Flying critters bounce on the client.** Host velocities ride the 10 Hz entity lane and in-flight
+  critters are integrated by local physics (position corrected only on >48 px drift), so arcs and
+  wall bounces render exactly like the host's.
+- **Capture completion has effects on the client** - collect sound, flash and particles (previously
+  critters silently vanished).
+- **The bucket counter updates live** - counters are merged in place and the hotbar overlay is
+  refreshed through the same overlays.update("hotbar") call vanilla uses. Verified on screen:
+  the displayed count tracked host-side changes 1:1 in the author's window.
+- **No more stuck critter sprites.** A janitor sweeps the entity sprite registry every entity packet
+  and destroys any sprite whose critter is gone (en/st race could orphan one).
+- **entCap flood fixed.** The capture cone skips critters already being captured (the capturing flag
+  is honored again) plus a 1 s per-id resend guard - one capture request per critter instead of 60/s.
+
+**Filters no longer reset for the host (report: MaxMasterB).** The client's machine-config scan
+attached its possibly stale filter to every data change, silently reverting the host's newer filter
+config; the filter now rides along only when the filter itself changed.
+
+**Structure-specific filters survive client placement (report: darkalien - "planter boxes block
+gold").** Every client placement carried the placer's global default filter and the host applied it
+to everything - including the Planter Box, whose game-assigned pass filter (gold/seeds) got replaced
+by the generic sand+water default. The override now applies only when the built filter derives from
+the host's default filter; structure-specific filters are preserved.
+
+**Upgrade orb no longer locks the other player (report: MaxMasterB).** pendingChoice/viewMode are
+per-player UI flags living in the shared augments object: the host stream kept re-arming the input
+lock on the player who had already closed the popup, and the first player's choice could wipe the
+other's open popup and freshly picked nodes. The client now accepts pendingChoice only on a
+false-to-true edge (a new orb), and the host merges choices (nodes united, levels maxed) instead of
+assigning the whole object.
+
+**Story steps unlock live for the client (report: darkalien - teleporter/anomaly needed a restart).**
+Story progression arrived silently in the state stream, so the client never ran step handlers
+(rewards, teleport waypoints like the anomaly's Void destination). New steps from the team are now
+emitted locally as story:stepCompleted, mirroring what the tech sync has done since 0.9.89.
+
+Also shipped (0.9.158 work): volcanizer, caulk blaster and flamethrower create elements through the
+when-idle queue with proper velocity/duration like vanilla, and the apply pump acknowledges from both
+the frame hook and the drain pump.
+
 ## 0.9.157-beta
 
 **Hotfix for 0.9.156: the full-tank blow-away could delete material.** The blow step removed the
