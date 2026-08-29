@@ -1,3 +1,15 @@
+## 0.9.160-beta
+
+**The installer survives Steam's re-minified builds (report: cayden.sieteski).** Steam can serve
+differently-minified bundles under the same game version number - the reporter's 0.5.5 build had the
+FH module aliased as `se` where ours says `ie`, so every literal patch anchor missed and the
+installer aborted with a misleading "version not supported" error even though the build was fine.
+The patcher now detects the FH alias straight from the bundle (via the frame:update emit signature)
+and, when a literal anchor misses, retries it with the alias rewritten. Verified on a simulated
+re-minified bundle: all hooks apply, including the critical frame hook. On builds where deeper
+minified names also changed, non-critical hooks may still skip with a warning (the mod boots and the
+core sync works) - send us your unpatched bundle.js and we'll port the rest properly.
+
 ## 0.9.159-beta
 
 **The Corraller finally works the same on the client as on the host.** A long chain of client-side

@@ -49,16 +49,32 @@ done('st-main.js skopiowany');
   let s = read(p);
   let dirty = false;
   let criticalFail = false;
+  // Steam potrafi serwować rozne PRZEMINIFIKOWANE buildy pod tym samym numerem wersji (zgloszenie
+  // cayden.sieteski 29.08: u niego alias modulu FH to "se", u nas "ie" — kotwice doslowne nie trafialy
+  // i instalator klamal "niewspierana wersja"). Wykrywamy alias FH z samego bundle'a i gdy doslowna
+  // kotwica nie pasuje, probujemy wariantu z przepisanym aliasem (tylko prefiks "<alias>.FH").
+  let fhAlias = null;
+  {
+    const mFH = s.match(/([A-Za-z_$][A-Za-z0-9_$]{0,3})\.FH\.events\.emit\(e,"frame:update"/);
+    if (mFH) fhAlias = mFH[1];
+    if (fhAlias && fhAlias !== 'ie') console.log('  [i] alias modulu FH w tym buildzie: "' + fhAlias + '" (przeminifikowany bundle — kotwice beda przepisane z "ie.FH")');
+  }
+  const adapt = (t) => (fhAlias && fhAlias !== 'ie') ? t.split('ie.FH').join(fhAlias + '.FH') : t;
   for (const pt of defs.bundle) {
     let applied = false, already = false;
     for (const v of pt.variants) {
-      if (s.includes(v.patched)) { already = true; break; }
-      const count = s.split(v.anchor).length - 1;
-      if (count === 0) continue;
-      if (count !== 1) { console.error('BŁĄD: wariant "' + pt.name + '" wystąpień=' + count); continue; }
-      s = s.replace(v.anchor, v.patched);
-      applied = true; dirty = true;
-      break;
+      for (const [anch, patched] of (fhAlias && fhAlias !== 'ie')
+        ? [[v.anchor, v.patched], [adapt(v.anchor), adapt(v.patched)]]
+        : [[v.anchor, v.patched]]) {
+        if (s.includes(patched)) { already = true; break; }
+        const count = s.split(anch).length - 1;
+        if (count === 0) continue;
+        if (count !== 1) { console.error('BŁĄD: wariant "' + pt.name + '" wystąpień=' + count); continue; }
+        s = s.replace(anch, patched);
+        applied = true; dirty = true;
+        break;
+      }
+      if (applied || already) break;
     }
     if (applied) done('bundle.js: ' + pt.name);
     else if (already) skip('bundle.js ' + pt.name);
@@ -66,7 +82,7 @@ done('st-main.js skopiowany');
     else console.warn('  [!] pominięto (funkcja wyłączona na tym buildzie): ' + pt.name);
   }
   if (dirty) write(p, s);
-  if (criticalFail) { console.error('BŁĄD: niewspierana wersja gry. Wspierane: ' + defs.supportedVersions.join(', ')); process.exit(1); }
+  if (criticalFail) { console.error('BŁĄD: niewspierana wersja gry (nawet po adaptacji aliasu "' + (fhAlias || '?') + '"). Wspierane: ' + defs.supportedVersions.join(', ')); process.exit(1); }
 }
 
 // 4. preload.js — bridge sieciowy
