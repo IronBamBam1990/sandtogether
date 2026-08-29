@@ -1,3 +1,27 @@
+## 0.9.161-beta
+
+**Full line-by-line audit of the mod (5455+740+196 lines) against the official Sandkit docs** - five
+real defects found and fixed:
+
+- **The frame hook wears armor now.** Our per-frame code runs inside the game's frame:update emit;
+  an uncaught exception there propagates into the game's promise-chained frame loop and kills it
+  PERMANENTLY - static screen while the mirror keeps applying in the background (observed live:
+  frame:update dead for 130+ s). Every error is now caught, logged with a stack (first 10) and
+  swallowed. A renderer-wide error/rejection recorder also writes uncaught errors to the log and
+  keeps the last rejection in memory - the next freeze anyone hits will name its culprit in seconds
+  (it already convicted one: a malformed test item injected during our own session, not mod code).
+- **Joining clients get the host's teleport zones and unlocked-item list.** Both were sent only on
+  change, and the one send after world load raced the client's mirror start and was dropped - a
+  fresh client kept its locally generated zones forever (measured: 360 zones vs the host's 351).
+  Signatures now reset on peer join and the zones re-send every 30 s; verified converged 351=351.
+- **A mangled IP regex** (invisible backspace characters where \b should be - a heredoc scar) made
+  the "use the host's local address" hint dead code since 0.9.133. Restored.
+- **A session-reset statement swallowed by a comment** (glued onto its tail) left stale
+  unacknowledged-batch records across host sessions; after 20 s they counted as "lost" and dirtied
+  the fresh session's queue. Restored.
+- **Shake residue now goes through the when-idle queue** like lava/ice - a bare mid-frame createAt
+  could lose the race against the simulation worker (the exact bug class fixed for cryo in 0.9.150).
+
 ## 0.9.160-beta
 
 **The installer survives Steam's re-minified builds (report: cayden.sieteski).** Steam can serve

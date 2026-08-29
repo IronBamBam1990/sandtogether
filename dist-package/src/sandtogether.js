@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.160-beta";
+	const VER = "0.9.161-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -311,6 +311,22 @@
 	}, 1000);
 
 	log("Renderer mod załadowany", VER);
+	// 0.9.161: REJESTRATOR WYJATKOW renderera — kazdy niezlapany blad i odrzucona obietnica trafia
+	// do logu pliku (pierwsze 20). Bez tego "ekran statyczny" nie zostawial zadnego sladu.
+	window.addEventListener("error", (ev) => {
+		if ((ST._winErrN = (ST._winErrN || 0) + 1) > 20) return;
+		try { log("WINDOW ERROR:", String(ev.message).slice(0, 300), "@" + String(ev.filename || "").split("/").pop() + ":" + ev.lineno, String(ev.error && ev.error.stack || "").split("\n").slice(0, 5).join(" | ")); } catch (e) {}
+	});
+	window.addEventListener("unhandledrejection", (ev) => {
+		ST._winRejN = (ST._winRejN || 0) + 1;
+		// 0.9.161b: powod TRZYMAMY w pamieci (ST._lastRejection) — log plikowy potrafil nic nie zapisac,
+		// a to wlasnie rejection zrywa promise-owa petle klatek gry (ekran statyczny bez sladu).
+		let m = "?", stk = "";
+		try { m = String((ev.reason && (ev.reason.message || ev.reason)) || "?").slice(0, 400); } catch (e) {}
+		try { stk = String((ev.reason && ev.reason.stack) || "").split("\n").slice(0, 8).join(" | "); } catch (e) {}
+		ST._lastRejection = { t: Date.now(), msg: m, stack: stk };
+		if (ST._winRejN <= 20) { try { log("UNHANDLED REJECTION:", m, stk); } catch (e) {} try { console.error("[SandTogether] REJECTION:", m, stk); } catch (e) {} }
+	});
 
 	// ------------------------------------------------------------------
 	// Narzędzia
@@ -551,9 +567,9 @@
 				setClientPaused(false);
 			} else if (ev.kind === "reconnecting") { setStatus(t("reconnecting", ev.attempt), "#fd5");
 			} else if (ev.kind === "version-mismatch") setStatus(t("ver_mismatch"), "#f66");
-			else if (ev.kind === "error" && /ECONNREFUSED/i.test(String(ev.message || "")) && /(d{1,3}).(d{1,3}).(d{1,3}).(d{1,3})/.test(String(ev.message || ""))) {
+			else if (ev.kind === "error" && /ECONNREFUSED/i.test(String(ev.message || "")) && /\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/.test(String(ev.message || ""))) {
 				// 0.9.133: publiczny adres + odmowa = najczesciej proba polaczenia z wlasnym IP z tej samej sieci
-				const ip = String(ev.message).match(/(d{1,3}).(d{1,3}).(d{1,3}).(d{1,3})/);
+				const ip = String(ev.message).match(/\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/);
 				const A = ip ? +ip[1] : 0, B = ip ? +ip[2] : 0;
 				const priv = A === 127 || A === 10 || (A === 192 && B === 168) || (A === 172 && B >= 16 && B <= 31);
 				if (!priv) { setStatus(t("hairpin_hint"), "#fd5"); log("PODPOWIEDZ: odmowa polaczenia z publicznym IP — z tej samej sieci uzyj adresu lokalnego hosta (router nie robi petli zwrotnej)"); }
@@ -1039,7 +1055,10 @@
 		if (ST.wsx.rowH) ST.wsx.rowH.clear();   // stale hashes would suppress sends in the new world
 		ST.wsx.sweep = 0;
 		ST.wsx.bpc = 0; ST.wsx.lastNear = 0; if (ST.wsx.sentAt) ST.wsx.sentAt.clear();    // re-measure chunk cost, the new world compresses differently
-		ST.wsx.seq = 0; ST.wsx.ackSeen = false; ST.wsx.lag = 0; ST.wsx.rate = 0.25; ST.wsx.boost = 1; ST.wsx.buildMs = 0; // 0.9.78: start ostrozny, regulator sam podniesie if (ST.wsx.unacked) ST.wsx.unacked.clear(); // start un-throttled
+		ST.wsx.seq = 0; ST.wsx.ackSeen = false; ST.wsx.lag = 0; ST.wsx.rate = 0.25; ST.wsx.boost = 1; ST.wsx.buildMs = 0; // 0.9.78: start ostrozny, regulator sam podniesie
+		// 0.9.161: ta instrukcja byla POLKNIETA przez komentarz powyzej (sklejona w jego ogon) — stare
+		// rekordy unacked z poprzedniej sesji po 20 s liczyly sie jako "zgubione" i brudzily kolejke.
+		if (ST.wsx.unacked) ST.wsx.unacked.clear(); // start un-throttled
 	}
 
 	function scanDirty(state) {
@@ -2125,7 +2144,9 @@
 				if (hj !== null && hj !== ST._resHeavyJson) { ST._resHeavyJson = hj; Object.assign(m, heavy); }
 			}
 			// nowy peer musi dostac sekcje ciezkie od razu — reset cache przy zmianie liczby peerow
-			if (ST.peers.size !== (ST._resPeerN || 0)) { ST._resPeerN = ST.peers.size; ST._resHeavyJson = null; ST._lastResHeavy = 0; }
+			// 0.9.161: tez sygnatury tz/inv! Bez tego swiezy klient NIGDY nie dostawal biezacych stref
+			// teleportu ani listy itemow (szly tylko przy ZMIANIE) — zmierzone: klient 360 stref vs host 351.
+			if (ST.peers.size !== (ST._resPeerN || 0)) { ST._resPeerN = ST.peers.size; ST._resHeavyJson = null; ST._lastResHeavy = 0; ST._lastTzSig = null; ST._lastInvSig = null; }
 			net.send(m);
 		} catch (e) {}
 	}
@@ -2263,8 +2284,12 @@
 			const tz = state.store.world && state.store.world.teleportZones;
 			if (!Array.isArray(tz)) return null;
 			const sig = tz.length + ":" + tz.map((z) => z && z.id).join(",");
-			if (sig === ST._lastTzSig) return null;
-			ST._lastTzSig = sig;
+			// 0.9.161: DOSYŁKA co 30 s niezależnie od sygnatury — pierwsza wysyłka po wczytaniu świata
+			// trafiała w klienta PRZED startem lustra (bramka everApplied ją odrzucała), a sygnatura już
+			// stała → klient zostawał ze swoimi lokalnymi strefami na zawsze (zmierzone: 360 vs 351).
+			const nowTz = performance.now();
+			if (sig === ST._lastTzSig && nowTz - (ST._lastTzSentT || 0) < 30000) return null;
+			ST._lastTzSig = sig; ST._lastTzSentT = nowTz;
 			return JSON.parse(JSON.stringify(tz));
 		} catch (e) { return null; }
 	}
@@ -3782,11 +3807,16 @@
 			} else if (msg.k === "shakeB") {
 				// shake klienta: residue do świata (tylko puste komórki) + licznik procesu ShakeWetSand
 				const elS = ST.FH.elements, cS = msg.c || [];
+				const mutS = ST.FH.world && ST.FH.world.mutateCellWhenIdle;
 				ST._applyingNet = true;
 				try {
 					for (let i = 0; i + 1 < cS.length; i += 2) {
 						try { if (ST.FH.factory && ST.FH.factory.recordProcess) ST.FH.factory.recordProcess(state, 0 /* ShakeWetSand */); } catch (e) {}
-						try { if (ST.FH.world && ST.FH.world.isCellEmpty && ST.FH.world.isCellEmpty(state, cS[i], cS[i + 1]) && elS && elS.createAt) elS.createAt(state, cS[i], cS[i + 1], 6 /* RJ.Residue */); } catch (e) {}
+						// 0.9.161: przez kolejke when-idle jak lawa/lod — gole createAt w srodku klatki potrafi
+						// przegrac wyscig z workerem symulacji (klasa bledu naprawiona dla cryo w 0.9.150).
+						const xS = cS[i], yS = cS[i + 1];
+						const mkS = (st2) => { try { if (ST.FH.world.isCellEmpty(st2, xS, yS) && elS && elS.createAt) elS.createAt(st2, xS, yS, 6 /* RJ.Residue */); } catch (e) {} };
+						try { if (mutS) mutS(state, xS, yS, mkS); else mkS(state); } catch (e) {}
 					}
 				} finally { ST._applyingNet = false; }
 				if (!ST._shakeLogged) { ST._shakeLogged = true; log("HOST: shake klienta odtworzony (residue+proces),", cS.length / 2, "slotów"); }
@@ -5009,7 +5039,18 @@
 			log("FH hooks: energy.consume=" + !!(FH.energy && FH.energy.consume && FH.energy.consume._st) + " world.excavate=" + !!(FH.world && FH.world.excavate && FH.world.excavate._st));
 		} catch (e) { log("installFhHooks error:", e.message); }
 	}
+	// 0.9.161: PANCERZ — nasz hook klatki dziala WEWNATRZ emitu frame:update gry; niezlapany wyjatek
+	// wyleci do petli rAF gry i ZABIJE JA NA STALE (ekran statyczny, lustro w tle zyje przez watchdog —
+	// zaobserwowane na zywo: frame:update martwy 130+ s). Kazdy blad logujemy (pierwsze 10 ze stackiem)
+	// i POLYKAMY — gra ma grac dalej.
 	ST._frame = (state, FH) => {
+		try { return ST.__frameInner(state, FH); }
+		catch (e) {
+			if ((ST._frameErrN = (ST._frameErrN || 0) + 1) <= 10)
+				log("BLAD hooka klatki (połknięty, gra gra dalej):", e && e.message, String(e && e.stack || "").split("\n").slice(0, 4).join(" | "));
+		}
+	};
+	ST.__frameInner = (state, FH) => {
 		ST._pendEn = 0; // energia narzedzia liczona per klatka (patrz installFhHooks)
 		if (FH && !ST._fhHooked) installFhHooks(FH);
 		if (!ST.state) {
