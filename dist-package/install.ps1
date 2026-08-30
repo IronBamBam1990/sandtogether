@@ -176,8 +176,11 @@ $s = [System.IO.File]::ReadAllText($p)
 # misses and the installer wrongly says "NOT supported". Detect the alias from the bundle
 # itself; when the literal anchor misses, retry with "ie.FH" rewritten to the real alias.
 $fhAlias = $null
-$mFH = [regex]::Match($s, '([A-Za-z_$][A-Za-z0-9_$]{0,3})\.FH\.events\.emit\(e,"frame:update"')
-if ($mFH.Success) { $fhAlias = $mFH.Groups[1].Value }
+foreach ($mFH in [regex]::Matches($s, '([A-Za-z_$][A-Za-z0-9_$]{0,3})\.FH\.events\.emit\(')) {
+    # must work on an ALREADY-PATCHED bundle too (the vanilla emit(e,"...") form is gone then)
+    $tail = $s.Substring($mFH.Index, [Math]::Min(220, $s.Length - $mFH.Index))
+    if ($tail.Contains('"frame:update"')) { $fhAlias = $mFH.Groups[1].Value; break }
+}
 $adaptAlias = [bool]($fhAlias -and $fhAlias -ne 'ie')
 if ($adaptAlias) { Write-Host "[i] FH module alias in this build: '$fhAlias' (re-minified bundle - anchors rewritten from 'ie.FH')" -ForegroundColor Yellow }
 
@@ -215,7 +218,10 @@ if ($criticalFail) {
     $aliasInfo = if ($fhAlias) { $fhAlias } else { "?" }
     Fail "This game version is NOT supported by the mod yet (core hook didn't match, even after alias adaptation '$aliasInfo'). Supported: $($patches.supportedVersions -join ', '). Your game may have auto-updated to a newer build. Watch the Workshop page for an update, or opt into a supported version via Steam betas."
 }
-if ($featureMiss -gt 0) { Write-Host "Note: $featureMiss optional feature(s) not available on this game build, but co-op will work." -ForegroundColor Yellow }
+if ($featureMiss -gt 8) {
+    Write-Host "WARNING: $featureMiss features did not match this game build - the game likely updated and the mod needs a new release." -ForegroundColor Red
+    Write-Host "Co-op will connect, but many tools will NOT sync. Check the Workshop page for a mod update and re-run install.bat after updating." -ForegroundColor Red
+} elseif ($featureMiss -gt 0) { Write-Host "Note: $featureMiss optional feature(s) not available on this game build, but co-op will work." -ForegroundColor Yellow }
 
 Write-Host ""
 Write-Host "=== DONE! SandTogether installed. ===" -ForegroundColor Green

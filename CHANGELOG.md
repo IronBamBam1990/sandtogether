@@ -1,3 +1,21 @@
+## 0.9.163-beta
+
+**Full support for game build 0.5.5 (anchor-porting round).** The 0.5.5 game update shipped genuinely
+new code — a new dig/pattern system (`DN` now takes pattern/power/options/terrainRules), renamed
+internals, a re-minified bundle (FH alias `se`) — and 25 of 29 patch anchors stopped matching. The
+mod half-installed: co-op connected and the world mirrored (the critical frame hook still applied via
+alias adaptation), but client actions were dead — shovel didn't dig, client buildings invisible to
+the host, sand fell through client shakers, volcanizer/grabber-shake/cryo/flamethrower/vacuum/
+demolisher/caulk/corraller didn't sync (reports: The_Dark_LP, DW|Joergschen). All 25 anchors were
+re-derived against the vanilla 0.5.5 bundle (each verified unique before install) and confirmed
+live: client dig replay, shake residue+process counter, volcanizer lava with velocity all land on
+the host again. Also:
+
+- `patch.js`/`install.ps1`: FH-alias detection now works on already-patched bundles too (the vanilla
+  `emit(e,"frame:update"` form disappears after patching; a re-run wrongly reported "NOT supported").
+- Installer: when many hooks miss (>8) it prints a red warning that the game build is ahead of the
+  mod, instead of the soft "co-op will work" note that misled players this round.
+
 ## 0.9.162-beta
 
 **The re-minified-build fix (0.9.160) now covers the public installer too.** The alias adaptation

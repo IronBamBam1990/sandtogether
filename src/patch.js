@@ -55,8 +55,14 @@ done('st-main.js skopiowany');
   // kotwica nie pasuje, probujemy wariantu z przepisanym aliasem (tylko prefiks "<alias>.FH").
   let fhAlias = null;
   {
-    const mFH = s.match(/([A-Za-z_$][A-Za-z0-9_$]{0,3})\.FH\.events\.emit\(e,"frame:update"/);
-    if (mFH) fhAlias = mFH[1];
+    // Wykrycie musi dzialac takze na JUZ spatchowanym bundle (po nalozeniu hooka forma
+    // `emit(e,"frame:update"` znika — 30.08: falszywy "krytyczny" przy ponownym patch.js).
+    // Bierzemy alias z dowolnego `X.FH.events.emit(` majacego "frame:update" tuz za soba.
+    const re = /([A-Za-z_$][A-Za-z0-9_$]{0,3})\.FH\.events\.emit\(/g;
+    let mFH;
+    while ((mFH = re.exec(s))) {
+      if (s.slice(mFH.index, mFH.index + 220).includes('"frame:update"')) { fhAlias = mFH[1]; break; }
+    }
     if (fhAlias && fhAlias !== 'ie') console.log('  [i] alias modulu FH w tym buildzie: "' + fhAlias + '" (przeminifikowany bundle — kotwice beda przepisane z "ie.FH")');
   }
   const adapt = (t) => (fhAlias && fhAlias !== 'ie') ? t.split('ie.FH').join(fhAlias + '.FH') : t;
