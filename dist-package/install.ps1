@@ -170,6 +170,17 @@ Write-Host "[+] main.js"
 # --- 9. bundle.js anchor patches (multi-version: tries each variant) --------
 $p = "$res\app\dist\js\bundle.js"
 $s = [System.IO.File]::ReadAllText($p)
+
+# Steam sometimes ships a RE-MINIFIED bundle for the same game version: identical code,
+# but the FH module alias is renamed (e.g. "ie.FH" -> "se.FH") so every literal anchor
+# misses and the installer wrongly says "NOT supported". Detect the alias from the bundle
+# itself; when the literal anchor misses, retry with "ie.FH" rewritten to the real alias.
+$fhAlias = $null
+$mFH = [regex]::Match($s, '([A-Za-z_$][A-Za-z0-9_$]{0,3})\.FH\.events\.emit\(e,"frame:update"')
+if ($mFH.Success) { $fhAlias = $mFH.Groups[1].Value }
+$adaptAlias = [bool]($fhAlias -and $fhAlias -ne 'ie')
+if ($adaptAlias) { Write-Host "[i] FH module alias in this build: '$fhAlias' (re-minified bundle - anchors rewritten from 'ie.FH')" -ForegroundColor Yellow }
+
 $dirty = $false
 $criticalFail = $false
 $featureMiss = 0
@@ -177,14 +188,20 @@ foreach ($pt in $patches.bundle) {
     $applied = $false
     $already = $false
     foreach ($v in $pt.variants) {
-        if ($s.IndexOf($v.patched, [System.StringComparison]::Ordinal) -ge 0) { $already = $true; break }
-        $i1 = $s.IndexOf($v.anchor, [System.StringComparison]::Ordinal)
-        if ($i1 -lt 0) { continue }
-        $i2 = $s.IndexOf($v.anchor, $i1 + 1, [System.StringComparison]::Ordinal)
-        if ($i2 -ge 0) { continue }  # not unique in this variant, try next
-        $s = $s.Substring(0, $i1) + $v.patched + $s.Substring($i1 + $v.anchor.Length)
-        $dirty = $true; $applied = $true
-        break
+        $pairs = @(,@($v.anchor, $v.patched))
+        if ($adaptAlias) { $pairs += ,@($v.anchor.Replace('ie.FH', "$fhAlias.FH"), $v.patched.Replace('ie.FH', "$fhAlias.FH")) }
+        foreach ($pair in $pairs) {
+            $anch = $pair[0]; $patched = $pair[1]
+            if ($s.IndexOf($patched, [System.StringComparison]::Ordinal) -ge 0) { $already = $true; break }
+            $i1 = $s.IndexOf($anch, [System.StringComparison]::Ordinal)
+            if ($i1 -lt 0) { continue }
+            $i2 = $s.IndexOf($anch, $i1 + 1, [System.StringComparison]::Ordinal)
+            if ($i2 -ge 0) { continue }  # not unique, try next pair/variant
+            $s = $s.Substring(0, $i1) + $patched + $s.Substring($i1 + $anch.Length)
+            $dirty = $true; $applied = $true
+            break
+        }
+        if ($applied -or $already) { break }
     }
     if ($applied) { Write-Host "[+] bundle: $($pt.name)" }
     elseif ($already) { Write-Host "[=] bundle: $($pt.name) (already patched)" }
@@ -195,7 +212,8 @@ foreach ($pt in $patches.bundle) {
 }
 if ($dirty) { [System.IO.File]::WriteAllText($p, $s) }
 if ($criticalFail) {
-    Fail "This game version is NOT supported by the mod yet (core hook didn't match). Supported: $($patches.supportedVersions -join ', '). Your game may have auto-updated to a newer build. Watch the Workshop page for an update, or opt into a supported version via Steam betas."
+    $aliasInfo = if ($fhAlias) { $fhAlias } else { "?" }
+    Fail "This game version is NOT supported by the mod yet (core hook didn't match, even after alias adaptation '$aliasInfo'). Supported: $($patches.supportedVersions -join ', '). Your game may have auto-updated to a newer build. Watch the Workshop page for an update, or opt into a supported version via Steam betas."
 }
 if ($featureMiss -gt 0) { Write-Host "Note: $featureMiss optional feature(s) not available on this game build, but co-op will work." -ForegroundColor Yellow }
 

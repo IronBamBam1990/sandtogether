@@ -1,3 +1,16 @@
+## 0.9.162-beta
+
+**The re-minified-build fix (0.9.160) now covers the public installer too.** The alias adaptation
+shipped in 0.9.160 lived only in the dev patcher (`src/patch.js`); the installer players actually
+run (`install.bat` -> `install.ps1`) still tried every anchor literally, so a re-minified bundle
+(FH module aliased e.g. `se` instead of `ie` - cayden.sieteski's case) kept failing with a false
+"This game version is NOT supported". The PowerShell installer now detects the FH alias from the
+bundle itself (regex on the `frame:update` emit) and, when a literal anchor misses, retries it with
+`ie.FH` rewritten to the detected alias. The critical-failure message also names the detected alias
+now, which makes future "NOT supported" reports diagnosable at a glance. Verified on a simulated
+re-minified bundle (all 29 hooks apply, zero critical misses); PowerShell 5.1 syntax parser-checked.
+Mod runtime is unchanged from 0.9.161.
+
 ## 0.9.161-beta
 
 **Full line-by-line audit of the mod (5455+740+196 lines) against the official Sandkit docs** - five
