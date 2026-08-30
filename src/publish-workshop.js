@@ -19,13 +19,14 @@ const DESCRIPTION = `[h1]SandTogether — Co-op Multiplayer for Sandustry[/h1]
 
 Play Sandustry together in ONE living world — the same sand, the same factory, the same fluids, streamed live between players. Up to 4 players, over the internet or on a LAN.
 
-[h2]⚠ AFTER SUBSCRIBING — READ THIS (ONE-TIME setup)[/h2]
-[b]Installed a build from before v0.9.72 and never see updates?[/b] Run the installer ONE more time - those builds shipped a broken auto-updater. Since then updates are automatic.
+[h2]🎮 Game versions[/h2]
+[b]v0.9.163+[/b] = game [b]0.5.5[/b]. Still on the old [b]mods[/b] beta branch (0.5.2)? Use mod v0.9.161-beta: [url=https://github.com/IronBamBam1990/sandtogether/archive/refs/tags/v0.9.161-beta.zip]download[/url], unzip, run install.bat from dist-package. All players: same game + mod.
 
+[h2]⚠ AFTER SUBSCRIBING — READ THIS (ONE-TIME setup)[/h2]
 Sandustry has no mod loader yet, so after subscribing you run the installer [b]once[/b]:
 [olist]
 [*] Let Steam finish downloading the mod.
-[*] Open the mod folder: right-click Sandustry → Manage → Browse local files, go up one level, then open steamapps\\workshop\\content\\2764460\\3784750764\\ (or search your PC for "SandTogether").
+[*] Open the mod folder: right-click Sandustry → Manage → Browse local files, go up one level, then open steamapps\\workshop\\content\\2764460\\3784750764\\.
 [*] [b]Windows:[/b] right-click [b]install.bat[/b] → Run.  [b]macOS:[/b] double-click [b]install.command[/b], then launch via SandTogether-Launch.command or Steam.  [b]Linux:[/b] open a terminal [i]in the mod folder[/i] (right-click → Open in terminal) and run [b]bash install-linux.sh[/b] — running it from another folder gives "file not found"; Flatpak Steam or a second library: [b]bash install-linux.sh /path/to/steamapps/common/Sandustry[/b].
 [*] Launch the game. A [b]Multiplayer[/b] button appears in the main menu, and a SandTogether panel in the top-right corner.
 [/olist]
@@ -68,7 +69,7 @@ Only changed rows travel, compressed; incoming data is applied in slices so a bi
 [/list]
 
 [h2]Trouble?[/h2]
-Both players must run the same mod version AND the same game version — the panel says so in red when they differ. If something misbehaves, send me a short description plus your log file: Windows %APPDATA%\\Sandustry\\logs\\main.log, macOS ~/Library/Logs/Sandustry/main.log, Linux ~/.config/Sandustry/logs/main.log. Reports with a log are usually fixed the same day.
+The panel warns in red when mod or game versions differ between players. If something misbehaves, send me a short description plus your log file: Windows %APPDATA%\\Sandustry\\logs\\main.log, macOS ~/Library/Logs/Sandustry/main.log, Linux ~/.config/Sandustry/logs/main.log. Reports with a log are usually fixed the same day.
 
 [b]Port forwarded and still nothing?[/b] The mod listens on [b]TCP 27777[/b] (TCP, not UDP), and the host Windows Firewall must let [b]Sandustry.exe[/b] through on public networks.
 
