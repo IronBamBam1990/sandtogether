@@ -10,6 +10,23 @@ Play [Sandustry](https://store.steampowered.com/app/2764460/Sandustry/) together
 
 Subscribe on the Workshop, then run `install.bat` (Windows), `install.command` (macOS) or `install-linux.sh` (Linux, experimental) from the mod folder **once** — since v0.9.39 the mod auto-updates itself from the Workshop folder at every game launch. Full instructions: [README (EN)](dist-package/README.md) / [INSTRUKCJA (PL)](dist-package/INSTRUKCJA.md). macOS support is community-contributed by **DwoaC** (LAN co-op verified on two Apple Silicon Macs; the Steam-invite callback fix from PR #3 awaits a live test).
 
+## Game versions (Steam branches)
+
+Pick the game branch in Steam: **Sandustry → Properties → Betas**. All players must run the **same game version and the same mod version**.
+
+| Mod version | Game version / Steam branch |
+|-------------|-----------------------------|
+| **v0.9.162** (current, Workshop) | **0.5.5** (branch `0.5.5 with mod support`, same build as the default public version) |
+| [v0.9.161-beta](https://github.com/IronBamBam1990/sandtogether/archive/refs/tags/v0.9.161-beta.zip) | **0.5.2** (beta branch `mods`) — unzip, run `install.bat` from `dist-package` |
+
+Old branch (`mods`, 0.5.2):
+
+![Steam branch: mods](docs/img/steam-branch-mods.png)
+
+New branch (`0.5.5 with mod support`):
+
+![Steam branch: 0.5.5](docs/img/steam-branch-055.png)
+
 ## Architecture (for contributors)
 
 The game is an Electron app; the simulation is non-deterministic (83× `Math.random` in physics, work-stealing scheduler), so lockstep is impossible. SandTogether is **host-authoritative**:
