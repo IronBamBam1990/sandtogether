@@ -42,8 +42,9 @@ find_bin() {
   for f in "$g"/*; do
     [ -f "$f" ] && [ -x "$f" ] || continue
     b="$(basename "$f")"
-    case "$b" in *.so|*.so.*|*crashpad*|chrome-sandbox|*.sh|*.dat|*.pak|*.exe|*.dll) continue ;; esac
-    echo "$f"; return
+    case "$b" in *.so|*.so.*|*crashpad*|chrome-sandbox|*.sh|*.dat|*.pak|*.exe|*.dll|*.txt|*.html|*.json|*.bin) continue ;; esac
+    # ELF magic bytes
+    case "$(head -c4 "$f" 2>/dev/null)" in $'\177ELF') echo "$f"; return ;; esac
   done
 }
 
