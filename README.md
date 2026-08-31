@@ -1,6 +1,6 @@
 # SandTogether — Co-op Multiplayer mod for Sandustry
 
-**Author: Kamil Padula** · Contributors: **dotNine**, **Knight-HD**, **DwoaC**, **Cr0ss0vr**, **TCentraL** · [Steam Workshop page](https://steamcommunity.com/sharedfiles/filedetails/?id=3784750764)
+**Author: Kamil Padula** · Contributors: **dotNine**, **Knight-HD**, **DwoaC**, **Cr0ss0vr**, **TCentraL**, **UwUDev** · [Steam Workshop page](https://steamcommunity.com/sharedfiles/filedetails/?id=3784750764)
 
 Play [Sandustry](https://store.steampowered.com/app/2764460/Sandustry/) together over the internet — no server, no port forwarding. Steam friend invites (or LAN), up to 4 players, one shared live world: digging, fluids, building, tools, resources and story progression synchronized. Steam achievements keep working.
 

@@ -1,4 +1,10 @@
-## 0.9.163-beta
+## 0.9.163-beta (content update: Linux installer fix)
+
+**Linux installer picked the wrong file as the game binary** (fix contributed by **UwUDev**, PR #19).
+`find_bin()` took the first executable file in the game folder, so on setups where
+`LICENSE.electron.txt` carries the executable bit the installer tried to *run the license file*:
+`syntax error near unexpected token 'c'`. It now requires ELF magic bytes (`\177ELF`) instead of
+trusting the executable bit, with a widened extension blacklist as a first pass.
 
 **Full support for game build 0.5.5 (anchor-porting round).** The 0.5.5 game update shipped genuinely
 new code — a new dig/pattern system (`DN` now takes pattern/power/options/terrainRules), renamed
