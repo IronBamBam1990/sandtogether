@@ -1,3 +1,15 @@
+## 0.9.163-beta (content update: installer messages in English + macOS recovery hints)
+
+**The macOS/Linux installer spoke Polish.** `patch.js` (used by `install.command` and
+`install-linux.sh`) printed every message — including its fatal errors — in Polish, so a player
+hitting a failure could not read what went wrong (report: thatsmaik, on behalf of a friend whose
+macOS install stayed on 0.9.162). All patcher output is English now. The root cause of that
+friend's failure was the alias-detection bug fixed in 0.9.163: on an ALREADY-patched 0.5.5 bundle
+the old detector found no alias, so the critical frame hook looked unmatched and the patcher aborted
+with "unsupported game build" — verified by replaying the old detector against a patched bundle.
+The patcher also warns when >8 hooks miss (game newer than mod), and `install.js` now prints a
+recovery path on failure (update via Steam, then verify-integrity + delete the unpacked app folder).
+
 ## 0.9.163-beta (content update: Linux installer fix)
 
 **Linux installer picked the wrong file as the game binary** (fix contributed by **UwUDev**, PR #19).

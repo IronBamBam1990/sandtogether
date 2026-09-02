@@ -17,16 +17,16 @@ const read = (p) => fs.readFileSync(p, 'utf8');
 const write = (p, s) => fs.writeFileSync(p, s, 'utf8');
 let changes = 0;
 const done = (msg) => { changes++; console.log('  [+]', msg); };
-const skip = (msg) => console.log('  [=]', msg, '(już nałożone)');
+const skip = (msg) => console.log('  [=]', msg, '(already applied)');
 
-console.log('SandTogether patcher — cel:', APP);
-if (!fs.existsSync(path.join(APP, 'main.js'))) { console.error('BŁĄD: nie znaleziono main.js w ' + APP); process.exit(1); }
+console.log('SandTogether patcher - target:', APP);
+if (!fs.existsSync(path.join(APP, 'main.js'))) { console.error('ERROR: main.js not found in ' + APP); process.exit(1); }
 
 // 1. Kopiowanie plików moda
 fs.copyFileSync(path.join(SRC, 'sandtogether.js'), path.join(APP, 'dist/js/sandtogether.js'));
-done('dist/js/sandtogether.js skopiowany');
+done('dist/js/sandtogether.js copied');
 fs.copyFileSync(path.join(SRC, 'st-main.js'), path.join(APP, 'st-main.js'));
-done('st-main.js skopiowany');
+done('st-main.js copied');
 
 // 2. index.html — tag <script> przed bundle.js
 {
@@ -36,7 +36,7 @@ done('st-main.js skopiowany');
   else {
     s = s.replace('<script type="module" src="js/bundle.js"></script>',
       '<script src="js/sandtogether.js"></script>\n    <script type="module" src="js/bundle.js"></script>');
-    if (!s.includes('js/sandtogether.js')) { console.error('BŁĄD: kotwica w index.html nie znaleziona'); process.exit(1); }
+    if (!s.includes('js/sandtogether.js')) { console.error('ERROR: index.html anchor not found'); process.exit(1); }
     write(p, s);
     done('index.html: script tag');
   }
@@ -49,6 +49,7 @@ done('st-main.js skopiowany');
   let s = read(p);
   let dirty = false;
   let criticalFail = false;
+  let featureMiss = 0;
   // Steam potrafi serwować rozne PRZEMINIFIKOWANE buildy pod tym samym numerem wersji (zgloszenie
   // cayden.sieteski 29.08: u niego alias modulu FH to "se", u nas "ie" — kotwice doslowne nie trafialy
   // i instalator klamal "niewspierana wersja"). Wykrywamy alias FH z samego bundle'a i gdy doslowna
@@ -63,7 +64,7 @@ done('st-main.js skopiowany');
     while ((mFH = re.exec(s))) {
       if (s.slice(mFH.index, mFH.index + 220).includes('"frame:update"')) { fhAlias = mFH[1]; break; }
     }
-    if (fhAlias && fhAlias !== 'ie') console.log('  [i] alias modulu FH w tym buildzie: "' + fhAlias + '" (przeminifikowany bundle — kotwice beda przepisane z "ie.FH")');
+    if (fhAlias && fhAlias !== 'ie') console.log('  [i] FH module alias in this build: "' + fhAlias + '" (re-minified bundle - anchors rewritten from "ie.FH")');
   }
   const adapt = (t) => (fhAlias && fhAlias !== 'ie') ? t.split('ie.FH').join(fhAlias + '.FH') : t;
   for (const pt of defs.bundle) {
@@ -75,7 +76,7 @@ done('st-main.js skopiowany');
         if (s.includes(patched)) { already = true; break; }
         const count = s.split(anch).length - 1;
         if (count === 0) continue;
-        if (count !== 1) { console.error('BŁĄD: wariant "' + pt.name + '" wystąpień=' + count); continue; }
+        if (count !== 1) { console.error('ERROR: variant "' + pt.name + '" occurrences=' + count); continue; }
         s = s.replace(anch, patched);
         applied = true; dirty = true;
         break;
@@ -84,11 +85,15 @@ done('st-main.js skopiowany');
     }
     if (applied) done('bundle.js: ' + pt.name);
     else if (already) skip('bundle.js ' + pt.name);
-    else if (pt.critical) { console.error('  [X] KRYTYCZNY hak "' + pt.name + '" nie pasuje — niewspierana wersja gry'); criticalFail = true; }
-    else console.warn('  [!] pominięto (funkcja wyłączona na tym buildzie): ' + pt.name);
+    else if (pt.critical) { console.error('  [X] CRITICAL hook "' + pt.name + '" did not match - this game build is not supported yet'); criticalFail = true; }
+    else { console.warn('  [!] skipped (feature unavailable on this game build): ' + pt.name); featureMiss++; }
   }
   if (dirty) write(p, s);
-  if (criticalFail) { console.error('BŁĄD: niewspierana wersja gry (nawet po adaptacji aliasu "' + (fhAlias || '?') + '"). Wspierane: ' + defs.supportedVersions.join(', ')); process.exit(1); }
+  if (featureMiss > 8) {
+    console.error('  WARNING: ' + featureMiss + ' hooks did not match this game build - the game is likely NEWER than the mod.');
+    console.error('  Co-op will connect, but many tools will NOT sync. Update the mod (Workshop) and run the installer again.');
+  }
+  if (criticalFail) { console.error('ERROR: unsupported game build (even after adapting the module alias "' + (fhAlias || '?') + '"). Mod supports game: ' + defs.supportedVersions.join(', ') + '. Your game may have updated - watch the Workshop page for a mod update.'); process.exit(1); }
 }
 
 // 4. preload.js — bridge sieciowy
@@ -105,7 +110,7 @@ done('st-main.js skopiowany');
     const cur = s.slice(i0, i1 + BRIDGE_END.length);
     const want = fresh.slice(fresh.indexOf(BRIDGE_START));
     if (cur.trim() === want.trim()) skip('preload.js');
-    else { write(p, s.slice(0, i0) + want.trim() + s.slice(i1 + BRIDGE_END.length)); done('preload.js: bridge zaktualizowany'); }
+    else { write(p, s.slice(0, i0) + want.trim() + s.slice(i1 + BRIDGE_END.length)); done('preload.js: bridge updated'); }
   }
   else if (s.includes('sandtogetherNet')) skip('preload.js');
   else {
@@ -142,7 +147,7 @@ done('st-main.js skopiowany');
   const patched = "const gotTheLock = process.argv.some((a) => a.startsWith('--st-')) ? true : app.requestSingleInstanceLock();";
   if (s.includes(patched)) skip('main.js single-instance bypass');
   else if (s.includes(anchor)) { s = s.replace(anchor, patched); write(p, s); done('main.js: single-instance bypass'); }
-  else { console.error('BŁĄD: kotwica single-instance nie znaleziona'); process.exit(1); }
+  else { console.error('ERROR: single-instance anchor not found'); process.exit(1); }
 }
 
 
@@ -168,8 +173,8 @@ done('st-main.js skopiowany');
       "    _logFile = path.join(dir, _stName)",
     ].join('\n');
     if (s.includes('ST_INSTANCE_LOG')) skip('logger.js per-instance');
-    else if (s.includes(anchor)) { s = s.replace(anchor, patched); write(p, s); done('logger.js: osobny log na instancje'); }
-    else console.log('  [!] logger.js: kotwica nie pasuje (build gry zmieniony) — logi zostaja wspolne');
+    else if (s.includes(anchor)) { s = s.replace(anchor, patched); write(p, s); done('logger.js: per-instance log'); }
+    else console.log('  [!] logger.js: anchor did not match (game build changed) - logs stay shared');
   }
 }
 
@@ -192,11 +197,11 @@ done('st-main.js skopiowany');
   if (i0 >= 0 && i1 > i0) {
     const cur = s.slice(i0, i1 + END.length);
     if (cur.trim() === early.trim()) skip('main.js early block');
-    else { write(p, s.slice(0, i0) + early + s.slice(i1 + END.length)); done('main.js: early block zaktualizowany'); }
+    else { write(p, s.slice(0, i0) + early + s.slice(i1 + END.length)); done('main.js: early block updated'); }
   } else {
     write(p, early + '\n' + s);
-    done('main.js: early block (log na instancje)');
+    done('main.js: early block (per-instance log)');
   }
 }
 
-console.log('Gotowe. Zmian:', changes);
+console.log('Done. Changes:', changes);

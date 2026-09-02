@@ -164,7 +164,16 @@ const r = spawnSync(process.execPath, [path.join(SRC, 'patch.js'), appDir], {
   stdio: 'inherit',
   env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
 });
-if (r.status !== 0) fail('patch.js failed (see messages above)');
+if (r.status !== 0) {
+  console.error('');
+  console.error('If the message above says the game build is not supported, try this:');
+  console.error('  1. Make sure the mod is up to date: launch the game once through Steam so it');
+  console.error('     downloads the newest Workshop version, then run this installer again.');
+  console.error('  2. Still failing? Clean reinstall: Steam -> Sandustry -> Properties ->');
+  console.error('     Installed Files -> Verify integrity, then DELETE the folder');
+  console.error('     ' + appDir + ' and run this installer again.');
+  fail('patch.js failed (see messages above)');
+}
 
 console.log('\n=== DONE! SandTogether installed. ===');
 if (IS_MAC) {
