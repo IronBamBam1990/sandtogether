@@ -1,3 +1,20 @@
+## 0.9.164-beta
+
+**Grabber could hand the client material that never left the world (report: Maelle).** The host-side
+harvest removed the element and immediately sent its type to the client tank, without checking that the
+removal actually took effect - vanilla, by contrast, skips cells already claimed, removes through the
+verified mutation queue and ROLLS BACK the tank slot when the cell no longer holds that type. The host
+now confirms the element is really gone before crediting it to the client, and blocks a cell whose
+removal failed for 400 ms. Measured: the normal grab path is untouched (removeAt is synchronous on the
+host, including for particles - zero rejections in testing).
+
+**Recall Shard (client says "gloom missing") could not be reproduced.** Verified live on a host+client
+pair: the "building:placed" event does fire on the client (so the portal position the item reads is set
+correctly), the structure and its queued flag mirror, and Gloom element types match the host exactly
+(192 cells host = 192 client, moving included) - running the game own check on both sides agreed.
+The game requires ALL 16 cells (4x4) directly above the portal base to be gloom, so a single different
+cell produces that message. Chasing this further needs a log or save from an affected world.
+
 ## 0.9.163-beta (content update: installer messages in English + macOS recovery hints)
 
 **The macOS/Linux installer spoke Polish.** `patch.js` (used by `install.command` and

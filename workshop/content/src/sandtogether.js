@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.163-beta";
+	const VER = "0.9.164-beta";
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2852,6 +2852,30 @@
 		} catch (e) {}
 		return ty;
 	}
+	// 0.9.164 (Maelle): ZAKLEPANIE komorki + usuniecie z WERYFIKACJA — parytet z vanilla (dt/cV/Lu).
+	// Bez tego ten sam element (czastka voidbloom/petal) wpadal do tanku kilka razy: removeAt bywa
+	// odroczone, a klient prosi o zbior co 33 ms — kolejne prosby widzialy go wciaz na mapie.
+	const GRAB_CLAIM_MS = 400;
+	function grabClaimed(now, x, y) {
+		if (!ST._grabClaim) ST._grabClaim = new Map();
+		const t = ST._grabClaim.get(x + "," + y);
+		return t !== undefined && now - t < GRAB_CLAIM_MS;
+	}
+	function grabClaim(now, x, y) {
+		if (!ST._grabClaim) ST._grabClaim = new Map();
+		ST._grabClaim.set(x + "," + y, now);
+		if (ST._grabClaim.size > 4000) { for (const [k, t] of ST._grabClaim) if (now - t >= GRAB_CLAIM_MS) ST._grabClaim.delete(k); }
+	}
+	// Usun i POTWIERDZ, ze element faktycznie zniknal. Gdy usuniecie przegralo wyscig (czastka),
+	// NIE oddajemy typu klientowi — inaczej material zostaje w swiecie I laduje w tanku (duplikat).
+	function grabRemoveConfirmed(state, el, x, y, ety, now) {
+		try {
+			el.removeAt(state, x, y);
+			const po = el.getResolvedTypeAtPos ? el.getResolvedTypeAtPos(state, x, y) : null;
+			if (po === ety) { ST._grabRaceN = (ST._grabRaceN || 0) + 1; grabClaim(now, x, y); return false; } // przetrwal → zaklep, nie oddawaj
+			return true;
+		} catch (e) { return false; }
+	}
 	function hostHarvestGrab(msg, fromId) {
 		const state = ST.state;
 		if (!state || !ST.FH) return;
@@ -2911,8 +2935,9 @@
 					if (cfg && cfg.isGrabbable === false) continue;
 					if (ST._mtLiquid !== null && cfg && cfg.matterType === ST._mtLiquid && !canLiquid) { gateSkipped++; continue; }
 					if (lockType && ety !== lockType) continue; // tank przyjmuje jeden typ — porownujemy typ ROZWIAZANY
+					if (grabClaimed(tNow, x, y)) continue; // juz zabrana (usuniecie w toku) — jak vanilla dt/cV
+					if (!grabRemoveConfirmed(state, el, x, y, ety, tNow)) continue; // nie zniknelo → nie oddajemy do tanku
 					if (!lockType) lockType = ety;
-					removeAt(state, x, y);
 					markCellDirty(state, x, y);
 					types.push(ety);
 					offs.push(col - mid, row - mid);
@@ -2935,8 +2960,9 @@
 					if (cfg && cfg.isGrabbable === false) continue;
 					if (ST._mtLiquid !== null && cfg && cfg.matterType === ST._mtLiquid && !canLiquid) { gateSkipped++; continue; } // płyn bez badania waterGrab
 					if (lockType && ety !== lockType) continue; // tank przyjmuje tylko JEDEN typ (jak vanilla)
+					if (grabClaimed(tNow, x, y)) continue;
+					if (!grabRemoveConfirmed(state, el, x, y, ety, tNow)) continue;
 					if (!lockType) lockType = ety;
-					removeAt(state, x, y);
 					markCellDirty(state, x, y);
 					types.push(ety);
 					offs.push(dx, dy); // pozycja wzgl. kursora → klient mapuje na właściwy slot siatki tanku
