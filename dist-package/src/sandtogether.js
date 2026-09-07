@@ -1799,7 +1799,7 @@
 	const slimStruct = (s) => {
 		const o = { type: s.type, x: s.x, y: s.y, data: s.data };
 		if (s.filter != null) o.f = s.filter;
-		if (s.queued) { o.q = 1; if (ST.net.role === "host") ST._qResyncAt = performance.now() + 2000; }
+		if (s.queued) o.q = 1; // 0.9.165 (review): TU BYLO uzbrajanie _qResyncAt — slimStruct wola sie dla KAZDEJ struktury przy snapshocie, wiec trwale plany budowy nakrecaly pelny snapshot 85k struktur co 2,2 s w nieskonczonosc (i przez restarty struktury przestawaly sie uzgadniac: 58 brakow u klienta)
 		if (s.frame) o.fr = 1;
 		return o;
 	};
@@ -5879,11 +5879,7 @@
 					else { enqueueFullWorld(); log("po cofnieciu: snapshot struktur + pelny swiat (brak zapamietanego rectu)"); }
 				}
 			}
-			// ST-FIX: to samo po KAZDYM rozgloszeniu struktury w stanie queued (patrz slimStruct)
-			if (ST._qResyncAt && now > ST._qResyncAt) {
-				ST._qResyncAt = 0;
-				if (ST.net.role === "host") { ST._snapForce = true; ST._lastSnap = 0; log("po rozgloszeniu queued: wymuszam pelny snapshot struktur"); }
-			}
+
 		} catch (e) {}
 		if (net && ST.net.role !== "idle" && state.store && state.store.player && now - ST._lastPosSend > 33) {
 			ST._lastPosSend = now;

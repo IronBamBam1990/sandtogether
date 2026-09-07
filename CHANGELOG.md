@@ -4,6 +4,17 @@ Compatibility with Sandustry **0.5.6**, a set of sync fixes, and two new feature
 preview and name labels for held items.
 All changes are in `src/sandtogether.js` and `src/patches.json`; installers and `st-main.js` are untouched.
 
+**Review note (maintainer).** Contributed by **Qustux** (PR #20) and merged after verification on the
+real 0.5.6 build: 32/32 anchors match the clean bundle extracted from `app.asar` (our previous release
+matched only 8 of 29 - exactly the "21 features did not match" warning players were seeing), and 0.5.5 /
+0.5.2 keep 29/32 through the older variant chain, missing only the three brand-new hooks, none of which
+is critical. One change was dropped during review: a full structure resync armed from `slimStruct()`.
+That function runs for EVERY structure while a snapshot is serialized, so any world holding unfinished
+blueprints (34 in the test world) re-armed it forever - measured as a full 85k-structure snapshot every
+2.2 s, and the constant restarts stopped structures from reconciling at all: 58 liquid vents never
+reached the client, stable across samples, where the previous release converged exactly on the same
+world and game build. With the trigger removed the loop is gone and the two sides converge again.
+
 ---
 
 ### Sandustry 0.5.6 compatibility
