@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.164-beta";
+	const VER = "0.9.165-beta"; // fork: 0.5.6 compat + fixes (unofficial, see CHANGELOG)
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -298,6 +298,85 @@
 		_placedCells: new Map(),  // idx -> ts: komórki ODŁOŻONE grabberem lokalnie; sentinel blokuje ponowne celowanie w tę samą "pustą" komórkę przez kolejne sloty tanku (drugi element ginąłby: host createAt no-opuje na zajętej)
 		_sndWarned: false,
 	});
+	// ST-FEAT undo: historia Ctrl+Z gry (obiekt `rf` modulu "undo") jest wypelniana EVENTAMI
+	// structures:removed / moved / pasted / afterStructuresPlaced. Mod, aplikujac cudze zmiany,
+	// wola te same funkcje budowy/rozbiorki -> u kazdego gracza w historii ladowaly dzialania DRUGIEGO
+	// i Ctrl+Z cofalo nie swoje. Gra pomija zapis do historii gdy rf.isUndoing === true, wiec lustrzymy
+	// tam nasz _applyingNet. _undoState pochodzi z nowego hooka bundle "undo module export".
+	// _undoSuppressed odroznia "to my zaglusylismy" od "gra wlasnie wykonuje undo" (potrzebne w hookach FH).
+	try {
+		let _an = false, _prevUndo = false;
+		Object.defineProperty(ST, "_applyingNet", {
+			configurable: true, enumerable: true,
+			get() { return _an; },
+			set(v) {
+				const nv = !!v;
+				// ST-FIX: przywracamy POPRZEDNIA wartosc isUndoing zamiast wpisywac false. Stara wersja
+				// kasowala flage, ktora w tej samej klatce ustawila sobie GRA na czas wlasnego cofniecia
+				// (gra zeruje ja dopiero w setTimeout 0), przez co jej wlasne cofniecie przestawalo byc
+				// rozpoznawalne i wpisy trafialy do historii nie tam, gdzie trzeba.
+				try {
+					if (nv && !_an) { _prevUndo = !!(ST._undoState && ST._undoState.isUndoing); if (ST._undoState) ST._undoState.isUndoing = true; }
+					else if (!nv && _an) { if (ST._undoState) ST._undoState.isUndoing = _prevUndo; }
+				} catch (e) {}
+				_an = nv;
+				ST._undoSuppressed = nv;
+			},
+		});
+	} catch (e) {}
+	// true tylko wtedy, gdy to GRA wykonuje wlasne cofniecie (a nie my aplikujemy siec)
+	ST._inGameUndo = () => { try { const U = ST._undoState; return !!(U && U.isUndoing && !ST._undoSuppressed); } catch (e) { return false; } };
+	// dopisanie wpisu do historii gry (klient: wlasne akcje sa przechwytywane, wiec gra ich nie widzi)
+	ST._undoPush = (entry) => {
+		try {
+			const U = ST._undoState;
+			if (!U || !Array.isArray(U.history)) return;
+			U.history.push(entry);
+			const max = U.maxHistory || 50;
+			while (U.history.length > max) U.history.shift();
+		} catch (e) {}
+	};
+	// ST-FEAT undo: kolejne postawienia sklejamy w JEDEN wpis historii — gra tez traktuje przeciagniecie
+	// jako jedna paczke (afterStructuresPlaced dostaje tablice). Bez tego klient musial cofac po jednym bloku.
+	ST._undoPushBuild = (x, y) => {
+		try {
+			const U = ST._undoState;
+			if (!U || !Array.isArray(U.history)) return;
+			const now2 = Date.now();
+			const last = U.history[U.history.length - 1];
+			if (last && last.type === "build" && last.__st && Array.isArray(last.positions)
+				&& now2 - last.timestamp < 700 && last.positions.length < 2000) {
+				last.positions.push({ x, y }); last.timestamp = now2; return;
+			}
+			ST._undoPush({ type: "build", positions: [{ x, y }], timestamp: now2, __st: 1 });
+		} catch (e) {}
+	};
+	// ST-FEAT undo: usuniecia z Ctrl+Z klienta zbieramy w JEDNA paczke "demolish". Wersja per-struktura
+	// slala N osobnych zadan do hosta — stad "zawieszenie" i czerwone (QUEUED) kafle przy cofaniu wiekszej budowy.
+	ST._undoRmQ = null;
+	function queueUndoRemoval(items) {
+		if (!items || !items.length) return;
+		if (!ST._undoRmQ) {
+			ST._undoRmQ = [];
+			setTimeout(() => {
+				const list = ST._undoRmQ; ST._undoRmQ = null;
+				if (!list || !list.length) return;
+				let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+				for (const it of list) {
+					if (!Number.isFinite(it.x) || !Number.isFinite(it.y)) continue;
+					if (it.x < x0) x0 = it.x; if (it.y < y0) y0 = it.y;
+					if (it.x > x1) x1 = it.x; if (it.y > y1) y1 = it.y;
+				}
+				try {
+					const m2 = { t: "act", k: "demolish", list };
+					if (Number.isFinite(x0)) m2.rect = { x0, y0, x1, y1 };
+					net.send(m2);
+				} catch (e) {}
+				log("CLIENT undo → demolish x" + list.length);
+			}, 0);
+		}
+		for (const it of items) ST._undoRmQ.push(it);
+	}
 	ST._sprayFlag = () => { ST._sprayCtx = 1; queueMicrotask(() => { ST._sprayCtx = 0; }); };
 	// HEARTBEAT HOSTA (fix G4): gdy host pauzuje (menu), frame:update NIE odpala → cały sync zamiera
 	// bez słowa. setInterval to timer JS — działa mimo pauzy sima. Klient dostaje hb i wie, co się dzieje.
@@ -623,14 +702,28 @@
 	function autoLoadClear() {
 		try { const del = []; for (let i = 0; i < sessionStorage.length; i++) { const k = sessionStorage.key(i); if (k && k.indexOf("st_autoload_") === 0) del.push(k); } del.forEach((k) => sessionStorage.removeItem(k)); } catch (e) {}
 	}
+	// ST-DIAG: kanal raportowania klient -> log hosta. Bez tego stan klienta jest niewidoczny —
+	// a wlasnie u niego siedzi blad "czerwonych kafli".
+	function diagToHost(txt) {
+		try {
+			if (ST.net.role !== "client") return;
+			ST._diagN = (ST._diagN || 0) + 1;
+			if (ST._diagN > 120) return;
+			net.send({ t: "diag", m: String(txt).slice(0, 300) });
+		} catch (e) {}
+	}
 	function handleMsg(from, msg) {
 		if (msg.t === "relay") { handleMsg(msg.from, msg.msg); return; }
+		// ST-FIX: znacznik ZYCIA peera na dowolnej wiadomosci (pong leci co 1 s niezaleznie od klatek).
+		// lastSeen aktualizuje tylko "pos", ktory zamiera gdy gracz siedzi w menu — nie nadaje sie na timeout.
+		try { const _pk = ST.peers.get(from); if (_pk) _pk.lastNet = performance.now(); } catch (e) {}
 		if (msg.t === "ping") { try { net.send({ t: "pong", ts: msg.ts }, from); } catch (e) {} return; }
 		if (msg.t === "pong") {
 			const p = ST.peers.get(from);
 			if (p && typeof msg.ts === "number") { const rtt = performance.now() - msg.ts; p.ping = p.ping != null ? Math.round(p.ping * 0.7 + rtt * 0.3) : Math.round(rtt); }
 			return;
 		}
+		if (msg.t === "diag") { log("CLIENT-DIAG od " + from + ": " + msg.m); return; }
 		if (msg.t === "pos") {
 			let p = ST.peers.get(from);
 			const now0 = performance.now();
@@ -648,10 +741,69 @@
 			// preview akcji (fantom pozy / reticle grabbera) — kursor w świecie + intencja budowy
 			p.mwx = typeof msg.mwx === "number" ? msg.mwx : null;
 			p.mwy = typeof msg.mwy === "number" ? msg.mwy : null;
-			p.bt = msg.bt != null ? msg.bt : null;
-			p.btT = msg.bt != null ? performance.now() : 0; // 0.9.138: znacznik swiezosci — fantom gasnie po 2 s
-			p.boffs = Array.isArray(msg.boffs) ? msg.boffs : null;
+			p.mcx = typeof msg.mcx === "number" ? msg.mcx : null;   // ST-FIX: kursor w komorkach
+			p.mcy = typeof msg.mcy === "number" ? msg.mcy : null;
+			// ST-FEAT: intencja budowy jest LEPKA. Wczesniej kazda ramka z bt=null natychmiast kasowala p.bt,
+			// wiec przy choc chwilowej przerwie w wykrywaniu fantom nie zdazyl sie pokazac mimo btT.
+			if (msg.bt != null) {
+				p.bt = msg.bt;
+				p.btT = performance.now();
+				p.boffs = Array.isArray(msg.boffs) ? msg.boffs : [[0, 0]];
+				p.bw = typeof msg.bw === "number" ? msg.bw : 1;
+				p.bh = typeof msg.bh === "number" ? msg.bh : 1;
+			} else if (p.btT && performance.now() - p.btT > 400) { p.bt = null; p.btT = 0; }
+			p.dw = typeof msg.dw === "number" ? msg.dw : 0;   // obszar lopaty
+			p.dh = typeof msg.dh === "number" ? msg.dh : 0;
+			p.sk = typeof msg.sk === "number" ? msg.sk : 0;   // ST-FIX: kategoria wybranego przedmiotu
+			p.sid = msg.sid != null ? msg.sid : null;
+			p.gv = typeof msg.gv === "number" ? msg.gv : 0;   // bok siatki chwytaka
+			if (typeof msg.dax === "number") { p.dax = msg.dax; p.day = msg.day; p.daT = performance.now(); }
+			else { p.dax = null; }
+			p.bsx = typeof msg.bsx === "number" ? msg.bsx : null;   // ST-FEAT: poczatek przeciagniecia
+			p.bsy = typeof msg.bsy === "number" ? msg.bsy : null;
+			p.bm = typeof msg.bm === "string" ? msg.bm : null;
+			p.bd = typeof msg.bd === "string" ? msg.bd : null;
+			if ((ST._prevDiag = (ST._prevDiag || 0) + 1) % 300 === 1 && ST._prevDiag < 9000)
+				log("PREVIEW-DIAG od " + (p.nick || from) + ": sel=" + msg.sk + "/" + JSON.stringify(msg.sid)
+					+ " bt=" + msg.bt + " bw/bh=" + msg.bw + "/" + msg.bh
+					+ " dig=" + msg.dw + "x" + msg.dh + " grabV=" + msg.gv + " tank=" + ((p.gslots && p.gslots.length) || 0)
+					+ " tools=[" + (msg.tools || []).join(",") + "]");
 			if (p.x === 0 && p.y === 0) { p.x = msg.x; p.y = msg.y; }
+		} else if (msg.t === "orphanClean") {
+			// ST-FIX: host potwierdzil, ze w tych komorkach NIE MA struktury — czerwony kafel to smiec
+			if (ST.net.role !== "client" || !ST.state) return;
+			try {
+				const TR = ST.FH && ST.FH.terrains;
+				const cells = Array.isArray(msg.cells) ? msg.cells : [];
+				if (TR && TR.removeAt) {
+					ST._applyingNet = true;
+					try { for (const c of cells) { if (Array.isArray(c)) TR.removeAt(ST.state, c[0] | 0, c[1] | 0); } }
+					finally { ST._applyingNet = false; }
+					if (cells.length) log("SPRZATANIE (za zgoda hosta): usunieto " + cells.length + " czerwonych kafli");
+				}
+			} catch (e) { log("orphanClean blad:", e && e.message); }
+		} else if (msg.t === "bprev") {
+			// ST-FEAT: pozycje podgladu budowy pira
+			const p = ST.peers.get(from);
+			if (p) { p.bprev = Array.isArray(msg.p) && msg.p.length ? msg.p : null; p.bprevT = performance.now(); }
+		} else if (msg.t === "dmask") {
+			// ST-FIX: maska kopania pira -> lista komorek wzgledem kursora
+			const p = ST.peers.get(from);
+			if (p) {
+				p.dcells = null;
+				try {
+					const rows = Array.isArray(msg.m) ? msg.m : null;
+					if (rows && rows.length) {
+						const h = rows.length, w = String(rows[0]).length, out = [];
+						for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) if (String(rows[y])[x] === "1") out.push([x - (w - 1) / 2, y - (h - 1) / 2]);
+						if (out.length) p.dcells = out;
+					}
+				} catch (e) {}
+			}
+		} else if (msg.t === "gtank") {
+			// ST-FEAT: uklad tanku grabbera pira — rysujemy go 1:1 przy jego kursorze
+			const p = ST.peers.get(from);
+			if (p) { p.gslots = Array.isArray(msg.s) ? msg.s : []; p.gslotsT = performance.now(); }
 		} else if (msg.t === "hello") {
 			const p = ST.peers.get(from) || { x: 0, y: 0, tx: 0, ty: 0, lastSeen: performance.now() };
 			p.nick = msg.nick || "?";
@@ -838,6 +990,7 @@
 			
 			ST._gotHostWorld = true; // otrzymaliśmy świat OD hosta → ufamy jego worldId gdy oboje w grze (patrz applyWorldBatch)
 			ST._worldRx = { tid: msg.tid, name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false, t0: performance.now(), gen: msg.gen || null };
+			ST._rxLastGot = -1; // ST-FIX: licznik postepu dla scheduleRxCheck
 			log("world-begin: tid", msg.tid, "-", msg.name, "-", msg.chunks, "paczek,", Math.round((msg.size || 0) / 1024), "KB");
 			setStatus(t("receiving", 0, msg.chunks), "#ff5");
 			scheduleRxCheck();
@@ -861,12 +1014,24 @@
 			// 0.9.75: paczki trzymamy tylko dla BIEŻĄCEGO transferu. Prośba o starszy tid (klient utknął
 			// na poprzednim) = odesłanie mu paczek z nowego transferu, które i tak odrzuci → wieczne "recovering".
 			// Zamiast tego startujemy świeży, kompletny transfer.
+			// ST-FIX (gra 0.5.6, petla restartow): przy obcym tid NIE reeksportujemy save'a.
+			// Kawalki biezacego transferu wciaz siedza w ST._wtx.parts — wystarczy ponowic world-begin
+			// (klient przelaczy sie na aktualny tid) i zakolejkowac wszystko od nowa. Stary kod robil
+			// ST._wtx = null; sendWorld(), a sendWorld jest ASYNC (FH.game.save + do 10 s czekania na plik):
+			// przez ~3 s host nie wysylal NIC, klient co 700 ms slal world-need ze starym tid i pierwszy
+			// z nich po ustawieniu nowego _wtx znow trafial w niezgodnosc — petla bez konca
+			// (log hosta 17:16:53-17:19:36: 41 restartow, klient nigdy nie dostal calego save'a).
 			if (ST._wtx && msg.tid !== undefined && ST._wtx.tid !== undefined && msg.tid !== ST._wtx.tid) {
-				if (performance.now() - (ST._wtxRestartT || 0) < 3000) { return; } // 0.9.87: nie restartuj częściej niż co 3 s
+				if (performance.now() - (ST._wtxRestartT || 0) < 1500) { return; }
 				ST._wtxRestartT = performance.now();
-				log("world-need dla starego transferu tid " + msg.tid + " (mamy " + ST._wtx.tid + ") — wysyłam świat od nowa");
-				ST._autoSendT = 0; ST._wtx = null; sendWorld(); return;
+				log("world-need dla starego transferu tid " + msg.tid + " (mamy " + ST._wtx.tid + ") — ponawiam world-begin biezacego transferu");
+				try { net.send({ t: "world-begin", tid: ST._wtx.tid, name: ST._wtx.name, size: (ST._wtx.sizeKB || 0) * 1024, chunks: ST._wtx.total, gen: ST._worldGen || null }); } catch (e) {}
+				ST._wtx.queue.length = 0;
+				for (let i = 0; i < ST._wtx.total; i++) ST._wtx.queue.push(i);
+				pumpWtx(); return;
 			}
+			// brak biezacego transferu (trwa asynchroniczne przygotowanie) — nie startuj kolejnego
+			if (!ST._wtx) return;
 			if (ST._wtx && Array.isArray(msg.idx)) for (const i of msg.idx) if (ST._wtx.parts[i] !== undefined) ST._wtx.queue.push(i);
 			pumpWtx();
 		}
@@ -954,11 +1119,18 @@
 		ST._rxTimer = setTimeout(() => {
 			const rx = ST._worldRx;
 			if (!rx || rx.done) return;
-			const miss = missingRxIndices();
-			if (miss.length) {
-				net.send({ t: "world-need", tid: rx.tid, idx: miss.slice(0, 200) }, rx.from);
-				setStatus(t("receiving", rx.got, rx.total) + " (recovering " + miss.length + ")", "#ff5");
-			}
+			// ST-FIX (gra 0.5.6, petla restartow): world-need TYLKO gdy transfer STOI. Stara wersja slala go
+			// co 700 ms niezaleznie od postepu — na starcie zawsze brakuje kawalkow, wiec host dostawal
+			// lawine prosb, a kazda z nieaktualnym tid kasowala mu caly transfer i wymuszala reeksport save'a.
+			const stalled = rx.ended || rx.got === ST._rxLastGot;
+			ST._rxLastGot = rx.got;
+			if (stalled) {
+				const miss = missingRxIndices();
+				if (miss.length) {
+					net.send({ t: "world-need", tid: rx.tid, idx: miss.slice(0, 200) }, rx.from);
+					setStatus(t("receiving", rx.got, rx.total) + " (recovering " + miss.length + ")", "#ff5");
+				}
+			} else setStatus(t("receiving", rx.got, rx.total), "#ff5");
 			scheduleRxCheck();
 		}, 700);
 	}
@@ -1080,9 +1252,11 @@
 				if (w.gap == null) w.gap = 33;
 		const msB = w.serMs || 0;                 // tylko czas BLOKUJACY klatke
 		const behind = w.pending.size > 400;      // duza kolejka = najpierw nadrobic, potem plynnosc
-		if (msB > 12 || w.lag > 5) w.gap = Math.min(100, w.gap * 1.25);
-		else if (!behind && msB < 4 && w.lag <= 2) w.gap = Math.max(16, w.gap * 0.85); // do ~60 Hz
-		else if (behind) w.gap = Math.max(25, Math.min(40, w.gap));                    // nadrabianie: ~30 Hz
+		// ST-FIX: progi na ZALEGLOSCI W MS (w.lagMs), nie w paczkach — patrz komentarz nizej przy jej liczeniu.
+		const lagMs = w.lagMs || 0;
+		if (msB > 12 || lagMs > 300) w.gap = Math.min(100, w.gap * 1.25);
+		else if (!behind && msB < 4 && lagMs < 150) w.gap = Math.max(16, w.gap * 0.85); // do ~60 Hz
+		else if (behind) w.gap = Math.max(25, Math.min(40, w.gap));                     // nadrabianie: ~30 Hz
 		const minGap = w.priority && w.priority.size ? Math.min(w.gap, 12) : w.gap;
 		if (w.busy || now - w.lastBatch < minGap) return;
 		const { map, wall, shadow, auth, sim, etype, W, H } = worldBuffers(state);
@@ -1108,18 +1282,25 @@
 				// a rosnacy RTT widac od razu — przy 3000 ms lacze jest juz zapchane i paczki gina.
 				let pingMs = 0;
 				for (const pp of ST.peers.values()) if (pp.ping != null && pp.ping > pingMs) pingMs = pp.ping;
+				// ST-FIX: ZALEGLOSC W MILISEKUNDACH. Progi 4/8/25 byly kalibrowane na staly rytm 10 paczek/s
+				// ("lag 600 = 60 s"), ale rytm jest adaptacyjny i schodzi do 16 ms, czyli ~60 paczek/s.
+				// Przy 60/s sama ziarnistosc potwierdzen (klient potwierdza 10x/s) plus RTT to juz ~14 paczek —
+				// host uznawal ZDROWE lacze za zatkane, scinal tempo do 10 Hz, potem wracal, i tak w kolko
+				// (w logu naprzemiennie 63Hz i 10Hz). U klienta to widac jako szarpanie sypkich elementow.
+				// Odejmujemy znany narzut (okno ACK 100 ms + RTT), zeby zostala PRAWDZIWA zaleglosc.
+				w.lagMs = Math.max(0, w.lag * (w.gap || 33) - 100 - pingMs);
 				if (pingMs > 1000) w.rate = Math.max(0.02, w.rate * 0.7);            // lacze zapchane: ostro w dol
 				else if (pingMs > 400) w.rate = Math.max(0.03, w.rate * 0.9);
-				if (w.lag > 8) w.rate = Math.max(0.03, w.rate * 0.85);        // over 0.8 s behind, cut hard
-				else if (w.lag <= 4 && pingMs < 250) w.rate = Math.min(1, w.rate * 1.05); // oddajemy pasmo tylko przy zdrowym RTT
+				if (w.lagMs > 700) w.rate = Math.max(0.03, w.rate * 0.85);           // realnie ponad 0,7 s w tyle
+				else if (w.lagMs < 350 && pingMs < 250) w.rate = Math.min(1, w.rate * 1.05); // oddajemy pasmo tylko przy zdrowym RTT
 				// Hard stop. The buffer is so full that shrinking batches cannot drain it in time. Send
 				// nothing at all: pending grows here instead, where chunks coalesce, so the client gets
 				// one current state rather than replaying every intermediate frame in order.
-				if (w.lag > 25) {
+				if (w.lagMs > 2500) {
 										// 0.9.117: jesli mimo wstrzymania potwierdzenia nie ruszaja przez 8 s, to nie jest zator
 					// lacza tylko rozjechany licznik (np. klient przeladowal okno) — resetujemy i wznawiamy.
 					if (now - (w.ackAdvanceT || 0) > 8000) { resetAckBaseline(null, "brak postepu potwierdzen przez 8 s"); }
-					else if (now - (w.stallLogT || 0) > 2000) { w.stallLogT = now; log("CONGESTION: client", w.lag, "batches behind (~" + Math.round(w.lag / 10) + " s), pausing sends, queue", w.pending.size); }
+					else if (now - (w.stallLogT || 0) > 2000) { w.stallLogT = now; log("CONGESTION: client", w.lag, "batches behind (~" + (Math.round(w.lagMs / 100) / 10) + " s), pausing sends, queue", w.pending.size); }
 					w.lastBatch = now; // hold the 100 ms cadence while stalled, else the sweep runs every frame
 					return;
 				}
@@ -1354,7 +1535,7 @@
 			if (now - w.statT > 2000) {
 				// lag and rate appended raw, no i18n: this is a diagnostic readout, not player facing text.
 				// Blank when no client acks, so an un-throttled session does not show a misleading zero.
-				const cc = (w.ackSeen ? "  lag " + w.lag + " (" + Math.round(w.rate * 100) + "%)" + (w.qd ? " qd" + w.qd : "") : "") + "  x" + (Math.round((w.boost || 1) * 10) / 10) + "  ser " + Math.round(w.serMs || 0) + "/" + Math.round(w.buildMs || 0) + "ms" + "  " + Math.round(1000/(w.gap||33)) + "Hz" + (w.rawMode ? "  surowo" : "");
+				const cc = (w.ackSeen ? "  lag " + w.lag + "/" + Math.round(w.lagMs || 0) + "ms (" + Math.round(w.rate * 100) + "%)" + (w.qd ? " qd" + w.qd : "") : "") + "  x" + (Math.round((w.boost || 1) * 10) / 10) + "  ser " + Math.round(w.serMs || 0) + "/" + Math.round(w.buildMs || 0) + "ms" + "  " + Math.round(1000/(w.gap||33)) + "Hz" + (w.rawMode ? "  surowo" : "");
 				const info = t("sync_up", Math.round(w.applyBytes / 2048), Math.round(w.applyCount / 2), w.pending.size) + cc;
 				setSyncInfo(info);
 				log("SYNC-HOST", info, w.fogSkipped ? "(fog-skip: " + w.fogSkipped + ")" : "");
@@ -1610,7 +1791,18 @@
 	// wiec filtr ustawiony przez klienta nigdy nie docieral do hosta (i odwrotnie): "filters only work when host configures them".
 	// 0.9.143: queued (struktura "w kolejce" — postawiona NAD terenem, bloki zostaja, np. przenosnik Mk2 nad kamieniem) i frame
 	// (rama fundamentu) tez jada po sieci — bez nich klient budowal wszystko jako PELNE (kasuje teren / inna kolizja).
-	const slimStruct = (s) => { const o = { type: s.type, x: s.x, y: s.y, data: s.data }; if (s.filter != null) o.f = s.filter; if (s.queued) o.q = 1; if (s.frame) o.fr = 1; return o; };
+	// ST-FIX (czerwone kafle u klienta): gdy host rozglasza strukture w PRZEJSCIOWYM stanie "queued"
+	// (tak wychodzi z gry tuz po cofnieciu rozbiorki), klient tworzy ja z clearance=3, czyli jako
+	// zakolejkowana — i tak juz zostaje, bo kolejny snapshot pomija strukture o niezmienionym podpisie.
+	// Detekcja po fakcie jest pewniejsza niz zgadywanie momentu cofniecia: KAZDE wyslanie q=1 planuje
+	// wymuszony pelny snapshot za 2 s, gdy stan u hosta jest juz ustalony.
+	const slimStruct = (s) => {
+		const o = { type: s.type, x: s.x, y: s.y, data: s.data };
+		if (s.filter != null) o.f = s.filter;
+		if (s.queued) { o.q = 1; if (ST.net.role === "host") ST._qResyncAt = performance.now() + 2000; }
+		if (s.frame) o.fr = 1;
+		return o;
+	};
 	const structSig = (s) => { try { return JSON.stringify([s.data == null ? null : s.data, s.filter == null ? null : s.filter, s.queued ? 1 : 0, s.frame ? 1 : 0]); } catch (e) { return ""; } };
 	// sygnatura struktury Z PAKIETU (slim: data/f/q/fr) — JEDNA dla petli snapshotu i dla dokanczania odlozonych
 	// (0.9.143: rozne wzory w obu miejscach = wieczne przebudowy odlozonej reszty przy 90 tys. struktur)
@@ -1673,7 +1865,11 @@
 			ST.FH.events.on(state, "structures:placed", (st, data) => {
 				// tylko HOST rozgłasza własne postawienia; klient już nie (anuluje przed zapisem)
 				if (ST._applyingNet || ST.net.role !== "host") return;
-				const list = ((data && data.structures) || []).map(slimStruct);
+				const arr = (data && data.structures) || [];
+				const list = arr.map(slimStruct);
+				// ST-FIX: zapis ksztaltu struktury w teren nie zawsze ustawia chunkShouldUpdate — bez tego
+				// lustro pomija chunk i u klienta zostaje stary teren (czerwone kafle po odbudowie z Ctrl+Z).
+				try { for (const s2 of arr) if (s2 && Number.isFinite(s2.x)) markUrgent(state, s2.x | 0, s2.y | 0, 1); } catch (e) {}
 				if (list.length) net.send({ t: "st", k: "add", list });
 			});
 			ST.FH.events.on(state, "structures:removed", (st, data) => {
@@ -1813,7 +2009,18 @@
 	function buildOne(state, s, force) {
 		try {
 			const SA = structNs(); if (!SA) return null;
-			const existing = SA.getAtCell(state, s.x, s.y);
+			let existing = SA.getAtCell(state, s.x, s.y);
+			// ST-FIX: u klienta w komorce moze siedziec struktura INNEGO typu (pozostalosc po rozjezdzie —
+			// np. po cofnieciu rozbiorki u hosta). Stary kod szedl wtedy prosto do SA.build, gra odmawiala
+			// (komorka zajeta), build zwracal null i rozjazd zostawal NA STALE: ani snapshot, ani resync
+			// tego nie naprawialy, bo host wysyla poprawne dane, a klient nie ma ich gdzie zapisac.
+			if (existing && existing.type !== s.type && ST.net.role === "client") {
+				try {
+					diagToHost("kolizja typow @" + s.x + "," + s.y + " lokalnie=" + existing.type + " host=" + s.type + " q=" + (existing.queued ? 1 : 0));
+					if (SA.removeAt) SA.removeAt(state, s.x, s.y, { removeCells: true });
+					existing = SA.getAtCell(state, s.x, s.y);
+				} catch (e) {}
+			}
 			if (existing && existing.type === s.type) {
 				// KONFIG MASZYN (G5b): świeżo edytowane przez klienta data/filtr chronimy przed nadpisaniem
 				// przez snapshot hosta (act sdata jest w drodze; host potwierdzi w następnym snapie)
@@ -1841,12 +2048,30 @@
 			const cl = (s.cl === 3 || s.cl === 4) ? s.cl : (s.q ? 3 : CLEARANCE_AVAILABLE);
 			const pos = force ? { x: s.x, y: s.y, clearance: cl } : { x: s.x, y: s.y };
 			const built = SA.build(state, pos, s.type, {});
+			if (!built && ST.net.role === "client" && force) diagToHost("build ZWROCIL NULL @" + s.x + "," + s.y + " typ=" + s.type + " cl=" + cl);
 			if (built) {
 				if (s.data) built.data = s.data;
 				if (s.f !== undefined) built.filter = s.f;
 				if (ST.net.role === "client") {
 					// 0.9.143: u klienta SA.update (O(n) po store) tylko gdy tryb kafla (queued/frame) rozni sie od tego, co gra ustawila
 					if (!!built.queued !== !!s.q || !!built.frame !== !!s.fr) { built.queued = s.q ? true : undefined; built.frame = s.fr ? true : undefined; if (SA.update) SA.update(state, built, { propagateToWorkers: false }); }
+					// ST-FIX (czerwone kafle po Ctrl+Z hosta — PRZYCZYNA): SA.build potrafi zwrocic obiekt,
+					// ktorego gra NIE zarejestrowala w siatce struktur — wtedy getAtCell w tej komorce dalej
+					// zwraca null, kafel fundamentu zostaje "osierocony" i renderuje sie na czerwono.
+					// Diagnostyka to potwierdzila: klient co kilka sekund zglaszal te same 80 komorek jako
+					// osierocone, a host odpowiadal "u mnie struktury: 8" i odsylal je — bez skutku.
+					// SA.update dorejestrowuje strukture; jest O(n) po store, wiec robimy to TYLKO gdy
+					// rejestracji faktycznie brakuje i z limitem na klatke.
+					try {
+						if (SA.getAtCell && SA.update && !SA.getAtCell(state, s.x, s.y)) {
+							const nowR = performance.now();
+							if (nowR - (ST._regFixT || 0) > 1000) { ST._regFixT = nowR; ST._regFixN = 0; }
+							if ((ST._regFixN = (ST._regFixN || 0) + 1) <= 60) {
+								SA.update(state, built, { propagateToWorkers: false });
+								if ((ST._regFixLog = (ST._regFixLog || 0) + 1) <= 5) diagToHost("naprawiam rejestracje struktury @" + s.x + "," + s.y + " typ=" + s.type);
+							}
+						}
+					} catch (e) {}
 					return built;
 				}
 				// HOST: ZAWSZE propaguj strukturę do workerów symulacji (nie tylko gdy jest data!). Bez tego
@@ -1884,6 +2109,7 @@
 	function armDemolCleanup(bounds) {
 		if (!bounds || !bounds.length) return;
 		ST._hostDemolRect = { bounds, t: performance.now(), cleanOrphans: true };
+		ST._lastDemolBounds = bounds; // ST-FIX: zostaje na stale — cofniecie odbudowuje DOKLADNIE ten obszar
 	}
 
 	function applyNetStructs(msg) {
@@ -2787,6 +3013,8 @@
 	// klient wypełnia tank. Omija cały wyścig sentineli/lustra pod obciążeniem (1024 komórki). PLACE (tank>0)
 	// zostaje po staremu (return false → lokalne odkładanie działa, host createAt potwierdza).
 	ST._grab = (state, tool) => {
+		// ST-FEAT: zapamietujemy tank grabbera NIEZALEZNIE od roli — z niego bierzemy licznik do podgladu u innych.
+		try { if (tool && tool.data && tool.data.matrix) { ST._grabTool = tool; ST._grabToolT = performance.now(); } } catch (e) {}
 		try {
 			if (!isClientSync() || !ST.wsx.paused) return false; // host/offline lub klient poza światem hosta
 			const B = tool && tool.data && tool.data.matrix;
@@ -3186,6 +3414,24 @@
 		return o;
 	}
 	ST._dig = (state, x, y, mask, vel, dmg, opts) => {
+		// ST-FEAT podglad: zapamietujemy ROZMIAR wzoru kopania (dopiero tu gra go ujawnia). Wysylamy go
+		// dalej w "pos", zeby drugi gracz widzial obszar, ktory zaraz zostanie wykopany, a nie sam kursor.
+		try {
+			if (Array.isArray(mask) && mask.length && Array.isArray(mask[0]) && mask.length <= 64) {
+				ST._digW = mask[0].length; ST._digH = mask.length;
+				const rows = [];
+				for (let ry = 0; ry < mask.length; ry++) {
+					let line = "";
+					for (let rx = 0; rx < mask[ry].length; rx++) line += mask[ry][rx] ? "1" : "0";
+					rows.push(line);
+				}
+				const sig = rows.join("|");
+				if (sig !== ST._digSig) { ST._digSig = sig; ST._digMask = rows; }
+				// ST-FIX: MIEJSCE kopania. Lopata dziala PRZY GRACZU, a nie pod kursorem — rysowanie maski
+				// przy kursorze pokazywalo obszar zupelnie gdzie indziej niz realny wykop.
+				ST._digAtX = x | 0; ST._digAtY = y | 0; ST._digAtT = performance.now();
+			}
+		} catch (e) {}
 		if (!isClientSync() || !ST.wsx.paused) return false; // host/offline/poza lustrem: kop normalnie
 		// Pociski są symulowane AUTORYTATYWNIE po stronie hosta (patrz ST._proj) → NIE forwardujemy kopań
 		// z kontekstu pocisku (_projCtx), inaczej podwójne dziury (pocisk klienta + pocisk hosta).
@@ -3303,6 +3549,9 @@
 				else if (state.store.options && state.store.options.defaultFilter != null) m.fl = JSON.parse(JSON.stringify(state.store.options.defaultFilter));
 			} catch (e) {}
 			net.send(m);
+			// ST-FEAT undo: u klienta gra NIE wykonuje tej budowy lokalnie (przechwytujemy ja wyzej),
+			// wiec nie powstaje wpis w historii Ctrl+Z. Dopisujemy go sami — inaczej klient nie ma co cofac.
+			ST._undoPushBuild(x, y);
 		} catch (e) {}
 		return true; // anuluj lokalne stawianie — klient nic nie pisze do świata
 	};
@@ -3368,12 +3617,22 @@
 			const y0 = Math.floor(Math.min(start.y, end.y)), y1 = Math.ceil(Math.max(start.y, end.y));
 			if ((x1 - x0 + 1) * (y1 - y0 + 1) > 40000) { log("_demol: rect za duży", x0, y0, x1, y1); return false; }
 			const found = new Map(); // structKey -> slim
+			const undoFound = new Map(); // ST-FEAT undo: pelne pola, ktorych wymaga odbudowa w Ctrl+Z gry
 			for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
-				try { const st = SA.getAtCell(state, x, y); if (st) found.set(structKey(st), slimStruct(st)); } catch (e) {}
+				try {
+					const st = SA.getAtCell(state, x, y);
+					if (!st) continue;
+					const k = structKey(st);
+					if (found.has(k)) continue;
+					found.set(k, slimStruct(st));
+					undoFound.set(k, { type: st.type, x: st.x, y: st.y, data: st.data, filter: st.filter, color: st.color });
+				} catch (e) {}
 			}
 			if (!found.size) { log("_demol: pusty rect [" + x0 + "," + y0 + " → " + x1 + "," + y1 + "] — nic do rozbiórki"); return true; }
 			const list = [...found.values()];
 			try { net.send({ t: "act", k: "demolish", list, rect: { x0, y0, x1, y1 } }); } catch (e) {}
+			// ST-FEAT undo: jak wyzej — rozbiorka klienta nie idzie przez gre, wiec wpis robimy sami.
+			if (undoFound.size) ST._undoPush({ type: "remove", structures: [...undoFound.values()], timestamp: Date.now() });
 			log("CLIENT demolish rect →", list.length, "struktur");
 			return true; // pomiń lokalną (nie-działającą) rozbiórkę — potwierdzenie przyjdzie przez st rm
 		} catch (e) { return false; }
@@ -3480,6 +3739,22 @@
 				ST._applyingNet = true;
 				try { for (const s of msg.list) buildOne(state, s); } finally { ST._applyingNet = false; }
 				net.send({ t: "st", k: "add", list: msg.list }); // potwierdź pozostałym klientom
+			} else if (msg.k === "orphanQ") {
+				// ST-FIX: klient zglasza czerwone kafle fundamentu bez struktury. Sprawdzamy u siebie:
+				// jest struktura -> dosylamy ja (jego kopia zaginela), nie ma -> pozwalamy mu posprzatac kafel.
+				const cells = Array.isArray(msg.cells) ? msg.cells.slice(0, 500) : [];
+				const SAo = structNs();
+				const addList = [], clean = [], seenK = new Set();
+				for (const c of cells) {
+					if (!Array.isArray(c)) continue;
+					const cx = c[0] | 0, cy = c[1] | 0;
+					let st2 = null; try { st2 = SAo && SAo.getAtCell ? SAo.getAtCell(state, cx, cy) : null; } catch (e) {}
+					if (st2) { const k2 = structKey(st2); if (!seenK.has(k2)) { seenK.add(k2); addList.push(slimStruct(st2)); } }
+					else clean.push([cx, cy]);
+				}
+				if (addList.length) net.send({ t: "st", k: "add", list: addList }, fromId);
+				if (clean.length) net.send({ t: "orphanClean", cells: clean }, fromId);
+				log("ORPHAN-Q od " + fromId + ": " + cells.length + " komorek — u mnie struktury: " + addList.length + ", do sprzatniecia: " + clean.length);
 			} else if (msg.k === "demolish") {
 				// Resolve the client's targets on the host and snapshot their true occupied bounds before
 				// removeAt destroys the shape information needed to clean orphan foundation terrain.
@@ -4151,6 +4426,12 @@
 	// Transfer save'a (wspólna mapa startowa)
 	// ------------------------------------------------------------------
 	async function sendWorld() {
+		// ST-FIX (gra 0.5.6, petla restartow): przygotowanie transferu jest ASYNCHRONICZNE
+		// (FH.game.save + do 10 s czekania az plik pojawi sie na dysku). Bez tej flagi rownolegle
+		// wywolania (world-req + resync + hello w ciagu kilku sekund) krecily tid w gore, a klient
+		// zostawal na starym — stad lawina "world-need dla starego transferu". Sprawdzenie MUSI byc
+		// POZA try/finally, inaczej odrzucone wywolanie skasowaloby flage trwajacemu.
+		if (ST._wtxPreparing) { log("sendWorld POMINIETY — transfer juz sie przygotowuje"); return; }
 		try {
 			if (ST.net.role === "idle") { setStatus(t("connect_first"), "#f66"); return; }
 			// HOST W MENU (raport TCentraL: Steam-join zanim host wczytał mapę → klient ładował
@@ -4169,6 +4450,7 @@
 				try { net.send({ t: "world-wait" }); } catch (e) {}
 				return;
 			}
+			ST._wtxPreparing = true; // ST-FIX: tu zaczyna sie asynchroniczne przygotowanie transferu
 			const saves = await window.electron.getSaveFiles();
 			if (!saves || !saves.length) { setStatus(t("no_saves"), "#f66"); return; }
 			const ts = (s) => s.timestamp || s.updatedAt || s.savedAt || s.time || s.date || 0;
@@ -4218,6 +4500,7 @@
 			setStatus(t("world_sent", ST._wtx.sizeKB, total), "#5f5");
 			pumpWtx();
 		} catch (e) { setStatus(t("export_err", e.message), "#f66"); log("sendWorld error:", e); }
+		finally { ST._wtxPreparing = false; } // ST-FIX
 	}
 
 	// wysyła kawałki paczkami po kilka, z przerwami — Steam P2P nie gubi paczek gdy bufor nie jest zapchany
@@ -4701,9 +4984,16 @@
 			ST._ghostCanvas = gc;
 		}
 		const r = game.getBoundingClientRect();
-		if (gc.width !== game.width || gc.height !== game.height) { gc.width = game.width; gc.height = game.height; }
+		// ST-FIX: plotno nakladki mialo rozmiar bufora plotna gry, a bylo rozciagane na caly ekran —
+		// na 4K (devicePixelRatio 1.75) dawalo to skalowanie 1,75x i rozmyte, "pikselowate" napisy,
+		// podczas gdy UI gry (DOM) bylo ostre. Trzymamy bufor w PELNEJ rozdzielczosci urzadzenia,
+		// a uklad wspolrzednych zostawiamy taki jak w grze — przez skale kontekstu (_ghostScale).
+		const dpr = Math.max(1, Math.min(4, window.devicePixelRatio || 1));
+		const bw = Math.max(1, Math.round(r.width * dpr)), bh = Math.max(1, Math.round(r.height * dpr));
+		if (gc.width !== bw || gc.height !== bh) { gc.width = bw; gc.height = bh; }
 		gc.style.left = r.left + "px"; gc.style.top = r.top + "px";
 		gc.style.width = r.width + "px"; gc.style.height = r.height + "px";
+		ST._ghostScale = game.width ? bw / game.width : dpr;
 		return gc;
 	}
 
@@ -4743,7 +5033,7 @@
 	}
 
 	// --- Modele graczy: prawdziwe sprite'y sklonowane z silnika gry (wkład dotNine) ---
-	const NAMETAG_OFFSET_PX = 46;
+	const NAMETAG_OFFSET_PX = 26; // ST-FIX: bylo 46 — nick wisial prawie dwie wysokosci postaci nad glowa
 	const PUPPET_ANCHOR_DX = 6, PUPPET_ANCHOR_DY = 13; // korekta zakotwiczenia względem store.player.x/y (do strojenia)
 	const PUPPET_PART_ORDER = ["body", "weapon", "builder", "buildTool", "cryoblaster", "vacuum", "forearm", "shovel", "flamethrower", "rocketLauncher", "offhandShovel"];
 	const PUPPET_ALWAYS_PARTS = new Set(["body", "forearm"]);
@@ -4803,46 +5093,208 @@
 	function getMouseWorld(state) {
 		try { const m = state.session.input && state.session.input.mouse; const w = m && m.worldPosition; return w && typeof w.x === "number" ? { x: Math.round(w.x), y: Math.round(w.y) } : null; } catch (e) { return null; }
 	}
-	// Intencja BUDOWANIA: co gracz zaraz postawi (fantom pozy). Źródło (0.5.4): przy normalnej pozie z hotbara
-	// gra trzyma aktywny typ w session.building.activeStructureType (customData.selectedStructures jest TYLKO
-	// dla kopiuj-wklej blueprintów → dlatego wcześniej fantom NIGDY się nie pokazywał). Fallback: player.action.id
-	// (action Building niesie id=structureId). Blueprint copy: dokładamy offsety z selectedStructures.
+	// ST-FIX: kursor W KOMORKACH. Narzedzia gry (chwytak, lopata, stawianie) dzialaja i rysuja sie
+	// na siatce komorek, a my rysowalismy podglad wokol ciaglej pozycji myszy — stad obrys "obok"
+	// i wrazenie, ze jest wiekszy niz naprawde.
+	function getMouseCell(state) {
+		try { const m = state.session.input && state.session.input.mouse; const c = m && m.cellPosition; return c && typeof c.x === "number" ? { x: c.x | 0, y: c.y | 0 } : null; } catch (e) { return null; }
+	}
+	// ST-FEAT podglad: ZAWARTOSC tanku grabbera — nie sam licznik, tylko realny uklad slotow.
+	// Siatka tanku jest przestrzenna: v = round(sqrt(size)), mid = v>>1, indeks = 2 + (dx+mid) + (dy+mid)*v
+	// (ta sama matematyka co w clientFillGrabTank). Dzieki temu u drugiego gracza materiał lezy
+	// DOKLADNIE tam, gdzie u niosacego, i w kolorze swojego typu, a nie kursora.
+	function getGrabTank() {
+		try {
+			if (!ST._grabToolT || performance.now() - ST._grabToolT > 1000) return null;
+			const tool = ST._grabTool;
+			const B = tool && tool.data && tool.data.matrix;
+			if (!B) return null;
+			const size = tankSize(tool, B);
+			const v = Math.max(1, Math.round(Math.sqrt(size))), mid = v >> 1;
+			const slots = [];
+			for (let i = 0; i < size && slots.length < 128; i++) {
+				const ty = B[i + 2];
+				if (!ty) continue;
+				slots.push([(i % v) - mid, ((i / v) | 0) - mid, ty]);
+			}
+			return slots;
+		} catch (e) { return null; }
+	}
+	// ST-FIX: kolor elementu bierzemy STAD, SKAD BIERZE GO GRA — session.colors.scheme.element[type].variants
+	// (tablica [r,g,b,a]). metaColor z konfiguracji to kolor na mapie/ikonie, nie kolor renderowanej komorki,
+	// dlatego zloto wychodzilo pomaranczowe. Wariant srodkowy = reprezentatywny odcien materialu.
+	const ELEM_COLOR = new Map();
+	function elemColor(state, ty) {
+		if (ELEM_COLOR.has(ty)) return ELEM_COLOR.get(ty);
+		let c = null;
+		try {
+			const sch = state && state.session && state.session.colors && state.session.colors.scheme;
+			const def = sch && sch.element && sch.element[ty];
+			const vs = def && def.variants;
+			if (Array.isArray(vs) && vs.length) {
+				// gra rysuje zawartosc chwytaka wariantem [0] — bierzemy dokladnie ten sam
+				const v = vs[0];
+				if (Array.isArray(v) && v.length >= 3) c = "rgb(" + (v[0] | 0) + "," + (v[1] | 0) + "," + (v[2] | 0) + ")";
+			}
+			if (!c) {
+				const cfg = ST.FH && ST.FH.elements && ST.FH.elements.getConfig ? ST.FH.elements.getConfig(ty) : null;
+				if (cfg && typeof cfg.metaColor === "number") c = "#" + ((cfg.metaColor >>> 0) & 0xffffff).toString(16).padStart(6, "0");
+			}
+			if (c) ELEM_COLOR.set(ty, c);
+		} catch (e) {}
+		return c;
+	}
+	// ST-FEAT: nazwa materialu / budynku w JEZYKU GRY (FH.i18n.t + nameKey z konfiguracji).
+	const NAME_CACHE = new Map();
+	// ST-FIX: w tabeli konfiguracji siedzi tylko BAZOWY typ, a odwrocone warianty (np. przenosnik w lewo)
+	// sa w nim polem `variants: [{ id, angles }]` i wlasnej konfiguracji NIE MAJA. getConfig(wariant)
+	// zwracalo undefined, wiec podpis spadal na goly numer enuma ("1"). Budujemy mape wariant -> baza.
+	let VARIANT_BASE = null;
+	function baseStructId(id) {
+		try {
+			const SA = ST.FH && ST.FH.structures;
+			if (!SA || !SA.getConfig) return id;
+			const c = SA.getConfig(id);
+			if (c && (c.nameKey || c.displayNameKey)) return id;
+			if (!VARIANT_BASE && ST.state && SA.getUnlockedTypes) {
+				VARIANT_BASE = new Map();
+				try {
+					const types = SA.getUnlockedTypes(ST.state);
+					if (types) for (const t of types) {
+						const cc = SA.getConfig(t);
+						if (cc && Array.isArray(cc.variants)) for (const v of cc.variants) if (v && v.id != null && v.id !== t) VARIANT_BASE.set(v.id, t);
+					}
+				} catch (e) {}
+			}
+			const b = VARIANT_BASE && VARIANT_BASE.get(id);
+			return b != null ? b : id;
+		} catch (e) { return id; }
+	}
+	function locName(kind, id) {
+		const key = kind + ":" + id;
+		if (NAME_CACHE.has(key)) return NAME_CACHE.get(key);
+		let nm = null;
+		try {
+			const ns = kind === "e" ? (ST.FH && ST.FH.elements) : (ST.FH && ST.FH.structures);
+			const lookId = kind === "e" ? id : baseStructId(id);
+			const cfg = ns && ns.getConfig ? ns.getConfig(lookId) : null;
+			const nk = cfg && (cfg.nameKey || cfg.displayNameKey);
+			if (nk && ST.FH.i18n && ST.FH.i18n.t) { const v = ST.FH.i18n.t(nk); if (v && v !== nk) nm = v; }
+			if (!nm && cfg && cfg.id) nm = String(cfg.id);
+		} catch (e) {}
+		if (nm) NAME_CACHE.set(key, nm);
+		return nm;  // pudlo NIE trafia do cache — mapa wariantow moze byc jeszcze niezbudowana
+	}
+	// ST-FEAT: KSZTALT budynku z konfiguracji — obie strony maja te sama gre, wiec nie ma sensu przesylac
+	// siatki po sieci: wystarczy id. Rysujemy realny obrys (np. przenosnik nie jest kwadratem), a nie
+	// prostokat opisany na nim. Offsety liczymy wzgledem srodka ksztaltu, w komorkach.
+	const SHAPE_CACHE = new Map();
+	function structCells(bt) {
+		if (SHAPE_CACHE.has(bt)) return SHAPE_CACHE.get(bt);
+		let cells = null;
+		try {
+			const cfg = ST.FH && ST.FH.structures && ST.FH.structures.getConfig ? ST.FH.structures.getConfig(bt) : null;
+			const sh = cfg && cfg.shape;
+			if (Array.isArray(sh) && sh.length && Array.isArray(sh[0])) {
+				const out = [];
+				for (let y = 0; y < sh.length; y++) for (let x = 0; x < sh[y].length; x++) if (sh[y][x]) out.push([x, y]);
+				if (out.length) cells = out;
+			}
+			// ST-FIX: wiekszosc budynkow NIE MA wlasnego "shape" — gra podstawia wtedy siatke 4x4 komorek
+			// (w bundlu: `if (!n) { const t = vZ.Block; return { shape: [[t,t,t,t],[t,t,t,t],[t,t,t,t],[t,t,t,t]] } }`).
+			// Dlatego Akumulator pokazywal sie jako jeden kafelek zamiast pelnego bloku.
+			if (!cells && cfg) { cells = []; for (let y = 0; y < 4; y++) for (let x = 0; x < 4; x++) cells.push([x, y]); }
+		} catch (e) {}
+		if (ST.FH) SHAPE_CACHE.set(bt, cells);
+		return cells;
+	}
+	// ST-FIX: rysowanie po ABSOLUTNYCH wspolrzednych komorek — dokladnie jak robi to gra
+	// (getDrawPos(state, x*cellSize, y*cellSize), potem prostokat o boku jednej komorki).
+	// Wczesniej liczylem offsety wzgledem "srodka kursora", co przy kazdym ksztalcie dawalo
+	// przesuniecie o pol komorki i rozjezdzalo sie z tym, co widzi wlasciciel kursora.
+	const CELL = 4; // A.cellSize w tym buildzie
+	function drawCellRects(state, ctx, ppc, cx, cy, cells, color, fillA, strokeA) {
+		if (!cells || !cells.length) return null;
+		let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+		ctx.save();
+		ctx.fillStyle = color; ctx.strokeStyle = color; ctx.lineWidth = 1.5;
+		for (const c of cells) {
+			const gx = cx + c[0], gy = cy + c[1];
+			const p0 = w2s(state, gx * CELL, gy * CELL);
+			const px = Math.round(p0.x), py = Math.round(p0.y);
+			const w2 = Math.max(1, Math.round(ppc)), h2 = Math.max(1, Math.round(ppc));
+			if (px < minX) minX = px; if (py < minY) minY = py;
+			if (px + w2 > maxX) maxX = px + w2; if (py + h2 > maxY) maxY = py + h2;
+			if (fillA > 0) { ctx.globalAlpha = fillA; ctx.fillRect(px, py, w2, h2); }
+			if (strokeA > 0 && w2 > 3) { ctx.globalAlpha = strokeA; ctx.strokeRect(px + 0.75, py + 0.75, w2 - 1.5, h2 - 1.5); }
+		}
+		ctx.restore();
+		return { minX, minY, maxX, maxY };
+	}
+	// obrys prostokatnego obszaru podanego w komorkach
+	function drawCellBox(state, ctx, ppc, cx, cy, w, h, color, alpha, dash) {
+		const p0 = w2s(state, cx * CELL, cy * CELL);
+		ctx.save();
+		ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.globalAlpha = alpha;
+		if (dash) ctx.setLineDash(dash);
+		ctx.strokeRect(Math.round(p0.x), Math.round(p0.y), Math.round(w * ppc), Math.round(h * ppc));
+		ctx.setLineDash([]); ctx.restore();
+		return { minX: p0.x, minY: p0.y, maxX: p0.x + w * ppc, maxY: p0.y + h * ppc };
+	}
+	// podpis nad obszarem: bialy tekst z czarnym obrysem, zeby czytac sie na kazdym tle
+	function drawLabel(ctx, x, y, text) {
+		if (!text) return;
+		ctx.save();
+		ctx.globalAlpha = 1; ctx.font = "bold 11px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "bottom";
+		ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,.85)"; ctx.strokeText(text, x, y);
+		ctx.fillStyle = "#fff"; ctx.fillText(text, x, y);
+		ctx.restore();
+	}
+	// ST-FIX: CO GRACZ TRZYMA. Poprzednia wersja zgadywala typ ze slotu hotbara i brala `item.type`,
+	// czyli KATEGORIE (X2: 1=Weapon, 2=Building, 3=Tool, 4=Mod), a nie id struktury — dlatego "fantom"
+	// byl zawsze wlaczony i zawsze zly (log PREVIEW-DIAG: bt=1 przy lopacie, bt=3 przy chwytaku).
+	// Gra ma na to wlasne zrodlo: FH.action.getSelected -> { type, id }, z ta sama kolejnoscia
+	// (activeStructureType -> player.action -> slot hotbara), ktorej uzywa reszta UI.
 	function getBuildIntent(state) {
 		try {
-			const ss = state.session || {};
-			const pl = state.store && state.store.player;
-			let bt = ss.building && ss.building.activeStructureType;
-			// GŁÓWNE ŹRÓDŁO (potwierdzone GHOST-DIAG): activeStructureType jest null przy HOVER; typ wybranego
-			// budynku bierzemy z aktywnego slotu hotbara: hotbar.bars[hotbarIndex][activeSlotIndex].
-			if (bt == null && pl && pl.hotbar && pl.hotbar.activeSlotIndex != null) {
-				const bar = pl.hotbar.bars && pl.hotbar.bars[pl.hotbar.hotbarIndex];
-				const item = bar && bar[pl.hotbar.activeSlotIndex];
-				if (item != null) bt = (typeof item === "object") ? (item.structureType != null ? item.structureType : item.type != null ? item.type : item.id) : item;
-			}
-			if (bt == null) {
-				const a = pl && pl.action;
-				if (a && a.id != null) bt = a.id; // {type:Building, id:structureId}
-			}
-			// DIAG (jednorazowo): slot hotbara aktywny, ale nie znaleźliśmy typu → zrzuć KSZTAŁT itemu hotbara + stan
-			if (bt == null && pl && pl.hotbar && pl.hotbar.activeSlotIndex != null && !ST._biDumped) {
-				ST._biDumped = true;
+			const sel = ST.FH && ST.FH.action && ST.FH.action.getSelected ? ST.FH.action.getSelected(state) : null;
+			if (!sel || sel.type == null) return null;
+			const out = { k: sel.type | 0, id: sel.id, bw: 1, bh: 1, offs: null };
+			if (out.k === 2) { // X2.Building — dopiero TERAZ id jest typem struktury
 				try {
-					const hb = pl.hotbar, bar = hb.bars && hb.bars[hb.hotbarIndex], item = bar && bar[hb.activeSlotIndex];
-					log("GHOST-DIAG: activeSlot=" + hb.activeSlotIndex + " hotbarIndex=" + hb.hotbarIndex,
-						"ITEM=" + JSON.stringify(item) + " (typeof " + typeof item + (item && typeof item === "object" ? " keys=" + Object.keys(item).join(",") : "") + ")",
-						"hotbar keys=" + Object.keys(hb).join(","),
-						"session.building=" + JSON.stringify(ss.building));
-				} catch (e2) { log("GHOST-DIAG err:", e2.message); }
+					const cfg = ST.FH.structures && ST.FH.structures.getConfig ? ST.FH.structures.getConfig(sel.id) : null;
+					const sh = cfg && cfg.shape;
+					if (Array.isArray(sh) && sh.length) { out.bh = sh.length; out.bw = Array.isArray(sh[0]) ? sh[0].length : 1; }
+				} catch (e) {}
+				const cd = state.session && state.session.action && state.session.action.customData;
+				const bp = cd && Array.isArray(cd.selectedStructures) ? cd.selectedStructures : null;
+				out.offs = [[0, 0]];
+				if (bp && bp.length > 1) { out.offs = []; for (let i = 0; i < bp.length && i < 24; i++) out.offs.push([bp[i].x | 0, bp[i].y | 0]); }
+				if (!ST._biOk) { ST._biOk = true; log("GHOST OK: wybrany budynek id=" + JSON.stringify(sel.id) + " " + out.bw + "x" + out.bh); }
 			}
-			if (bt == null) return null;
-			if (!ST._biOk) { ST._biOk = true; log("GHOST OK: intencja pozy wykryta, bt=" + JSON.stringify(bt)); }
-			// blueprint (kopiuj-wklej): kilka struktur z offsetami; single-struct → [[0,0]] pod kursorem
-			const cd = ss.action && ss.action.customData;
-			const sel = cd && Array.isArray(cd.selectedStructures) ? cd.selectedStructures : null;
-			let offs = [[0, 0]];
-			if (sel && sel.length > 1) { offs = []; for (let i = 0; i < sel.length && i < 24; i++) offs.push([(sel[i].x | 0), (sel[i].y | 0)]); }
-			return { bt, offs };
+			return out;
 		} catch (e) { return null; }
+	}
+	// bok siatki tanku chwytaka (v x v komorek) — do narysowania obrysu narzedzia u drugiego gracza
+	function grabGrid() {
+		try {
+			if (!ST._grabToolT || performance.now() - ST._grabToolT > 1000) return 0;
+			const tool = ST._grabTool;
+			const d = tool && tool.data;
+			if (!d || !d.matrix) return 0;
+			// ST-FIX: DOKLADNIE wzor gry (funkcja O w module chwytaka):
+			//   n = typeof tool.data.size === "number" ? tool.data.size : 25
+			//   Array.from({ length: Math.sqrt(n) })  -> bok siatki, dlugosc tablicy ucina do calkowitej
+			// Wczesniej brałem tankSize(), ktore przy braku data.size zwraca DLUGOSC MACIERZY (alokacja
+			// na maksymalne ulepszenie), wiec obrys wychodzil wiekszy niz realne narzedzie.
+			const size = (typeof d.size === "number" && d.size > 0) ? d.size : 25;
+			const v = Math.floor(Math.sqrt(size));
+			if (!ST._grabVLogged) {
+				ST._grabVLogged = true;
+				log("GRAB-DIAG: data.size=" + d.size + " matrix.len=" + d.matrix.length + " tankSize=" + tankSize(tool, d.matrix) + " -> v=" + v);
+			}
+			return Math.max(1, v);
+		} catch (e) { return 0; }
 	}
 	function getTrailAlpha(state) {
 		try {
@@ -4881,13 +5333,97 @@
 		const cam = state.session && state.session.camera;
 		return cam ? { x: wx - cam.x, y: wy - cam.y } : { x: wx, y: wy };
 	}
+	// ST-FIX (PRZYCZYNA ZLYCH ROZMIAROW): FH.rendering.getDrawPos zwraca WSPOLNY, MUTOWALNY obiekt
+	// (w bundlu: `ke=(e,t,n)=>(we.x=Math.round(t-cam.x),we.y=Math.round(n-cam.y),we)`), a nie nowy punkt.
+	// Kod podgladu robil: cur = worldToScreen(a); s1 = worldToScreen(a+1 komorka); ppc = |s1.x-cur.x|
+	// — po drugim wywolaniu cur I s1 to TEN SAM obiekt, wiec roznica zawsze 0 i ppc spadalo na awaryjne 6
+	// zamiast realnych 4 px. Stad wszystkie obrysy byly ~1,5x za duze (potwierdzone w logu: drawPosPerCell=0).
+	function w2s(state, wx, wy) { const p = worldToScreen(state, wx, wy); return { x: p.x, y: p.y }; }
+	// piksele na komorke: cellSize * zoom widoku — dokladnie w tej skali gra rysuje swoje nakladki
+	function cellPx(state) {
+		let z = 1;
+		try { const v = state.session && state.session.view && state.session.view.zoom; if (typeof v === "number" && v > 0) z = v; } catch (e) {}
+		return CELL * z;
+	}
 	function peerProjectileCount(id, p) { return ST.net.role === "client" ? (ST.remoteProjectiles || []).length : (p.projectiles || []).length; }
 
+	// ST-FEAT: wlasny podglad — podpis materialu w chwytaku oraz (tymczasowo) BIALY przerywany obrys
+	// rysowany DOKLADNIE tym samym kodem, ktorym widza cie inni. Jesli pokrywa sie z zoltym kursorem gry,
+	// geometria podgladu jest poprawna; jesli nie — widac o ile i w ktora strone sie rozjezdza.
+	function drawOwnGrabLabel(state, ctx, gc) {
+		try {
+			if (!ctx || !gc) return;
+			const mc = getMouseCell(state);
+			if (!mc) return;
+			const a0 = w2s(state, mc.x * CELL, mc.y * CELL);
+			const ppc = cellPx(state);
+			const v = grabGrid();
+			if (v > 0) {
+				const mid = Math.floor(v / 2);
+				drawCellBox(state, ctx, ppc, mc.x - mid, mc.y - mid, v, v, "#ffffff", 0.9, [3, 3]);
+			}
+			// ST-FEAT: nazwa nad WLASNYM podgladem budowy — dokladnie tak, jak widza to inni gracze.
+			// Pozycje bierzemy z tego samego hooka (_bpPos), wiec ramka podpisu siedzi tam, gdzie realnie
+			// stanie budynek, a nie nad kursorem.
+			try {
+				if (ST._bpT && performance.now() - ST._bpT < 300 && Array.isArray(ST._bpPos) && ST._bpPos.length) {
+					let mnX = 1e9, mxX = -1e9, mnY = 1e9, ty = null;
+					for (const q5 of ST._bpPos) {
+						if (!q5) continue;
+						const pt5 = w2s(state, (q5.x | 0) * CELL, (q5.y | 0) * CELL);
+						if (pt5.x < mnX) mnX = pt5.x;
+						if (pt5.x + 4 * ppc > mxX) mxX = pt5.x + 4 * ppc;
+						if (pt5.y < mnY) mnY = pt5.y;
+						if (ty == null) ty = q5.structureType;
+					}
+					if (mnX < 1e9 && ty != null) drawLabel(ctx, (mnX + mxX) / 2, mnY - 3, locName("s", ty) || String(ty));
+				}
+			} catch (e) {}
+			const tk = getGrabTank();
+			if (!tk || !tk.length) return;
+			let minY = 0; for (const q of tk) if ((q[1] | 0) < minY) minY = q[1] | 0;
+			const top = w2s(state, mc.x * CELL, (mc.y + minY) * CELL);
+			const nm = locName("e", tk[0][2]);
+			if (nm) drawLabel(ctx, a0.x + ppc / 2, top.y - 3, nm + " ×" + tk.length);
+		} catch (e) {}
+	}
 	function drawGhosts(state) {
-		if (!ST.peers.size) { if (ST.peerPuppets.size) removeAllPeerPuppets(); return; }
 		const gc = ensureGhostCanvas();
 		const ctx = gc && gc.getContext("2d");
-		if (ctx) ctx.clearRect(0, 0, gc.width, gc.height);
+		// ST-FIX: plotno czyscimy ZAWSZE, takze gdy lista graczy jest pusta. Wczesniej funkcja wychodzila
+		// przed clearRect, wiec ostatnia narysowana klatka (nick + kursor) zostawala na ekranie na zawsze —
+		// stad "wiszacy w powietrzu" nick gracza, ktory wyszedl przez alt+F4.
+		const kSc = ST._ghostScale || 1;
+		// ST-DIAG: jednorazowy zrzut wszystkich liczb potrzebnych do rozstrzygniecia rozmiaru nakladki
+		if (!ST._scaleLogged && ST.FH && gc) {
+			ST._scaleLogged = true;
+			try {
+				const g0 = w2s(state, 0, 0), g1 = w2s(state, CELL, 0);
+				const cv = document.getElementById("canvas");
+				const rr = cv ? cv.getBoundingClientRect() : null;
+				log("SCALE-DIAG: drawPosPerCell=" + Math.abs(g1.x - g0.x)
+					+ " zoom=" + JSON.stringify(state.session && state.session.view && state.session.view.zoom)
+					+ " canvas.w=" + (cv && cv.width) + " canvas.cssW=" + (rr && Math.round(rr.width))
+					+ " ghost.w=" + gc.width + " kSc=" + kSc + " dpr=" + window.devicePixelRatio);
+			} catch (e) { log("SCALE-DIAG err:", e && e.message); }
+		}
+		// widok w UKLADZIE GRY (piksele plotna / skala) — do testow "czy na ekranie"
+		const vw = gc ? gc.width / kSc : 0, vh = gc ? gc.height / kSc : 0;
+		const vbox = { width: vw, height: vh };
+		if (ctx) { ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, gc.width, gc.height); ctx.setTransform(kSc, 0, 0, kSc, 0, 0); }
+		// ST-FIX: gracz, ktory wyszedl bez czystego rozlaczenia (crash, kill procesu, zerwana sesja Steam),
+		// nie generuje zdarzenia "peer-disconnected" i wisialby w ST.peers do konca sesji.
+		try {
+			const tNow2 = performance.now();
+			for (const [id2, p2] of [...ST.peers]) {
+				const last2 = Math.max(p2.lastNet || 0, p2.lastSeen || 0);
+				if (last2 && tNow2 - last2 > 45000) {
+					ST.peers.delete(id2); removePeerPuppet(id2); ST._greeted.delete(id2);
+					log("peer " + (p2.nick || id2) + " milczy od 45 s — usuwam z podgladu");
+				}
+			}
+		} catch (e) {}
+		if (!ST.peers.size) { if (ST.peerPuppets.size) removeAllPeerPuppets(); drawOwnGrabLabel(state, ctx, gc); return; }
 		const now = performance.now();
 		for (const [id, p] of ST.peers) {
 			const dtSince = Math.min(now - (p.tUpdate || now), 250);
@@ -4897,7 +5433,7 @@
 			const speed = Math.hypot(p.vx || 0, p.vy || 0);
 			if (speed > 0.02 && p.syncedFacing == null) p.facing = (p.vx || 0) < 0 ? -1 : 1;
 			const facing = (p.syncedFacing === 1 || p.syncedFacing === -1) ? p.syncedFacing : (p.facing || 1);
-			const screen = worldToScreen(state, p.x + PUPPET_ANCHOR_DX, p.y + PUPPET_ANCHOR_DY);
+			const screen = w2s(state, p.x + PUPPET_ANCHOR_DX, p.y + PUPPET_ANCHOR_DY); // ST-FIX: kopia, patrz w2s
 			const pp = ensurePeerPuppet(state, id);
 			if (pp) {
 				pp.puppet.x = screen.x; pp.puppet.y = screen.y;
@@ -4912,7 +5448,7 @@
 				p._lastProjCount = projCount;
 				if (pp.muzzleFlash) pp.muzzleFlash.visible = now < pp.flashUntil;
 			}
-			const onScreen = gc && screen.x > -20 && screen.y > -20 && screen.x < gc.width + 20 && screen.y < gc.height + 20;
+			const onScreen = gc && screen.x > -20 && screen.y > -20 && screen.x < vw + 20 && screen.y < vh + 20;
 			if (ctx && gc && onScreen) {
 				ctx.globalAlpha = stale ? 0.4 : 1;
 				ctx.font = "10px monospace"; ctx.textAlign = "center";
@@ -4922,52 +5458,177 @@
 				ctx.globalAlpha = 1;
 			} else if (ctx && gc && !stale) {
 				if (!p.color) p.color = peerColor(id);
-				ctx.globalAlpha = 0.85; drawOffscreenIndicator(ctx, gc, screen, p.color, p.nick); ctx.globalAlpha = 1;
+				ctx.globalAlpha = 0.85; drawOffscreenIndicator(ctx, vbox, screen, p.color, p.nick); ctx.globalAlpha = 1;
 			}
 		}
 		if (ctx && gc) {
 			ctx.fillStyle = "#ffd54f";
 			const drawProj = (list) => {
 				if (!list) return;
-				for (const pr of list) { const s = worldToScreen(state, pr.x, pr.y); if (s.x < -20 || s.y < -20 || s.x > gc.width + 20 || s.y > gc.height + 20) continue; ctx.fillRect(s.x - 2, s.y - 2, 4, 4); }
+				for (const pr of list) { const s = worldToScreen(state, pr.x, pr.y); if (s.x < -20 || s.y < -20 || s.x > vw + 20 || s.y > vh + 20) continue; ctx.fillRect(s.x - 2, s.y - 2, 4, 4); }
 			};
 			drawProj(ST.remoteProjectiles);
 			for (const p of ST.peers.values()) drawProj(p.projectiles);
+			drawOwnGrabLabel(state, ctx, gc); // ST-FEAT: wlasny podpis takze przy innych graczach
 		}
-		// --- Preview akcji w czasie rzeczywistym (temps réel): fantom pozy + reticle grabbera/vacuum ---
-		// Pokazuje GDZIE inny gracz zaraz postawi budynek / gdzie zbiera zasoby — żeby nie robić tego w tym
-		// samym miejscu. Rysowane w kolorze gracza. Kursor w świecie (mwx/mwy) + intencja budowy (bt/boffs).
+		// --- Podglad akcji: co gracz zaraz postawi / gdzie kopie / co niesie ---
+		// ST-FIX: wszystko liczone w ABSOLUTNYCH komorkach (mcx/mcy), tak jak robi to gra.
 		if (ctx && gc) {
+			const SNAP = 4; // A.snapGridCellSize — budynki wskakuja na siatke co 4 komorki
 			for (const [id, p] of ST.peers) {
-				if (p.mwx == null || p.mwy == null || now - p.lastSeen > 3000) continue;
+				if (p.mcx == null || p.mcy == null || now - p.lastSeen > 3000) continue;
 				if (!p.color) p.color = peerColor(id);
-				const cur = worldToScreen(state, p.mwx, p.mwy);
-				if (cur.x < -80 || cur.y < -80 || cur.x > gc.width + 80 || cur.y > gc.height + 80) continue;
-				const s1 = worldToScreen(state, p.mwx + 4, p.mwy); // +1 komórka (=4 world) → piksele/komórkę (skala zoomu)
-				let ppc = Math.abs(s1.x - cur.x); if (!(ppc > 0.5)) ppc = 6;
-				if (p.bt != null && p.btT && performance.now() - p.btT < 2000 && Array.isArray(p.boffs) && p.boffs.length) {
-					// FANTOM POZY — prostokąty tam, gdzie gracz zaraz postawi (pierwszy offset = pod kursorem)
-					const base = p.boffs[0];
-					ctx.save();
-					ctx.strokeStyle = p.color.body; ctx.fillStyle = p.color.body; ctx.lineWidth = 2;
-					const sz = Math.max(8, ppc);
-					for (const off of p.boffs) {
-						const wx = p.mwx + (((off && off[0]) | 0) - (base[0] | 0)) * 4, wy = p.mwy + (((off && off[1]) | 0) - (base[1] | 0)) * 4;
-						const s = worldToScreen(state, wx, wy);
-						ctx.globalAlpha = 0.22; ctx.fillRect(s.x - sz / 2, s.y - sz / 2, sz, sz);
-						ctx.globalAlpha = 0.9; ctx.strokeRect(s.x - sz / 2, s.y - sz / 2, sz, sz);
+				const cur = w2s(state, p.mcx * CELL, p.mcy * CELL);
+				if (cur.x < -160 || cur.y < -160 || cur.x > vw + 160 || cur.y > vh + 160) continue;
+				const ppc = cellPx(state);
+
+				const selBuilding = p.sk === 2;
+				const selGrabber = p.sk === 3 && p.sid === 2;
+				const selShovel = !selBuilding && !selGrabber && (p.tools || []).some((n2) => String(n2).toLowerCase().indexOf("shovel") >= 0);
+
+				if (selBuilding && p.bt != null && p.btT && performance.now() - p.btT < 2000) {
+					const cells = structCells(p.bt);
+					const bx = Math.floor(p.mcx / SNAP) * SNAP, by = Math.floor(p.mcy / SNAP) * SNAP;
+					const offs = (Array.isArray(p.boffs) && p.boffs.length) ? p.boffs : [[0, 0]];
+					const base = offs[0];
+					// ST-FEAT: LINIA PRZECIAGNIECIA — gra przy przeciaganiu stawia rzad budynkow od
+					// session.building.start do kursora, co krok siatki. Odtwarzamy to samo.
+					// ST-FEAT: jesli mamy pozycje prosto z gry — rysujemy dokladnie je (schodki, warianty, katy)
+					if (Array.isArray(p.bprev) && p.bprev.length && p.bprevT && performance.now() - p.bprevT < 2500) {
+						let bx0 = 1e9, by0 = 1e9, bx1 = -1e9;
+						for (const q3 of p.bprev) {
+							const gx = q3[0] | 0, gy = q3[1] | 0;
+							const pt = w2s(state, gx * CELL, gy * CELL);
+							if (pt.x < bx0) bx0 = pt.x; if (pt.y < by0) by0 = pt.y;
+							if (pt.x + SNAP * ppc > bx1) bx1 = pt.x + SNAP * ppc;
+							let drawn = false;
+							// ST-FEAT: PRAWDZIWA GRAFIKA budynku — funkcja rysujaca gry, zlapana tym samym
+							// hookiem. Dziala dopiero gdy TY sam raz otworzyles tryb budowania (wtedy gra
+							// ja wywoluje i hook ja zapamietuje); do tego czasu leci kolorowy silueta.
+							if (ST._drawStruct) {
+								try {
+									ctx.save(); ctx.globalAlpha = 0.75;
+									ST._drawStruct(state, { type: q3[2], x: gx, y: gy }, { ctx: ctx, placing: true });
+									ctx.restore(); drawn = true;
+								} catch (e) { ST._drawStruct = null; }
+							}
+							if (!drawn) drawCellBox(state, ctx, ppc, gx, gy, SNAP, SNAP, p.color.body, 0.9, null);
+							else drawCellBox(state, ctx, ppc, gx, gy, SNAP, SNAP, p.color.body, 0.55, null);
+						}
+						// ST-FEAT: strzalka kierunku. Gra rysuje swoja wlasna funkcja, ktora pisze wprost do
+						// swojego overlayContext i nie przyjmuje kontekstu parametrem — nie da sie jej
+						// przekierowac na nasze plotno, wiec rysujemy odpowiednik.
+						// ST-FIX: kierunek bierzemy z PRZECIAGNIECIA (start -> kursor). Kolejnosc pozycji w
+						// liscie gry nie jest gwarantowana, przez co strzalka pokazywala w druga strone.
+						{
+							// ST-FIX: os strzalki ograniczona do tego, co dopuszcza tryb budowania (p.bd).
+							// Bez tego przy pionowym przeciagnieciu przenosnika strzalka szla w gore/dol,
+							// czego ta struktura w ogole nie potrafi.
+							const okH = !p.bd || p.bd.indexOf("horizontal") >= 0;
+							const okV = !p.bd || p.bd.indexOf("vertical") >= 0;
+							let dx2 = 0, dy2 = 0;
+							let rx = 0, ry = 0;
+							if (p.bsx != null && p.bsy != null) { rx = p.mcx - p.bsx; ry = p.mcy - p.bsy; }
+							if (!rx && !ry && p.bprev.length >= 2) {
+								const f2 = p.bprev[0], l2 = p.bprev[p.bprev.length - 1];
+								rx = (l2[0] | 0) - (f2[0] | 0); ry = (l2[1] | 0) - (f2[1] | 0);
+							}
+							if (okH && !okV) dx2 = Math.sign(rx);
+							else if (okV && !okH) dy2 = Math.sign(ry);
+							else if (Math.abs(rx) >= Math.abs(ry)) dx2 = Math.sign(rx);
+							else dy2 = Math.sign(ry);
+							if (dx2 || dy2) {
+								// skrajny blok w kierunku jazdy
+								let best = p.bprev[0], bd = -1e18;
+								for (const q4 of p.bprev) { const d4 = (q4[0] | 0) * dx2 + (q4[1] | 0) * dy2; if (d4 > bd) { bd = d4; best = q4; } }
+								const side = SNAP * ppc, half = side / 2;
+								const e0 = w2s(state, (best[0] | 0) * CELL, (best[1] | 0) * CELL);
+								const ex = e0.x + half + dx2 * side, ey = e0.y + half + dy2 * side;
+								const ang = Math.atan2(dy2, dx2), r2 = Math.max(6, half * 1.15);
+								ctx.save();
+								ctx.translate(ex, ey); ctx.rotate(ang);
+								ctx.beginPath(); ctx.moveTo(r2, 0); ctx.lineTo(-r2 * 0.55, r2 * 0.8); ctx.lineTo(-r2 * 0.55, -r2 * 0.8); ctx.closePath();
+								ctx.globalAlpha = 1; ctx.fillStyle = "#3ad63a";
+								ctx.fill();
+								ctx.lineWidth = Math.max(1.5, r2 * 0.16); ctx.strokeStyle = "rgba(0,0,0,.75)"; ctx.stroke();
+								ctx.restore();
+							}
+						}
+						if (bx0 < 1e9) drawLabel(ctx, (bx0 + bx1) / 2, by0 - 3, locName("s", p.bt) || String(p.bt));
+						continue;
 					}
-					ctx.restore();
+					const anchors = [];
+					const isRect = p.bm && (p.bm.indexOf("rectangle") === 0 || p.bm.indexOf("launcherRect") === 0);
+					const isSingle = p.bm && p.bm.indexOf("single") === 0;
+					if (!isSingle && p.bsx != null && p.bsy != null && (p.bsx !== bx || p.bsy !== by)) {
+						const sx = Math.floor(p.bsx / SNAP) * SNAP, sy = Math.floor(p.bsy / SNAP) * SNAP;
+						if (isRect) {
+							// ST-FEAT: tryb "Prostokat" — wypelniamy caly obszar, a nie linie
+							const x0 = Math.min(sx, bx), x1 = Math.max(sx, bx);
+							const y0 = Math.min(sy, by), y1 = Math.max(sy, by);
+							for (let yy = y0; yy <= y1 && anchors.length < 400; yy += SNAP)
+								for (let xx = x0; xx <= x1 && anchors.length < 400; xx += SNAP) anchors.push([xx, yy]);
+						} else {
+							const dX = bx - sx, dY = by - sy;
+							if (Math.abs(dX) >= Math.abs(dY)) {
+								const st = dX >= 0 ? SNAP : -SNAP, n2 = Math.min(128, Math.abs(dX) / SNAP);
+								for (let i2 = 0; i2 <= n2; i2++) anchors.push([sx + i2 * st, sy]);
+							} else {
+								const st = dY >= 0 ? SNAP : -SNAP, n2 = Math.min(128, Math.abs(dY) / SNAP);
+								for (let i2 = 0; i2 <= n2; i2++) anchors.push([sx, sy + i2 * st]);
+							}
+						}
+					} else anchors.push([bx, by]);
+					let box = null;
+					for (const a2 of anchors) for (const off of offs) {
+						const ox = a2[0] + (((off && off[0]) | 0) - (base[0] | 0)) * SNAP;
+						const oy = a2[1] + (((off && off[1]) | 0) - (base[1] | 0)) * SNAP;
+						// ST-FIX: pelna, jednolita plama zamiast siatki pustych kratek — u wlasciciela
+						// gra pokazuje wypelniony blok, wiec obrys per komorka tylko mylil
+						const b = cells
+							? drawCellRects(state, ctx, ppc, ox, oy, cells, p.color.body, 0.55, 0)
+							: drawCellBox(state, ctx, ppc, ox, oy, SNAP, SNAP, p.color.body, 0.9, null);
+						if (b) { if (!box || b.minY < box.minY) box = b; drawCellBox(state, ctx, ppc, ox, oy, SNAP, SNAP, p.color.body, 0.95, null); }
+					}
+					if (box) drawLabel(ctx, (box.minX + box.maxX) / 2, box.minY - 3, locName("s", p.bt) || String(p.bt));
+				} else if (selGrabber && p.gv > 0) {
+					const v = Math.min(32, p.gv | 0), mid = Math.floor(v / 2);
+					const box = drawCellBox(state, ctx, ppc, p.mcx - mid, p.mcy - mid, v, v, p.color.body, 0.85, null);
+					if (Array.isArray(p.gslots) && p.gslots.length) {
+						for (const q of p.gslots) {
+							if (!q) continue;
+							drawCellRects(state, ctx, ppc, p.mcx + (q[0] | 0), p.mcy + (q[1] | 0), [[0, 0]], elemColor(state, q[2]) || p.color.body, 0.95, 0);
+						}
+						const nmE = locName("e", p.gslots[0][2]);
+						if (nmE && box) drawLabel(ctx, (box.minX + box.maxX) / 2, box.minY - 3, nmE + " ×" + p.gslots.length);
+					}
+				} else if (selShovel) {
+					// ST-FIX: kotwica z session.action.point nadawcy — to samo miejsce, ktore gra podswietla
+					// jemu samemu, wiec obszar widac ZANIM kopnie
+					if (p.dax != null && p.daT && performance.now() - p.daT < 1500) {
+						if (p.dcells) {
+							// ST-FIX: gra podswietla tylko te komorki wzoru, w ktorych JEST co kopac —
+							// pusty wzor-kolo nad powietrzem nie jest podswietlany. Swiat mamy ten sam,
+							// wiec filtrujemy u siebie przez FH.world.isCellEmpty.
+							let solid = p.dcells;
+							try {
+								const W = ST.FH && ST.FH.world;
+								if (W && typeof W.isCellEmpty === "function") {
+									solid = [];
+									for (const c2 of p.dcells) if (!W.isCellEmpty(state, p.dax + c2[0], p.day + c2[1])) solid.push(c2);
+								}
+							} catch (e) { solid = p.dcells; }
+							if (solid.length) drawCellRects(state, ctx, ppc, p.dax, p.day, solid, p.color.body, 0.45, 0);
+						}
+						else if (p.dw > 0) drawCellBox(state, ctx, ppc, p.dax - (p.dw >> 1), p.day - (p.dh >> 1), p.dw, p.dh, p.color.body, 0.85, [4, 3]);
+					}
 				} else if ((p.tools || []).indexOf("vacuum") >= 0) {
-					// RETICLE grabbera/vacuum — okrąg zasięgu tam, gdzie gracz zbiera (żeby nie brać tych samych zasobów)
-					const r = Math.max(10, ppc * 4); // ~R=4 komórki (zasięg vacuum z hostHarvestVacuum)
+					const r = Math.max(10, ppc * 4);
 					ctx.save();
-					ctx.strokeStyle = p.color.body; ctx.fillStyle = p.color.body; ctx.lineWidth = 2;
+					ctx.strokeStyle = p.color.body; ctx.lineWidth = 2;
 					ctx.globalAlpha = 0.9; ctx.setLineDash([5, 4]);
-					ctx.beginPath(); ctx.arc(cur.x, cur.y, r, 0, Math.PI * 2); ctx.stroke();
-					ctx.setLineDash([]);
-					ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.arc(cur.x, cur.y, 2.5, 0, Math.PI * 2); ctx.fill();
-					ctx.restore();
+					ctx.beginPath(); ctx.arc(cur.x + ppc / 2, cur.y + ppc / 2, r, 0, Math.PI * 2); ctx.stroke();
+					ctx.setLineDash([]); ctx.restore();
 				}
 			}
 			ctx.globalAlpha = 1;
@@ -5005,6 +5666,47 @@
 				};
 				w._st = true; FH.world.excavate = w;
 			}
+			// ST-FEAT undo: cofniecie BUDOWY wola FH.structures.removeAt / removeAtPositions. U klienta ta
+			// sciezka nie byla nigdzie przechwytywana (hook _demol siedzi na obszarowym demolisherze), wiec
+			// usuniecie nie docieralo do hosta i lustro natychmiast je cofalo. Forwardujemy je jako "demolish".
+			// Gate jest WASKI: tylko gdy to gra wykonuje wlasne cofniecie — zwykle usuwanie i aplikowanie
+			// sieci ida stara droga (inaczej reconcile klienta kasowalby struktury u hosta).
+			try {
+				const SA2 = FH.structures;
+				if (SA2 && typeof SA2.removeAt === "function" && !SA2.removeAt._st) {
+					const oRm = SA2.removeAt;
+					const wRm = function (state, x, y, opts) {
+						try {
+							if (isClientSync() && ST.wsx.paused && ST._inGameUndo()) {
+								let st2 = null; try { st2 = SA2.getAtCell ? SA2.getAtCell(state, x, y) : null; } catch (e) {}
+								queueUndoRemoval([st2 ? slimStruct(st2) : { x: x, y: y }]);
+								return;
+							}
+						} catch (e) {}
+						return oRm.apply(this, arguments);
+					};
+					wRm._st = true; SA2.removeAt = wRm;
+				}
+				if (SA2 && typeof SA2.removeAtPositions === "function" && !SA2.removeAtPositions._st) {
+					const oRmP = SA2.removeAtPositions;
+					const wRmP = function (state, positions, opts) {
+						try {
+							if (isClientSync() && ST.wsx.paused && ST._inGameUndo() && Array.isArray(positions) && positions.length) {
+								const list2 = [];
+								for (const q of positions) {
+									if (!q) continue;
+									let st2 = null; try { st2 = SA2.getAtCell ? SA2.getAtCell(state, q.x, q.y) : null; } catch (e) {}
+									list2.push(st2 ? slimStruct(st2) : { x: q.x, y: q.y });
+								}
+								queueUndoRemoval(list2);
+								return;
+							}
+						} catch (e) {}
+						return oRmP.apply(this, arguments);
+					};
+					wRmP._st = true; SA2.removeAtPositions = wRmP;
+				}
+			} catch (e) { log("removeAt hook error:", e && e.message); }
 			// 0.9.159: ZAGANIACZ — encje stworkow zyja w store.mods (host nadpisuje klienta co 1 s przez res.st),
 			// wiec lokalna proba lapania u klienta byla cofana syncem (chmara przy broni, capture bez konca).
 			// Lapanie/spawn/wyrzut ida do hosta; wynik wraca istniejacym syncem st.
@@ -5124,15 +5826,144 @@
 			} catch (e) { log("dump error:", e.message); }
 		}
 		const now = performance.now();
+		// ST-FIX (czerwone kafle u klienta po Ctrl+Z u hosta): cofniecie ROZBIORKI odbudowuje struktury
+		// przez zwykle FH.structures.build, a gra w pierwszej chwili oznacza je jako "queued" (czerwone),
+		// zanim symulacja to rozstrzygnie. Rozgloszenie "st add" leci NATYCHMIAST, wiec klient dostaje
+		// ten przejsciowy stan i juz przy nim zostaje: kolejny snapshot pomija strukture, bo jej podpis
+		// (_structSig) sie nie zmienil. Po kazdym lokalnym cofnieciu wymuszamy wiec pelny snapshot z
+		// opoznieniem — host odsyla wtedy stan JUZ ustalony i klient sie poprawia.
+		try {
+			if (ST._inGameUndo && ST._inGameUndo()) ST._undoResyncAt = now + 1500;
+			if (ST._undoResyncAt && now > ST._undoResyncAt) {
+				ST._undoResyncAt = 0;
+				if (ST.net.role === "host") {
+					ST._snapForce = true; ST._lastSnap = 0;
+					// ST-FIX: cofniecie przepisuje KOMORKI TERENU pod strukturami, a te zapisy nie ustawiaja
+					// chunkShouldUpdate — lustro je pomija i u klienta zostaje stary (czerwony) teren.
+					// Poprzednio ratowal to pelny re-send swiata: dzialalo, ale 9216 chunkow schodzilo
+					// ~10 s i gracz widzial, jak bloki "odzywaja" partiami. Teraz odswiezamy TYLKO obszar
+					// ostatniej rozbiorki — cofniecie odbudowuje dokladnie ja. markUrgent czysci przy okazji
+					// hashe wierszy, wiec nic nie zostanie uznane za "juz wyslane".
+					let marked = 0;
+					try {
+						const bs2 = ST._lastDemolBounds;
+						if (bs2 && bs2.length) {
+							for (const b of bs2) {
+								for (let yy = b.y0; yy <= b.y1 + CHUNK; yy += CHUNK)
+									for (let xx = b.x0; xx <= b.x1 + CHUNK; xx += CHUNK) { markUrgent(state, xx, yy, 1); marked++; if (marked > 400) break; }
+								if (marked > 400) break;
+							}
+						}
+					} catch (e) {}
+					// ST-FIX: nie czekamy, az klient sam wykryje braki (petla ORPHAN-Q szla po ~5 struktur
+					// na runde — stad odbudowa "liniami"). Host od razu wysyla WSZYSTKIE struktury z obszaru,
+					// ktory wlasnie zostal odbudowany.
+					try {
+						const SAu = structNs(), bs3 = ST._lastDemolBounds;
+						if (SAu && SAu.getAtCell && bs3 && bs3.length && ST.peers.size) {
+							const seen3 = new Set(), list3 = [];
+							for (const b of bs3) {
+								for (let yy = b.y0 - 4; yy <= b.y1 + 4 && list3.length < 500; yy += 4)
+									for (let xx = b.x0 - 4; xx <= b.x1 + 4 && list3.length < 500; xx += 4) {
+										let st3 = null; try { st3 = SAu.getAtCell(state, xx, yy); } catch (e) {}
+										if (!st3) continue;
+										const k3 = structKey(st3);
+										if (seen3.has(k3)) continue;
+										seen3.add(k3); list3.push(slimStruct(st3));
+									}
+							}
+							if (list3.length) { net.send({ t: "st", k: "add", list: list3 }); log("po cofnieciu: dosylam " + list3.length + " struktur z obszaru rozbiorki"); }
+						}
+					} catch (e) { log("dosylka po cofnieciu blad:", e && e.message); }
+					if (marked) log("po cofnieciu: snapshot struktur + odswiezenie " + marked + " punktow terenu (rect rozbiorki)");
+					else { enqueueFullWorld(); log("po cofnieciu: snapshot struktur + pelny swiat (brak zapamietanego rectu)"); }
+				}
+			}
+			// ST-FIX: to samo po KAZDYM rozgloszeniu struktury w stanie queued (patrz slimStruct)
+			if (ST._qResyncAt && now > ST._qResyncAt) {
+				ST._qResyncAt = 0;
+				if (ST.net.role === "host") { ST._snapForce = true; ST._lastSnap = 0; log("po rozgloszeniu queued: wymuszam pelny snapshot struktur"); }
+			}
+		} catch (e) {}
 		if (net && ST.net.role !== "idle" && state.store && state.store.player && now - ST._lastPosSend > 33) {
 			ST._lastPosSend = now;
 			const pl = state.store.player;
 			const bi = getBuildIntent(state);
+			// ST-FEAT: przy przeciaganiu gra trzyma komorke poczatkowa w session.building.start
+			let bs = null, bmode = null, bdirs = null;
+			try {
+				const bst = state.session && state.session.building && state.session.building.start;
+				if (bst && typeof bst.x === "number" && state.session.building.placing) bs = { x: bst.x | 0, y: bst.y | 0 };
+				// ST-FEAT: AKTUALNY TRYB BUDOWANIA. Gra wybiera go tak:
+				//   cfg.buildModes[(store.options.buildModeIndices[String(typ)] ?? 0) % cfg.buildModes.length].type
+				// typy: single | singleDirectional | line | rectangle | rectangleDirectional | launcherRect*
+				if (bi && bi.k === 2) {
+					const cfg2 = ST.FH.structures && ST.FH.structures.getConfig ? ST.FH.structures.getConfig(bi.id) : null;
+					const modes = cfg2 && cfg2.buildModes;
+					if (Array.isArray(modes) && modes.length) {
+						const idxs = state.store.options && state.store.options.buildModeIndices;
+						const ix = (idxs && idxs[String(bi.id)]) || 0;
+						const md = modes[ix % modes.length];
+						bmode = md && md.type ? String(md.type) : null;
+						// ST-FIX: dozwolone osie budowania. Przenosnik ma directions:["horizontal"], wiec
+						// strzalka nigdy nie powinna pokazywac w gore/dol, nawet gdy przeciagniecie bylo pionowe.
+						if (md && Array.isArray(md.directions) && md.directions.length) bdirs = md.directions.join(",");
+					}
+				}
+			} catch (e) {}
 			const mw = getMouseWorld(state);
-			if (bi && !ST._biLogged) { ST._biLogged = true; log("Intencja pozy wykryta (fantom powinien się pokazać u drugiego gracza): bt=" + bi.bt); }
+			const mc = getMouseCell(state);
+			// ST-FIX: gra liczy podglad lopaty z session.action.point (a nie z kursora) — ten sam punkt
+			// widac w jej kodzie rysowania: Math.floor(session.action.point.x / cellSize). Dzieki temu
+			// obszar pokazuje sie ZANIM gracz kopnie, a nie po fakcie.
+			let dax = null, day = null;
+			try {
+				const ap = state.session && state.session.action && state.session.action.point;
+				if (ap && typeof ap.x === "number") { dax = Math.floor(ap.x / 4); day = Math.floor(ap.y / 4); }
+			} catch (e) {}
+			if (bi && bi.k === 2 && !ST._biLogged) { ST._biLogged = true; log("Intencja pozy wykryta (fantom u drugiego gracza): id=" + JSON.stringify(bi.id) + " " + bi.bw + "x" + bi.bh); }
 			net.send({ t: "pos", x: Math.round(pl.x * 10) / 10, y: Math.round(pl.y * 10) / 10, tools: getVisibleTools(state), facing: getFacing(state), aim: getAimAngle(state), trail: getTrailAlpha(state),
 				mwx: mw ? mw.x : null, mwy: mw ? mw.y : null,           // kursor w świecie (preview akcji)
-				bt: bi ? bi.bt : null, boffs: bi ? bi.offs : null });   // intencja pozy: typ + offsety (fantom u innych graczy)
+				mcx: mc ? mc.x : null, mcy: mc ? mc.y : null,           // ST-FIX: kursor w komorkach (obrysy narzedzi)
+				sk: bi ? bi.k : 0, sid: bi ? bi.id : null,              // ST-FIX: kategoria (2=budynek, 3=narzedzie) + id wybranego
+				bt: bi && bi.k === 2 ? bi.id : null, boffs: bi ? bi.offs : null,
+				bw: bi ? bi.bw : 1, bh: bi ? bi.bh : 1,                 // rozmiar fundamentu w komorkach
+				dw: ST._digW || 0, dh: ST._digH || 0,                   // rozmiar obszaru lopaty
+				dax: dax, day: day,                                     // ST-FIX: gdzie poleci wykop (predykcja gry)
+				bsx: bs ? bs.x : null, bsy: bs ? bs.y : null,           // ST-FEAT: poczatek przeciagniecia budowy
+				bm: bmode,                                              // ST-FEAT: tryb budowania (linia/prostokat/pojedynczo)
+				bd: bdirs,                                              // ST-FIX: dozwolone osie (horizontal/vertical)
+				gv: grabGrid() });                                      // bok siatki chwytaka
+			// ST-FEAT: zawartosc tanku grabbera osobno i TYLKO przy zmianie — 30 Hz z lista slotow to za duzo.
+			try {
+				const tk = getGrabTank();
+				const sig = tk && tk.length ? tk.map((q) => q.join(",")).join(";") : "";
+				if (sig !== (ST._tankSig || "") && now - (ST._tankSentT || 0) > 100) {
+					ST._tankSig = sig; ST._tankSentT = now;
+					net.send({ t: "gtank", s: tk || [] });
+				}
+				// ST-FIX: maska lopaty — tez tylko przy zmianie (zmienia sie wylacznie przy ulepszeniu)
+				if (ST._digSig && ST._digSig !== ST._digSentSig) { ST._digSentSig = ST._digSig; net.send({ t: "dmask", m: ST._digMask }); }
+				// ST-FEAT: DOKLADNE pozycje podgladu budowy prosto z gry (hook bundle "_bpPos"). Rekonstrukcja
+				// linii/prostokata po naszej stronie nie odtwarzala schodkow przy budowaniu pod katem —
+				// gra ma wlasny raster (kat blokowany, spanTiles, warianty lewo/prawo per pozycja).
+				const bp = (ST._bpT && now - ST._bpT < 300 && Array.isArray(ST._bpPos)) ? ST._bpPos : null;
+				let bpsig = "";
+				if (bp && bp.length) {
+					const lim = Math.min(bp.length, 200);
+					const arr = [];
+					for (let i3 = 0; i3 < lim; i3++) { const q3 = bp[i3]; if (q3) arr.push([q3.x | 0, q3.y | 0, q3.structureType]); }
+					if (!arr.length) { if (ST._bpSig) { ST._bpSig = ""; net.send({ t: "bprev", p: [] }); } }
+					else bpsig = arr.length + ":" + arr[0].join(",") + ":" + arr[arr.length - 1].join(",");
+					// ST-FIX: dosylamy te sama liste co 700 ms. Bez tego przy nieruchomej myszy podpis sie nie
+					// zmienial, nic nie leciało, u odbiorcy wpis "przeterminowywal sie" i tekstury znikaly,
+					// wracajac dopiero po ruchu myszka.
+					if (bpsig && (bpsig !== (ST._bpSig || "") || now - (ST._bpSentT || 0) > 700) && now - (ST._bpSentT || 0) > 80) {
+						ST._bpSig = bpsig; ST._bpSentT = now;
+						net.send({ t: "bprev", p: arr });
+					}
+				} else if (ST._bpSig) { ST._bpSig = ""; net.send({ t: "bprev", p: [] }); }
+			} catch (e) {}
 		}
 		// ping/pong (RTT) — wysyłka co 1s, odświeżanie HUD co 0.5s (wkład dotNine)
 		if (net && ST.net.role !== "idle" && ST.peers.size && now - (ST._lastPingSent || 0) > 1000) {
@@ -5160,6 +5991,53 @@
 		// OSIEROCONE KAFLE (0.9.136): kafel fundamentu (terrain Block 15..18) bez zywej struktury to smiec,
 		// ktory renderuje sie na czerwono i ktorego gra sama nie usunie. Sprzatamy okolice graczy co 5 s,
 		// z potwierdzeniem w drugim przebiegu (kafel w trakcie stawiania bywa chwilowo "bez struktury").
+		// ST-FIX (czerwone kafle po Ctrl+Z hosta): sprzatacz osieroconych kafli byl WYLACZONY dla klienta
+		// (`role !== "client"`), a to wlasnie u klienta zostaja czerwone fundamenty bez struktury.
+		// Klient nie moze ich jednak kasowac sam — host moze miec tam zywy budynek. Wiec: klient tylko
+		// PYTA hosta o te komorki, a host odpowiada albo struktura (st add), albo zgoda na sprzatanie.
+		if (isClientSync() && ST.wsx.paused && state.store.scene && state.store.scene.active !== 1 && now - (ST._orphanAskT || 0) > 1500) {
+			ST._orphanAskT = now;
+			try {
+				const sim = state.shared.sim, W = sim.width;
+				const ids = new Uint32Array(sim.cellIds.buffer, sim.cellIds.byteOffset, sim.cellIds.length);
+				const tt = sim.terrainType, SA = structNs();
+				if (ids && tt && SA && SA.getAtCell) {
+					if (!ST._orphanCliSeen) ST._orphanCliSeen = new Map();
+					const spots = [{ x: state.store.player.x / 4, y: state.store.player.y / 4 }];
+					for (const pp2 of ST.peers.values()) spots.push({ x: pp2.tx / 4, y: pp2.ty / 4 });
+					// ST-FIX: zglaszamy KOTWICE blokow 4x4, nie kazda komorke z osobna. Jedna struktura to
+					// 16 komorek, wiec limit 80 komorek oznaczal ~5 struktur na rundę — stad "odzywanie"
+					// po jednej linii co kilka sekund. Po zwiniÄ™ciu do siatki 4 limit to 400 STRUKTUR.
+					const ask = [], widz = new Set(), askKey = new Set();
+					for (const sp of spots) {
+						const cx = sp.x | 0, cy = sp.y | 0;
+						if (!(cx > 0 && cy > 0 && cx < W)) continue;
+						const x0 = Math.max(1, cx - 160), x1 = Math.min(W - 2, cx + 160);
+						const y0 = Math.max(1, cy - 120), y1 = Math.min(sim.height - 2, cy + 120);
+						for (let y = y0; y <= y1 && ask.length < 400; y++) for (let x = x0; x <= x1 && ask.length < 400; x++) {
+							const i = x + y * W, id = ids[i];
+							if (id <= 0 || id > 1000) continue;
+							if (!TEREN_STRUKTUR.has(tt[id])) continue;
+							try { if (SA.getAtCell(state, x, y)) continue; } catch (e) { continue; }
+							widz.add(i);
+							const od = ST._orphanCliSeen.get(i);
+							if (!od) { ST._orphanCliSeen.set(i, now); continue; } // pierwszy raz — moze wlasnie powstaje
+							if (now - od < 1500) continue;   // ST-FIX: bylo 5 s — za wolno przy odbudowie z Ctrl+Z
+							const bxk = Math.floor(x / 4) * 4, byk = Math.floor(y / 4) * 4;
+							const kk = bxk + "," + byk;
+							if (askKey.has(kk)) continue;    // ST-FIX: jeden wpis na BLOK, nie na komorke
+							askKey.add(kk);
+							ask.push([bxk, byk]);
+						}
+					}
+					for (const k of ST._orphanCliSeen.keys()) if (!widz.has(k)) ST._orphanCliSeen.delete(k);
+					if (ask.length) {
+						net.send({ t: "act", k: "orphanQ", cells: ask });
+						diagToHost("osierocone kafle (czerwone) u mnie: " + ask.length + " np. " + ask[0][0] + "," + ask[0][1]);
+					}
+				}
+			} catch (e) { if (!ST._orphanCliErr) { ST._orphanCliErr = true; log("skan osieroconych u klienta blad:", e.message); } }
+		}
 		if (ST.net.role !== "client" && state.store.scene && state.store.scene.active !== 1 && now - (ST._orphanScanT || 0) > 5000) {
 			ST._orphanScanT = now;
 			try {
