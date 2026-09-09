@@ -110,6 +110,12 @@ $patches = Get-Content "$PSScriptRoot\src\patches.json" -Raw -Encoding UTF8 | Co
 try {
     $gv = (Get-Content "$res\app\package.json" -Raw | ConvertFrom-Json).version
     Write-Host "Game build: $gv (mod supports: $($patches.supportedVersions -join ', '))"
+    # wersja MODA, ktory wlasnie instalujemy - bez tego nie widac, ze Steam podsunal stara kopie
+    try {
+        $head = (Get-Content "$PSScriptRoot\src\sandtogether.js" -TotalCount 40) -join "`n"   # -Raw i -TotalCount sie wykluczaja
+        $mv = [regex]::Match($head, 'const VER = "([^"]+)"')
+        if ($mv.Success) { Write-Host "Mod version: $($mv.Groups[1].Value)   (installing from $PSScriptRoot)" -ForegroundColor Cyan }
+    } catch {}
 } catch {}
 
 # --- 5. Copy mod files ------------------------------------------------------

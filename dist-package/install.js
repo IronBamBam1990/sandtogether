@@ -157,6 +157,11 @@ try {
   const gv = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8')).version;
   const sup = JSON.parse(fs.readFileSync(path.join(SRC, 'patches.json'), 'utf8')).supportedVersions;
   console.log('Game build: ' + gv + ' (mod supports: ' + sup.join(', ') + ')');
+  // wersja MODA z instalowanych plikow — pokazuje od razu, gdy Steam podsunal stara kopie
+  try {
+    const mv = /const VER = "([^"]+)"/.exec(fs.readFileSync(path.join(SRC, 'sandtogether.js'), 'utf8').slice(0, 4000));
+    if (mv) console.log('Mod version: ' + mv[1] + '   (installing from ' + __dirname + ')');
+  } catch (e) {}
 } catch (e) {}
 
 // --- 5. Patch (reuses the cross-platform patcher) -----------------------------
