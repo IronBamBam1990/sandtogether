@@ -1,3 +1,28 @@
+## 0.9.166-beta
+
+**A joining player could delete the host's buildings - anything sharing a cell with a pipe, pumps and
+liquid vents included (report: Workshop).** The client forwards every local structure removal to the host
+as a demolish, and the only thing separating "the player demolished something" from "the mod is applying
+the host's world" is the `_applyingNet` guard. The two frame-loop workers introduced in 0.9.154 to slice
+that work - the deferred snapshot drain (`_snapRest`) and the staged ghost reconcile (`_recJob`) - never
+set it. So while a joining client rebuilt the host's world, every structure the game itself removed as a
+conflict (a pipe and a pump on the same cell) was reported back to the host as a genuine demolition, and
+the host destroyed the real building.
+
+Measured on the big test world, host side, across a join:
+
+| | structures | on pipe cells | pumps | vents | demolitions forwarded |
+|---|---|---|---|---|---|
+| before | 85258 -> 85094 | 165 -> 1 | 11 -> 0 | 94 -> 1 | 164 |
+| after | 85258 -> 85258 | 165 -> 165 | 11 -> 11 | 94 -> 94 | 0 |
+
+Both workers now hold the guard for the whole slice. Two further pipe-related hardenings shipped with it:
+orphan-tile cleanup (client scan, its per-cell check and the host's answer) now asks `FH.pipes.isAt`, so a
+wall a pipe runs through is no longer mistaken for leftover rubble; and the ghost reconcile no longer
+removes pipes positionally, which used to delete whatever building stood on the pipe's cell instead.
+
+**Known, not fixed yet:** the joining client's own view can still be missing those pipe-cell buildings
+until it reconnects. Nothing is lost - the host's world is intact and authoritative.
 ## 0.9.165-beta
 
 Compatibility with Sandustry **0.5.6**, a set of sync fixes, and two new features: a full action

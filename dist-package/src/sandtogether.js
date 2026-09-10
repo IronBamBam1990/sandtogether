@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.165-beta"; // fork: 0.5.6 compat + fixes (unofficial, see CHANGELOG)
+	const VER = "0.9.166-beta"; // fork: 0.5.6 compat + fixes (unofficial, see CHANGELOG)
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -1878,7 +1878,7 @@
 				if (!list.length) return;
 				if (data && data.byMove) { ST._moveStash = list; return; } // stare pozycje — czekają na structures:moved
 				if (ST.net.role === "host") net.send({ t: "st", k: "rm", list });
-				else net.send({ t: "act", k: "demolish", list });
+				else { if ((ST._demFwdN = (ST._demFwdN || 0) + 1) <= 5) log("CLIENT: przekazuje hostowi rozbiorke x" + list.length + " (wlasna akcja gracza)"); net.send({ t: "act", k: "demolish", list }); }
 			});
 			ST.FH.events.on(state, "structures:moved", (st, data) => {
 				if (ST._applyingNet || ST.net.role === "idle") return;
@@ -2083,6 +2083,18 @@
 			return built;
 		} catch (e) { log("buildOne error:", s.type, e.message); return null; }
 	}
+	// RURA NA KOMORCE? Rury zyja w store.pipes, NIE w store.structures, wiec SA.getAtCell ich nie widzi.
+	// Bez tego sprawdzenia sprzatanie osieroconych kafli kasuje sciany, przez ktore biegna rury
+	// (zgloszenie 10.09: "blocks placed above a pipe are deleted, including pumps and vents").
+	function hasPipeAt(state, x, y) {
+		try { const P = ST.FH && ST.FH.pipes; if (P && typeof P.isAt === "function") return !!P.isAt(state, x, y); } catch (e) {}
+		try { // zapas gdy API rur niedostepne na tym buildzie: siatka 4 komorek wokol wpisu rury
+			const L = (state.store && state.store.pipes) || [];
+			const bx = Math.floor(x / 4) * 4, by = Math.floor(y / 4) * 4;
+			for (let i = 0; i < L.length; i++) { const p = L[i]; if (p && Math.floor(p.x / 4) * 4 === bx && Math.floor(p.y / 4) * 4 === by) return true; }
+		} catch (e) {}
+		return false;
+	}
 	function removeOne(state, s) {
 		try { const SA = structNs(); if (SA) SA.removeAt(state, s.x, s.y, {}); } catch (e) { log("removeOne error:", e.message); }
 	}
@@ -2245,7 +2257,9 @@
 		ST._applyingNet = true;
 		try {
 			const nowS = performance.now();
+			let __faza = 0;
 			for (const [hostList, localList] of [[snap.s, state.store.structures || []], [snap.p, state.store.pipes || []]]) {
+				const __toRury = __faza++ === 1;   // patrz komentarz przy fazie 1 nizej: rur nie kasujemy pozycyjnie
 				const hostMap = new Map(hostList.map((s) => [structKey(s), s]));
 				// RECONCILE ETAPOWY (Knight-HD: additive fix + nasza siatka bezpieczeństwa):
 				// NIE kasujemy od razu na podstawie nieobecności w snapshotcie (to usuwało świeże budynki przy
@@ -2271,6 +2285,7 @@
 						ST._absentCount.set(k, cnt);
 						const appliedTs = ST._structApplied.get(k);
 						const fresh = appliedTs != null && nowS - appliedTs < 30000;
+						if (__toRury) { ST._absentCount.delete(k); continue; }   // rura-duch: kosmetyka, nie kasujemy (patrz nizej)
 						if (cnt >= 3 && !fresh && removed < 50) {
 							removeOne(state, s);
 							removed++; if (!sampleK) sampleK = k;
@@ -3745,16 +3760,18 @@
 				const cells = Array.isArray(msg.cells) ? msg.cells.slice(0, 500) : [];
 				const SAo = structNs();
 				const addList = [], clean = [], seenK = new Set();
+				let pipeSkip = 0;
 				for (const c of cells) {
 					if (!Array.isArray(c)) continue;
 					const cx = c[0] | 0, cy = c[1] | 0;
+					if (hasPipeAt(state, cx, cy)) { pipeSkip++; continue; }   // RURA u mnie — NIE pozwalamy sprzatac
 					let st2 = null; try { st2 = SAo && SAo.getAtCell ? SAo.getAtCell(state, cx, cy) : null; } catch (e) {}
 					if (st2) { const k2 = structKey(st2); if (!seenK.has(k2)) { seenK.add(k2); addList.push(slimStruct(st2)); } }
 					else clean.push([cx, cy]);
 				}
 				if (addList.length) net.send({ t: "st", k: "add", list: addList }, fromId);
 				if (clean.length) net.send({ t: "orphanClean", cells: clean }, fromId);
-				log("ORPHAN-Q od " + fromId + ": " + cells.length + " komorek — u mnie struktury: " + addList.length + ", do sprzatniecia: " + clean.length);
+				log("ORPHAN-Q od " + fromId + ": " + cells.length + " komorek — u mnie struktury: " + addList.length + ", do sprzatniecia: " + clean.length + (pipeSkip ? ", pominieto RUR: " + pipeSkip : ""));
 			} else if (msg.k === "demolish") {
 				// Resolve the client's targets on the host and snapshot their true occupied bounds before
 				// removeAt destroys the shape information needed to clean orphan foundation terrain.
@@ -6015,6 +6032,7 @@
 							if (id <= 0 || id > 1000) continue;
 							if (!TEREN_STRUKTUR.has(tt[id])) continue;
 							try { if (SA.getAtCell(state, x, y)) continue; } catch (e) { continue; }
+							if (hasPipeAt(state, x, y)) continue;   // pod kaflem biegnie RURA — to nie sierota
 							widz.add(i);
 							const od = ST._orphanCliSeen.get(i);
 							if (!od) { ST._orphanCliSeen.set(i, now); continue; } // pierwszy raz — moze wlasnie powstaje
@@ -6183,6 +6201,7 @@
 									const ty2 = tt[n];
 									if (!TEREN_STRUKTUR.has(ty2)) return false;
 									try { if (SA.getAtCell(state, xx, yy)) return false; } catch (e) { return false; }
+									if (hasPipeAt(state, xx, yy)) return false;   // RURA — kafel jest potrzebny
 									return true;
 								};
 								let cleaned = 0;
@@ -6207,6 +6226,10 @@
 		// klatce to kilkanascie ms przytyku. Limity z 0.9.150/153: max 50 usuniec na przebieg, rozjazd
 		// > 2000 nieznanych hostowi = wstrzymanie kasowania (to inny stan swiata, nie duchy).
 		if (isClientSync() && ST._recJob && !ST._loadingWorld) {
+			// _applyingNet MUSI byc wlaczone na czas sprzatania duchow: bez tego handler
+			// "structures:removed" wysyla hostowi rozbiorke za KAZDE nasze lokalne usuniecie
+			// i kasuje mu budynki naprawde (zgloszenie 10.09: bloki/pompy/wentyle nad rurami).
+			ST._applyingNet = true;
 			try {
 				const J = ST._recJob;
 				if (!ST._absentCount) ST._absentCount = new Map();
@@ -6224,6 +6247,10 @@
 					ST._absentCount.set(k, cnt);
 					const ts = ST._structApplied.get(k);
 					const fresh = ts != null && performance.now() - ts < 30000;
+					// RURY (faza 1): NIE kasujemy. removeOne dziala POZYCYJNIE, wiec dla rury skasowalby
+					// pompe/wentyl stojacy na tej komorce — a od 0.9.165 poszloby to jeszcze do hosta
+					// jako rozbiorka (zgloszenie 10.09: "blocks above pipes deleted, incl. pumps and vents").
+					if (J.phase === 1) { ST._absentCount.delete(k); continue; }
 					if (cnt >= 3 && !fresh && J.removed < 50 && J.absent <= 2000) {
 						removeOne(ST.state, s3);
 						J.removed++; if (!J.sample) J.sample = k;
@@ -6239,8 +6266,13 @@
 					}
 				}
 			} catch (e) { ST._recJob = null; }
+			finally { ST._applyingNet = false; }
 		}
 		if (isClientSync() && ST._snapRest && ST._snapRest.length && !ST._loadingWorld) {
+			// _applyingNet MUSI byc wlaczone: buildOne bywa powodem, ze GRA usuwa kolidujaca strukture
+			// (rura vs pompa/wentyl na tej samej komorce), a bez tej bariery handler "structures:removed"
+			// wysyla hostowi prawdziwa rozbiorke i kasuje mu baze (zgloszenie 10.09).
+			ST._applyingNet = true;
 			try {
 				const t0 = performance.now();
 				let n = 0;
@@ -6257,6 +6289,7 @@
 				}
 				if (n && (ST._restDiag = (ST._restDiag || 0) + 1) <= 20) log("SNAP: dokonczono", n, "odlozonych struktur, zostalo", ST._snapRest.length);
 			} catch (e) { if (!ST._restErr) { ST._restErr = 1; log("dokanczanie struktur blad:", e.message); } }
+			finally { ST._applyingNet = false; }
 		}
 		if (isClientSync()) {
 			// Heartbeat re-pauzy (fix G1): ESC-menu gry śle własne SetPaused(false) przy zamknięciu i cicho
