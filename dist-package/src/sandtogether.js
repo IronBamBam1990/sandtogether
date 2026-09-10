@@ -16,7 +16,7 @@
 			window.electron && window.electron.log && window.electron.log("info", "SandTogether:game", line);
 		} catch (e) {}
 	};
-	const VER = "0.9.166-beta"; // fork: 0.5.6 compat + fixes (unofficial, see CHANGELOG)
+	const VER = "0.9.167-beta"; // fork: 0.5.6 compat + fixes (unofficial, see CHANGELOG)
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // tabela pojemności z kodu gry (moduł 6420)
@@ -2006,6 +2006,17 @@
 	// uszkodzoną/zablokowaną i USUWAŁA ("pose supprimée directement"). J6.Available=1 (Blocked=2/3) → build
 	// przechodzi checki (≠FullyBlocked/≠PartiallyBlocked) i struktura jest POPRAWNA → nie znika.
 	const CLEARANCE_AVAILABLE = 1; // J6.Available w buildzie 0.5.4 (patrz enum: Available=1,FullyBlocked=2,PartiallyBlocked=3,CanBeReplaced=4)
+	// Typ rury poznajemy z samej gry (pierwszy wpis store.pipes) — bez zaszywania numeru enuma,
+	// ktory potrafi sie zmienic miedzy buildami. Wynik pamietamy do konca sesji swiata.
+	function isPipeType(state, t) {
+		try {
+			if (ST._pipeType === undefined) {
+				const L = (state.store && state.store.pipes) || [];
+				ST._pipeType = L.length && L[0] ? L[0].type : null;
+			}
+			return ST._pipeType != null && t === ST._pipeType;
+		} catch (e) { return false; }
+	}
 	function buildOne(state, s, force) {
 		try {
 			const SA = structNs(); if (!SA) return null;
@@ -2014,7 +2025,10 @@
 			// np. po cofnieciu rozbiorki u hosta). Stary kod szedl wtedy prosto do SA.build, gra odmawiala
 			// (komorka zajeta), build zwracal null i rozjazd zostawal NA STALE: ani snapshot, ani resync
 			// tego nie naprawialy, bo host wysyla poprawne dane, a klient nie ma ich gdzie zapisac.
-			if (existing && existing.type !== s.type && ST.net.role === "client") {
+			// RURA to NIE struktura: getAtCell na jej komorce zwraca to, co na niej STOI (pompa/wentyl),
+			// wiec porownanie typow zawsze wypada "kolizja" i kasowalo cudzy budynek. Rur nie czyscimy.
+			const toRura = !!s.__pipe || isPipeType(state, s.type);
+			if (existing && existing.type !== s.type && ST.net.role === "client" && !toRura) {
 				try {
 					diagToHost("kolizja typow @" + s.x + "," + s.y + " lokalnie=" + existing.type + " host=" + s.type + " q=" + (existing.queued ? 1 : 0));
 					if (SA.removeAt) SA.removeAt(state, s.x, s.y, { removeCells: true });
@@ -2209,8 +2223,9 @@
 		ST._applyingNet = true;
 		try {
 			const nowS = performance.now();
-			for (const [list, seen] of [[body.s, R.seenS], [body.p, R.seenP]]) {
+			for (const [list, seen, toRury] of [[body.s, R.seenS, false], [body.p, R.seenP, true]]) {
 				if (!Array.isArray(list)) continue;
+				if (toRury) for (const q of list) if (q) q.__pipe = 1;   // patrz buildOne: rur nie traktujemy jak kolizji typow
 				const tSlice = performance.now();
 				let built = 0;
 				for (const s2 of list) {
@@ -2260,6 +2275,7 @@
 			let __faza = 0;
 			for (const [hostList, localList] of [[snap.s, state.store.structures || []], [snap.p, state.store.pipes || []]]) {
 				const __toRury = __faza++ === 1;   // patrz komentarz przy fazie 1 nizej: rur nie kasujemy pozycyjnie
+				if (__toRury) for (const q of hostList) if (q) q.__pipe = 1;
 				const hostMap = new Map(hostList.map((s) => [structKey(s), s]));
 				// RECONCILE ETAPOWY (Knight-HD: additive fix + nasza siatka bezpieczeństwa):
 				// NIE kasujemy od razu na podstawie nieobecności w snapshotcie (to usuwało świeże budynki przy

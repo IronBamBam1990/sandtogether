@@ -1,3 +1,17 @@
+## 0.9.167-beta
+
+**The other half of the pipe bug: a joining player now actually sees the buildings that stand on
+pipes.** 0.9.166 stopped the host's world from being destroyed; this finishes the job on the client.
+The cause was ours: `buildOne` has a "type collision" path - if the cell already holds a structure of a
+different type than the one the host sent, the client clears the cell and rebuilds. Pipes are not
+structures, so `getAtCell` on a pipe's cell returns whatever stands ON it. Rebuilding a pipe therefore
+looked like "local has a vent (25), host wants a pipe (23) - collision" and deleted the vent. That is the
+same removal which, before 0.9.166, was reported back to the host and destroyed the real building.
+
+Pipe entries are now tagged when a snapshot is applied and never trigger the collision path; as a
+fallback the pipe type is learned from the game's own pipe list rather than hardcoded, so a future
+enum change cannot reintroduce it. Verified across a join on the big world - host and client match
+exactly: 85258 structures, 165 of them on pipe cells, 11 pumps, 94 liquid vents on both sides.
 ## 0.9.166-beta
 
 **A joining player could delete the host's buildings - anything sharing a cell with a pipe, pumps and
