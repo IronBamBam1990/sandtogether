@@ -22,7 +22,7 @@ const skip = (msg) => console.log('  [=]', msg, '(already applied)');
 console.log('SandTogether patcher - target:', APP);
 if (!fs.existsSync(path.join(APP, 'main.js'))) { console.error('ERROR: main.js not found in ' + APP); process.exit(1); }
 
-// 1. Kopiowanie plików moda
+// 1. Copying mod files
 fs.copyFileSync(path.join(SRC, 'sandtogether.js'), path.join(APP, 'dist/js/sandtogether.js'));
 done('dist/js/sandtogether.js copied');
 fs.copyFileSync(path.join(SRC, 'st-main.js'), path.join(APP, 'st-main.js'));
@@ -42,22 +42,30 @@ done('st-main.js copied');
   }
 }
 
-// 3. bundle.js — hooki (multi-wersja: próbuje wariantów z patches.json)
+// 3. bundle.js — hooks (multi-version: tries variants from patches.json)
 {
   const p = path.join(APP, 'dist/js/bundle.js');
+  // 0.9.259: start from a CLEAN bundle.js. Patches go in place, so without a pristine copy the next
+  // run would encounter its own earlier patches, and patches.json would have to keep
+  // additional anchor variants "from mod version to version" (now there are only GAME versions there).
+  try {
+    const orig = p + '.orig';
+    if (fs.existsSync(orig)) fs.copyFileSync(orig, p);
+    else if (!fs.readFileSync(p, 'utf8').includes('window.SandTogether')) fs.copyFileSync(p, orig);
+  } catch (e) {}
   const defs = JSON.parse(read(path.join(SRC, 'patches.json')));
   let s = read(p);
   let dirty = false;
   let criticalFail = false;
   let featureMiss = 0;
-  // Steam potrafi serwować rozne PRZEMINIFIKOWANE buildy pod tym samym numerem wersji (zgloszenie
-  // cayden.sieteski 29.08: u niego alias modulu FH to "se", u nas "ie" — kotwice doslowne nie trafialy
-  // i instalator klamal "niewspierana wersja"). Wykrywamy alias FH z samego bundle'a i gdy doslowna
-  // kotwica nie pasuje, probujemy wariantu z przepisanym aliasem (tylko prefiks "<alias>.FH").
+  // Steam can serve different RE-MINIFIED builds under the same version number (report
+  // cayden.sieteski 29.08: for him the FH module alias is "se", for us it's "ie" — literal anchors didn't match
+  // and the installer wrongly claimed "unsupported version"). We detect the FH alias from the bundle itself, and when the literal
+  // anchor doesn't match, we try a variant with the rewritten alias (only the "<alias>.FH" prefix).
   let fhAlias = null;
   {
-    // Wykrycie musi dzialac takze na JUZ spatchowanym bundle (po nalozeniu hooka forma
-    // `emit(e,"frame:update"` znika — 30.08: falszywy "krytyczny" przy ponownym patch.js).
+    // Detection must also work on an ALREADY patched bundle (after the hook is applied the form
+    // `emit(e,"frame:update"` disappears — 30.08: false "critical" on repeated patch.js).
     // Bierzemy alias z dowolnego `X.FH.events.emit(` majacego "frame:update" tuz za soba.
     const re = /([A-Za-z_$][A-Za-z0-9_$]{0,3})\.FH\.events\.emit\(/g;
     let mFH;
@@ -100,8 +108,8 @@ done('st-main.js copied');
 {
   const p = path.join(APP, 'preload.js');
   let s = read(p);
-  // bridge jest WYMIENIANY miedzy markerami (nie tylko doklejany) — inaczej stare instalacje
-  // zostaja bez nowych metod IPC (np. hostDirect z 0.9.79).
+  // the bridge is REPLACED between markers (not just appended) — otherwise old installations
+  // are left without new IPC methods (e.g. hostDirect from 0.9.79).
   const BRIDGE_START = '// --- SandTogether by Kamil Padula: network bridge (appended by patch.js) ---';
   const BRIDGE_END = '// --- /SandTogether ---';
   const fresh = read(path.join(SRC, 'st-preload-append.js'));
@@ -120,7 +128,7 @@ done('st-main.js copied');
   }
 }
 
-// 5. main.js — inicjalizacja networkingu (blok między markerami, wymieniany przy każdym patchu)
+// 5. main.js — networking initialisation (block between markers, replaced on every patch)
 {
   const p = path.join(APP, 'main.js');
   let s = read(p);
@@ -132,7 +140,7 @@ done('st-main.js copied');
     const ib = s.indexOf(MARK_B);
     s = s.slice(0, ia).replace(/\n+$/, '') + s.slice(ib + MARK_B.length);
   }
-  // usuń też stary blok v1 bez markerów
+  // also remove the old v1 block without markers
   s = s.replace(/\n\/\/ --- SandTogether init \(appended by patch\.js\) ---[\s\S]*?\/\/ --- \/SandTogether ---\n/, '\n');
   s += block;
   write(p, s);
@@ -151,7 +159,7 @@ done('st-main.js copied');
 }
 
 
-// 7. logger.js — osobny plik logu na instancje (diagnostyka coopa)
+// 7. logger.js — separate log file per instance (co-op diagnostics)
 {
   const p = path.join(APP, 'logger.js');
   if (!fs.existsSync(p)) skip('logger.js (brak pliku w tym buildzie)');
@@ -178,8 +186,8 @@ done('st-main.js copied');
   }
 }
 
-// 8. main.js — WCZESNY blok: userData override + nazwa pliku logu (musi byc PRZED kodem gry,
-//    bo logger rozwiazuje sciezke przy pierwszym wpisie)
+// 8. main.js — EARLY block: userData override + log file name (must be BEFORE the game code,
+//    because logger resolves the path on the first entry)
 {
   const p = path.join(APP, 'main.js');
   let s = read(p);

@@ -1,3 +1,172 @@
+## 0.9.287-beta
+
+**Compatibility with Sandustry 0.5.7, and a pass over co-op sync built on top of it: pipes, undo, moving
+and demolishing, projectiles and light, action previews, and a lighter, faster world mirror.**
+Contributed by **Qustux**, tested by two players on 0.5.7 on a large base, both over Steam's P2P
+networking and over a direct connection on a virtual LAN (Radmin VPN). The functional work is in
+`src/sandtogether.js` and `src/patches.json`; `st-main.js` gets the binary Steam transport, and
+`patch.js`, `install.js` and `install.ps1` get the pristine-`bundle.js` restore. Docs and the README are
+untouched.
+
+**Comment language:** comments in the touched files were brought to English. The `STRINGS` translation table is untouched.
+
+---
+
+### Sandustry 0.5.7 compatibility
+
+`supportedVersions` gains `"0.5.7"` and the anchors that 0.5.7 re-minified are re-matched. The older
+variant chains are untouched, so 0.5.2-0.5.6 keep working exactly as before. Ten new hooks were added
+along the way, all of them non-critical, so a future build that breaks one degrades a feature instead of
+failing the install:
+
+```
+build direction arrow export (_bpArw)      projectile sprite api export (_sprAdd)
+select/copy preview export (_bpPos)        simulation light export (_addLight)
+selection marquee export (_bpSelRect)      pipe api export (_pipeApi)
+move preview queue export (_movePreviewQ)  pipe drag run export (_pipeRun)
+flame burn light export (_flame)           selection delete hook (_delSel)
+```
+
+All four patch entry points - `install.ps1`, `install.js`, `patch.js` and `st-main.js` - now restore
+`bundle.js` from a pristine `.orig` copy before patching. Patches are applied in place, so without this
+each run met its own earlier patches and `patches.json` would have had to carry anchor variants "per mod
+version" on top of the per-game-version ones it already has. The copy lives next to `bundle.js`, so when
+Steam replaces `app.asar` and the `app` folder is unpacked again it disappears with it and is recreated
+from the current build.
+
+---
+
+### World mirror: less on the wire, and it arrives faster
+
+Four independent changes. Each is a straight comparison against what 0.9.167 does; the figures come from
+counters added for the purpose and removed afterwards, taken in our own sessions on a large base.
+
+**Binary frames over Steam.** In 0.9.167 the Steam path pushed world packets through base64 inside JSON,
+which is exactly +33% on the dominant stream (14 KB of overhead on every 42 KB). Steam P2P carries
+arbitrary bytes; the only thing missing was a way to tell a binary frame from a text one, and since JSON
+always starts with `{`, a leading `0x00` is an unambiguous marker. `sendP2PPacket` also refuses anything
+over roughly 1 MB and returns `false`, which was being ignored - an oversized packet vanished silently and
+the mirror simply stopped moving. The return value is checked now.
+
+**Cell delta (v6).** The v5 row delta sends all 40 cells of a changed row. Measured over a full session,
+only 3.5 of them actually differ. v6 keeps the same chunk header and adds a per-row cell mask plus, per
+changed cell, a layer mask and only the layers that moved. Measured: **-73%** on the live wire after
+deflate. A round-trip test over 16 000 rows decodes byte-exact. v6 is only used when both sides report the
+same mod version.
+
+**Acknowledgements 25 times a second instead of 10.** A packet counts as unacknowledged until the
+client's next ack tick after it arrives, so the 100 ms tick in 0.9.167 adds a flat 100 ms to every round
+trip - which on a relayed link is most of it. Throughput through a window is window divided by round trip,
+so that flat cost was a ceiling that no amount of spare bandwidth could lift.
+
+**The fast lane follows the client's actual viewport.** In 0.9.167 it is a fixed Manhattan radius of 24
+chunks around every anchor, and the anchors include the host's own player. That radius does not know
+about zoom and is the wrong shape for a screen: a screen at zoom 1 is 480x272 cells, about 104 chunks,
+against 1152 for that diamond. Two measurements on 0.9.167 behaviour:
+
+| | players together | players apart |
+|---|---|---|
+| fast lane | 50 chunks/batch | 33 chunks/batch |
+| of which only the **host's** own surroundings | 0 | **31 (94%)** |
+
+The host does not receive its own mirror, so its position has no business being an anchor for a stream
+sent to the peers. And from the clients themselves, in both hosting directions: only **51% and 59%** of
+everything received was landing on the receiver's screen.
+
+Clients now measure their own visible rectangle from the renderer (the scale is measured empirically,
+because `session.view.zoom` always reports 1 and the game resizes the overlay instead) and report it in
+`pos`; the host uses that rectangle, grown by two chunks and by where the player is heading. A peer that
+reports nothing - an older build, a hidden window - keeps the old radius, so nobody gets less than before.
+
+**Pacing.** 0.9.167 sizes each batch from a byte budget (`4000 * gap` bytes, times an AIMD multiplier)
+and multiplies its cycle by 1.25 on every batch whenever the ack backlog passes 300 ms, recovering at
+x0.85 - so a single latency spike drops the mirror to 10 Hz and holds it there for a second or more.
+Batches are now sized against an in-flight window computed from measured throughput and ping, the burst
+is capped at 80 ms of link capacity, and the cadence responds only to how much of the host's frame the
+packet serialization is eating.
+
+**A momentary Steam P2P drop was read as "a new player joined".** `hello` is two different messages under
+one name: the peer's renderer announces itself with `wid`, `scene`, `gen` and `ready`, while `st-main.js`
+also sends `{nick, ver}` on every transport connect and a nick change sends `{nick}` alone. Neither
+carries world state, yet both fell through to the "client with no world" branch. A 13 ms blip therefore
+cost a 764 KB save transfer and about ten seconds of suspended mirror. A hello with no world information
+no longer decides anything about the world, and a peer that reconnects within 90 seconds is treated as a
+reconnect: only the chunks that were in flight at that instant are re-queued.
+
+**The 1 Hz resource packet.** Its heavy half (upgrade tree, tech, progression, story, gloom, buildings)
+was cached as one JSON, so a single ticking counter inside `store.mods` made all of it compare unequal
+and 346 KB went out every few seconds, uncompressed, into the same reliable ordered channel the mirror
+uses. It is now cached per section, at most one section per tick, compressed, in its own message type
+(`resz`), and it waits for a quiet pipe. Of those 346 KB, 287 were `foliage`, which now travels on its own
+60-second clock: `346 KB -> 15 KB` on the wire for the rest.
+
+---
+
+### Pipes
+
+Pipes live in `store.pipes`, not in `store.structures`, and 0.9.167 reimplemented parts of the game's pipe
+logic instead of calling it. Every pipe operation now goes through the game's own pipe API, exported as
+`_pipeApi` and `_pipeRun`: building, dragging a run, removal and undo. In practice that fixes removal that
+took effect only on the host, unremovable fragments left behind on the client, the middle tile
+disappearing when a pipe is routed through another pipe, an observer seeing fragments instead of a
+continuous run, and the second-to-last undo needing two presses. A dragged pipe is now built by the same
+code that builds it locally.
+
+### Ctrl+Z and the undo history
+
+Undo on the client deleted the host's blocks, because the game's history entry holds only positions;
+positions where something other than what the client placed now stands are filtered out. Undoing a large
+move lost most of the structures. Undo repainted foundations with the host's colour (the colour is chosen
+by the game inside `building:placed`, so it has to travel with the action and survive the replay). Undo
+sometimes took several actions at once and sometimes half of one; placing over existing blocks made undo
+take those with it. The guard against the game's own undo flag is now an accessor on `isUndoing` rather
+than a saved-and-restored value.
+
+### Moving, demolishing and ghosts
+
+Ghosts left at the old position after a move, red copies on the client that the host did not have, the
+finishing sweep after a demolition deleting every live structure in the rectangle, a second unnecessary
+full transfer on join, `structures:removed` firing twice for one move, and `moved` entries that carry no
+`x`/`y`. Bulk removal now uses the game's own bulk function - profiling settled that dispute: with 1632
+structures one game call beats N calls by a wide margin - and placement batches one `updateMany` after the
+loop instead of an update per structure.
+
+### Projectiles, fire and light
+
+In 0.9.167 another player's projectile is a 4x4 yellow square drawn by the overlay, with no sprite and no
+light of its own. It now renders as the game's own projectile: the sprites live in a module the mod was
+not reading, brightness changes in flight, and the tracer light has no radius of its own, so all three are
+handled explicitly.
+
+### Action preview and selection frames
+
+The selection marquee is taken from the game itself instead of being redrawn; drag previews for the
+copier and the demolisher are drawn where the game puts them; the yellow dashed frame no longer sticks
+on the client after a move; the preview path is built once in world coordinates and clipped to the view.
+
+### Smaller things
+
+* Two UI strings carried hardcoded text outside the language table. They go through `t()` now.
+* The client reports its resource deltas to the host; the host's answer is applied through one shared
+  path instead of two copies of the same procedure.
+* The orphan-tile cleanup asks the host before removing anything and cleans the whole 4x4 block, not one
+  cell of it.
+
+---
+
+### Notes
+
+* **The protocol is not compatible with 0.9.167.** New message type `resz`, world packet v6, `vr` in
+  `pos`, `mver` now answers itself so both sides learn each other's version (previously only the side that
+  received a `hello` replied). Mixing builds will not work; the mod detects it and says so.
+* **Not marked critical:** all ten new hooks. A future build that breaks one loses a feature, not the mod.
+* **Known, not fixed:** in a heavily loaded area the client can still see short slow-downs in moving
+  material. On our connections this is not bandwidth - about 0.7% of a 300 Mbit line is in use - it is the
+  path itself: in roughly a quarter of two-second windows acknowledgements come back in 0.7-1 s instead of
+  0.3, and the in-flight window converts that into a short pause rather than a growing backlog.
+* Tested with one client. Two or more clients share one broadcast mirror stream and the fast lane is the
+  union of their viewports; that path is written but has not been played.
+
 ## 0.9.167-beta
 
 **The other half of the pipe bug: a joining player now actually sees the buildings that stand on
