@@ -17,7 +17,7 @@ const path = require('path');
 
 const TAG = '[SandTogether:net]';
 let fileLog = null;
-try { fileLog = require('./logger').createLogger('SandTogether'); } catch (e) { /* brak loggera gry */ }
+try { fileLog = require('./logger').createLogger('SandTogether'); } catch (e) { /* no game logger */ }
 const log = (...a) => {
   const line = a.map((x) => (typeof x === 'string' ? x : JSON.stringify(x, (k, v) => (typeof v === 'bigint' ? String(v) : v)))).join(' ');
   console.log(TAG, line);
@@ -28,17 +28,17 @@ const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const PROTO_VER = 5;
 
 // ---------------------------------------------------------------------------
-// Stan
+// State
 // ---------------------------------------------------------------------------
 const S = {
   getMainWindow: null,
-  steam: null,          // steamworks client (z steam.js gry)
+  steam: null,          // steamworks client (from the game's steam.js)
   role: 'idle',         // idle | host | client
   transport: null,      // 'steam' | 'ws'
-  lobby: null,          // Steam lobby (host i klient)
+  lobby: null,          // Steam lobby (host and client)
   peers: new Map(),     // id(string) -> peer {id, kind:'steam'|'ws', steamId64?, sock?, nick}
   wsServer: null,
-  wsClient: null,       // socket klienta WS (rola client, transport ws)
+  wsClient: null,       // WS client socket (role client, transport ws)
   p2pPoll: null,
   myNick: 'Player',
   myId: 'local',
@@ -48,16 +48,16 @@ function sendRenderer(channel, payload) {
   try {
     const win = S.getMainWindow && S.getMainWindow();
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
-  } catch (e) { /* okno w trakcie przeładowania */ }
+  } catch (e) { /* window during reload */ }
 }
 const emitEvent = (kind, data) => { log('event:', kind, data ? JSON.stringify(data).slice(0, 200) : ''); sendRenderer('st:event', { kind, ...data }); };
 const emitMsg = (from, obj) => sendRenderer('st:msg', { from, msg: obj });
 
 // ---------------------------------------------------------------------------
-// Minimalny WebSocket (RFC6455) — serwer i klient na surowym net, bez zależności
+// Minimal WebSocket (RFC6455) — server and client on raw net, no dependencies
 // ---------------------------------------------------------------------------
 function wsEncodeFrame(payload, mask) {
-  // 0.9.111: ta sama funkcja obsluguje teraz ramki tekstowe (opcode 1) i binarne (opcode 2).
+  // 0.9.111: the same function now handles text frames (opcode 1) and binary frames (opcode 2).
   const isBin = Buffer.isBuffer(payload) || payload instanceof Uint8Array;
   const data = isBin ? (Buffer.isBuffer(payload) ? payload : Buffer.from(payload.buffer, payload.byteOffset, payload.byteLength)) : Buffer.from(payload, "utf8");
   const op = isBin ? 0x82 : 0x81;
@@ -73,7 +73,7 @@ function wsEncodeFrame(payload, mask) {
   return Buffer.concat([header, key, masked]);
 }
 
-// Parser strumienia ramek; onText(str), zwraca funkcję feed(chunk)
+// Frame stream parser; onText(str), returns the feed(chunk) function
 function wsFrameParser(sock, onText, onBinary) {
   let buf = Buffer.alloc(0);
   return (chunk) => {
@@ -96,9 +96,9 @@ function wsFrameParser(sock, onText, onBinary) {
       if (opcode === 8) { try { sock.end(); } catch (e) {} return; }
       if (opcode === 9) { try { sock.write(Buffer.concat([Buffer.from([0x8a, payload.length]), payload])); } catch (e) {} continue; }
       if (opcode === 1 && fin) onText(payload.toString('utf8'));
-      // 0.9.111: ramka binarna = paczka swiata bez base64 (kopiujemy, bo bufor parsera jest wspoldzielony)
+      // 0.9.111: binary frame = world packet without base64 (we copy it, because the parser's buffer is shared)
       if (opcode === 2 && fin && onBinary) onBinary(Buffer.from(payload));
-      // fragmentacja i binarne pomijamy — protokół używa krótkich ramek tekstowych
+      // we skip fragmentation and binary — the protocol uses short text frames
     }
   };
 }
@@ -107,9 +107,9 @@ function startWsServer(port) {
   stopNetworking('restart');
   S.role = 'host'; S.transport = 'ws';
   S.wsServer = net.createServer((sock) => {
-    // Nagle trzyma male zapisy do czasu ACK poprzedniego segmentu — a my piszemy osobnym write() kazda
-    // wiadomosc, w tym pozycje gracza 30x/s. Przy RTT 80 ms przepuszcza to ~12 malych pakietow/s i akcje
-    // gracza stoja w tej samej kolejce (friberg, 24.08.2026). Na LAN roznicy nie widac, przez internet decyduje.
+    // Nagle holds small writes until the ACK of the previous segment — and we write each
+    // message with a separate write(), including player positions 30x/s. At an RTT of 80 ms this lets through ~12 small packets/s, and player
+    // actions sit in the same queue (friberg, 24.08.2026). On LAN the difference isn't visible, over the internet it matters.
     try { sock.setNoDelay(true); } catch (e) {}
     let upgraded = false;
     let headerBuf = Buffer.alloc(0);
@@ -132,8 +132,8 @@ function startWsServer(port) {
       sock.on('data', feed);
       if (rest.length) feed(rest);
       emitEvent('peer-connected', { id: peerId });
-      // fix (DwoaC): serwer WS też musi się PRZYWITAĆ — bez hello hosta klient nigdy nie odpowiada
-      // mver i host po 5s widział fałszywy alarm "OLD mod" (Steam robi to w refreshLobbyMembers)
+      // fix (DwoaC): the WS server also has to SAY HELLO — without a hello from the host the client never responds
+      // mver, and after 5s the host saw a false "OLD mod" alarm (Steam does this in refreshLobbyMembers)
       sendToPeer(peer, { t: 'hello', nick: S.myNick, ver: PROTO_VER });
     });
     sock.on('close', () => { if (S.peers.delete(peerId)) emitEvent('peer-disconnected', { id: peerId }); });
@@ -173,15 +173,15 @@ function joinWs(host, port, _retry) {
   sock.on('close', () => {
     S.peers.delete('host');
     emitEvent('peer-disconnected', { id: 'host' });
-    // AUTO-RECONNECT (LAN): zerwane łącze wskrzeszamy co 3s. Licznik prób jedzie przez parametr _retry
-    // (przetrwa kolejne sockety!). Udany handshake = stabilne łącze → przyszłe zerwanie znów ma 5 prób.
-    // Stop usera / inne połączenie w międzyczasie przerywa (role/transport/peers check).
+    // AUTO-RECONNECT (LAN): we revive a dropped connection every 3s. The attempt counter is carried via the _retry parameter
+    // (it survives across sockets!). A successful handshake = stable connection → a future drop again gets 5 attempts.
+    // A user Stop / another connection in the meantime interrupts it (role/transport/peers check).
     if (S.role === 'client' && S.transport === 'ws' && S.wsClient === sock) {
-      const next = upgraded ? 1 : retryCount + 1; // po stabilnym łączu licz od 1; po nieudanej próbie +1
+      const next = upgraded ? 1 : retryCount + 1; // after a stable connection, count from 1; after a failed attempt +1
       if (next > 5) { emitEvent('error', { where: 'ws-join', message: 'reconnect failed after 5 tries' }); return; }
       setTimeout(() => {
         if (S.role !== 'client' || S.transport !== 'ws' || S.peers.size > 0) return;
-        log('WS reconnect próba', next, '/5 →', host + ':' + port);
+        log('WS reconnect attempt', next, '/5 →', host + ':' + port);
         emitEvent('reconnecting', { transport: 'ws', attempt: next });
         try { joinWs(host, port, next); } catch (e) {}
       }, 3000);
@@ -204,14 +204,17 @@ function ensureP2pPoll() {
         const pkt = n.readP2PPacket(size);
         if (!pkt) break;
         const sid = String(pkt.steamId && (pkt.steamId.steamId64 !== undefined ? pkt.steamId.steamId64 : pkt.steamId));
+        // 0.9.263: a leading 0x00 marks a binary frame (see sendToPeer). Text is always JSON,
+        // so it can never start with that byte.
+        if (pkt.data.length > 1 && pkt.data[0] === 0x00) { handleIncomingBin('steam:' + sid, pkt.data.subarray(1)); continue; }
         const text = pkt.data.toString('utf8');
         handleIncoming('steam:' + sid, text, sid);
       }
-    } catch (e) { /* nie zabijaj pętli */ }
+    } catch (e) { /* don't kill the loop */ }
   }, 15);
 }
 
-// Pola callbacków steamworks.js różnią się per platforma: binarka win64 daje
+// steamworks.js callback fields differ per platform: the win64 binary gives
 // camelCase (lobbySteamId), binarka osx snake_case (lobby_steam_id). Bierzemy
 // pierwsze zdefiniowane pole.
 function pickField(o, ...keys) {
@@ -234,14 +237,14 @@ function registerSteamCallbacks() {
   });
   cb.register(CB.P2PSessionConnectFail, (data) => {
     emitEvent('error', { where: 'p2p', message: 'P2P connect fail', data: safeJson(data) });
-    // klient: rejoin dopiero po POWTÓRNYM failu w 10s (pojedynczy chwilowy błąd nie zrywa sesji)
+    // client: rejoin only after a REPEATED failure within 10s (a single momentary error doesn't drop the session)
     const now = Date.now();
     S._p2pFails = (S._p2pFails || []).filter((t) => now - t < 10000);
     S._p2pFails.push(now);
     if (S._p2pFails.length >= 2) { S._p2pFails = []; steamRejoin(1); }
   });
   cb.register(CB.GameLobbyJoinRequested, async (data) => {
-    // Znajomy kliknął "Dołącz" w Steam — dołączamy do lobby hosta.
+    // A friend clicked "Join" in Steam — we join the host's lobby.
     try {
       const lobbyId = pickField(data, 'lobbySteamId', 'steamIdLobby', 'lobby_steam_id', 'steam_id_lobby');
       log('GameLobbyJoinRequested:', safeJson(data));
@@ -267,7 +270,7 @@ function refreshLobbyMembers() {
       if (!S.peers.has('steam:' + sid)) {
         S.peers.set('steam:' + sid, { id: 'steam:' + sid, kind: 'steam', steamId64: sid, nick: '?' });
         emitEvent('peer-connected', { id: 'steam:' + sid });
-        // przywitaj się, żeby ustanowić sesję P2P
+        // say hello to establish the P2P session
         sendToPeer(S.peers.get('steam:' + sid), { t: 'hello', nick: S.myNick, ver: PROTO_VER });
       }
     }
@@ -275,8 +278,8 @@ function refreshLobbyMembers() {
   } catch (e) { log('refreshLobbyMembers error:', e.message); }
 }
 
-// Parsuje lobby ID z argumentów uruchomienia i dołącza. Obsługuje:
-//   +connect_lobby <id>   (standardowy launch param Steam)
+// Parses the lobby ID from the launch arguments and joins. Supports:
+//   +connect_lobby <id>   (standard Steam launch param)
 //   steam://joinlobby/<appid>/<lobbyid>/<ownerid>
 function tryJoinFromArgv(argv, source) {
   try {
@@ -286,7 +289,7 @@ function tryJoinFromArgv(argv, source) {
     if (i >= 0 && argv[i + 1]) id = argv[i + 1];
     if (!id) for (const a of argv) { const m = /joinlobby\/\d+\/(\d+)/.exec(String(a)); if (m) { id = m[1]; break; } }
     if (!id) return false;
-    if (!S.steam) { log('argv lobby ' + id + ' — Steam jeszcze nieinicjalizowany, czekam'); S._pendingJoin = id; return false; }
+    if (!S.steam) { log('argv lobby ' + id + ' — Steam not initialised yet, waiting'); S._pendingJoin = id; return false; }
     log('Auto-join lobby z argv (' + source + '):', id);
     joinSteamLobby(String(id)).catch((e) => emitEvent('error', { where: 'argv-join', message: e.message }));
     return true;
@@ -301,24 +304,24 @@ async function hostSteam() {
   S.lobby = await S.steam.matchmaking.createLobby(LobbyType.FriendsOnly, 4);
   ensureP2pPoll();
   try { S.lobby.setJoinable(true); } catch (e) { log('setJoinable error:', e.message); }
-  // Rich presence "connect" => Steam pokazuje "Dołącz do gry" w liście znajomych
-  // i przekazuje ten string jako launch param dołączającemu.
+  // Rich presence "connect" => Steam shows "Join Game" in the friends list
+  // and passes this string as a launch param to the joining player.
   try { S.steam.localplayer.setRichPresence('connect', '+connect_lobby ' + String(S.lobby.id)); } catch (e) { log('setRichPresence error:', e.message); }
   emitEvent('hosting', { transport: 'steam', lobbyId: String(S.lobby.id) });
   return { lobbyId: String(S.lobby.id) };
 }
 
-// AUTO-REJOIN Steam (odpowiednik reconnectu WS): po utracie P2P/hosta próbujemy wrócić do
-// ostatniego lobby co 3s, max 5 razy. Nowe świadome połączenie/Stop zeruje licznik.
+// AUTO-REJOIN Steam (the equivalent of the WS reconnect): after losing P2P/host we try to return to
+// the last lobby every 3s, max 5 times. A new deliberate connection/Stop resets the counter.
 function steamRejoin(attempt) {
   if (S.role !== 'client' || S.transport !== 'steam' || !S.lastLobbyId) return;
-  if (S._rejoinPending) return; // jedna pętla naraz
+  if (S._rejoinPending) return; // one loop at a time
   if (attempt > 5) { emitEvent('error', { where: 'steam-rejoin', message: 'rejoin failed after 5 tries' }); return; }
   S._rejoinPending = true;
   setTimeout(async () => {
     S._rejoinPending = false;
     if (S.role !== 'client' || S.transport !== 'steam') return;
-    log('Steam rejoin próba', attempt, '/5 → lobby', S.lastLobbyId);
+    log('Steam rejoin attempt', attempt, '/5 → lobby', S.lastLobbyId);
     emitEvent('reconnecting', { transport: 'steam', attempt });
     try { await joinSteamLobby(S.lastLobbyId); } catch (e) { steamRejoin(attempt + 1); }
   }, 3000);
@@ -340,12 +343,12 @@ async function joinSteamLobby(lobbyIdStr) {
 }
 
 // ---------------------------------------------------------------------------
-// Wspólny routing
+// Shared routing
 // ---------------------------------------------------------------------------
 function handleIncoming(peerId, text, steamSid) {
   let obj;
   try { obj = JSON.parse(text); } catch (e) { return; }
-  // auto-rejestracja peera steam, który jeszcze nie jest w mapie (np. hello przed LobbyChatUpdate)
+  // auto-registration of a steam peer that isn't in the map yet (e.g. hello before LobbyChatUpdate)
   if (steamSid && !S.peers.has(peerId)) {
     S.peers.set(peerId, { id: peerId, kind: 'steam', steamId64: steamSid, nick: '?' });
     emitEvent('peer-connected', { id: peerId });
@@ -365,7 +368,7 @@ function handleIncoming(peerId, text, steamSid) {
 }
 
 // 0.9.111: pakiet binarny = [2B dlugosc naglowka JSON][naglowek][dane]. Naglowek trafia do renderera
-// jako zwykla wiadomosc, dane jako Uint8Array obok — bez zadnej konwersji tekstowej po drodze.
+// as a regular message, with the data as a Uint8Array alongside it — without any text conversion along the way.
 function handleIncomingBin(peerId, buf) {
   try {
     if (!buf || buf.length < 2) return;
@@ -373,7 +376,7 @@ function handleIncomingBin(peerId, buf) {
     if (buf.length < 2 + hl) return;
     const obj = JSON.parse(buf.subarray(2, 2 + hl).toString("utf8"));
     sendRenderer("st:msg", { from: peerId, msg: obj, bin: buf.subarray(2 + hl) });
-  } catch (e) { log("bin frame blad:", e.message); }
+  } catch (e) { log("bin frame error:", e.message); }
 }
 function sendToPeer(peer, obj) {
   const isBin = Buffer.isBuffer(obj) || obj instanceof Uint8Array;
@@ -386,9 +389,27 @@ function sendToPeer(peer, obj) {
       // RTT, and the mirror ack would feed the congestion controller state from tens of seconds ago,
       // which defeats the whole point of measuring. Losing one is harmless, ping goes out every 1 s and
       // wcack 10x per second, and both carry absolute state rather than a delta.
-      if (isBin) return; // binarne tylko po WS (LAN/direct); Steam trzyma sciezke tekstowa
+      // 0.9.263: binary over Steam as well. Until now the Steam path forced world packets through
+      // base64 inside JSON, which the bandwidth lab measured at exactly +33% on the dominant stream
+      // (14 KB of overhead on every 42 KB). Steam P2P carries arbitrary bytes, so the only thing that
+      // was missing was a way for the receiver to tell a binary frame from a text one. A JSON message
+      // always starts with '{' (0x7B), so a leading 0x00 is an unambiguous marker.
+      const N = S.steam.networking;
+      if (isBin) {
+        const body = Buffer.isBuffer(obj) ? obj : Buffer.from(obj.buffer, obj.byteOffset, obj.byteLength);
+        const wire = Buffer.allocUnsafe(body.length + 1);
+        wire[0] = 0x00;
+        body.copy(wire, 1);
+        // world packets are always reliable — an unreliable one would tear the mirror
+        const ok = N.sendP2PPacket(BigInt(peer.steamId64), N.SendType.Reliable, wire);
+        // the result used to be ignored: an oversized packet vanished without a trace and the mirror
+        // just stopped moving. Now it says so.
+        if (ok === false) log('steam: binary packet REJECTED (' + wire.length + ' B) to', peer.id);
+        return;
+      }
       const reliable = obj.t !== 'pos' && obj.t !== 'ping' && obj.t !== 'pong' && obj.t !== 'wcack';
-      S.steam.networking.sendP2PPacket(BigInt(peer.steamId64), reliable ? S.steam.networking.SendType.Reliable : S.steam.networking.SendType.UnreliableNoDelay, Buffer.from(text, 'utf8'));
+      const okT = N.sendP2PPacket(BigInt(peer.steamId64), reliable ? N.SendType.Reliable : N.SendType.UnreliableNoDelay, Buffer.from(text, 'utf8'));
+      if (okT === false && reliable) log('steam: text packet REJECTED (' + Buffer.byteLength(text) + ' B, t=' + obj.t + ') to', peer.id);
     }
   } catch (e) { log('send error to', peer.id, e.message); }
 }
@@ -402,7 +423,7 @@ function stopNetworking(reason) {
   if (S.wsServer) { try { S.wsServer.close(); } catch (e) {} S.wsServer = null; }
   if (S.wsClient) { try { S.wsClient.end(); } catch (e) {} S.wsClient = null; }
   if (S.lobby) { try { S.lobby.leave(); } catch (e) {} S.lobby = null; }
-  // wyczyść "Join Game" ze Steama, żeby nie zostało nieaktualne
+  // clear "Join Game" from Steam so it doesn't remain stale
   if (S.steam) { try { S.steam.localplayer.setRichPresence('connect', ''); } catch (e) {} }
   if (S.p2pPoll) { clearInterval(S.p2pPoll); S.p2pPoll = null; }
   S.peers.clear();
@@ -413,11 +434,11 @@ function stopNetworking(reason) {
 function safeJson(o) { try { return JSON.parse(JSON.stringify(o, (k, v) => typeof v === 'bigint' ? String(v) : v)); } catch (e) { return String(o); } }
 
 // ============================================================================
-// AUTO-UPDATE Z WARSZTATU: przy każdym starcie gry porównujemy wersję moda w folderze
-// Workshop (Steam aktualizuje go sam) z zainstalowaną. Nowsza → kopiujemy pliki, nakładamy
-// patche bundle (idempotentnie, jak install.ps1) i restartujemy grę. Gracz robi install.bat
-// tylko RAZ — każda kolejna aktualizacja wchodzi sama. Autor z nowszą lokalną wersją niż
-// Workshop NIE jest cofany (porównanie numeryczne, update tylko w górę).
+// AUTO-UPDATE FROM WORKSHOP: on every game start we compare the mod version in the folder
+// Workshop (Steam updates it on its own) with the installed one. Newer → we copy the files, apply
+// the bundle patches (idempotently, like install.ps1) and restart the game. The player runs install.bat
+// only ONCE — every subsequent update goes in on its own. An author with a newer local version than
+// Workshop is NOT rolled back (numeric comparison, updates only upwards).
 // ============================================================================
 const WORKSHOP_ITEM = '3784750764';
 function parseVer(file) {
@@ -427,6 +448,15 @@ function parseVer(file) {
   } catch (e) { return null; }
 }
 function applyBundlePatches(bundlePath, patches) {
+  // 0.9.259: we start from a CLEAN bundle.js, if we have its pristine copy next to it. We apply patches
+  // in place, so without this each subsequent run would run into its own earlier patches and
+  // patches.json would have to carry additional anchor variants "from mod version to version".
+  // The pristine copy is set up by the installer; when it's not there, we behave as before.
+  try {
+    const orig = bundlePath + '.orig';
+    if (fs.existsSync(orig)) fs.copyFileSync(orig, bundlePath);
+    else if (!fs.readFileSync(bundlePath, 'utf8').includes('window.SandTogether')) fs.copyFileSync(bundlePath, orig);
+  } catch (e) { log('bundle.js pattern:', e.message); }
   let s = fs.readFileSync(bundlePath, 'utf8');
   let dirty = false, criticalFail = false, appliedN = 0;
   for (const pt of patches.bundle || []) {
@@ -435,7 +465,7 @@ function applyBundlePatches(bundlePath, patches) {
       if (s.indexOf(v.patched) >= 0) { already = true; break; }
       const i1 = s.indexOf(v.anchor);
       if (i1 < 0) continue;
-      if (s.indexOf(v.anchor, i1 + 1) >= 0) continue; // kotwica nieunikalna w tym wariancie
+      if (s.indexOf(v.anchor, i1 + 1) >= 0) continue; // anchor not unique in this variant
       s = s.slice(0, i1) + v.patched + s.slice(i1 + v.anchor.length);
       dirty = true; applied = true; appliedN++;
       break;
@@ -447,10 +477,10 @@ function applyBundlePatches(bundlePath, patches) {
 }
 
 // ============================================================================
-// UPnP: automatyczne otwarcie portu na routerze + publiczny IP.
-// Cel: ruch gry ma isc BEZPOSREDNIO miedzy graczami, a nie przez relay Steama
-// (ktory dlawi pasmo i podbija ping do sekund). Bez zadnych zaleznosci:
-// SSDP przez UDP (odkrycie routera) + SOAP przez HTTP (mapowanie portu).
+// UPnP: automatic port opening on the router + the public IP.
+// Goal: game traffic should go DIRECTLY between players, not through Steam's relay
+// (which throttles bandwidth and pushes ping up to seconds). With no dependencies at all:
+// SSDP over UDP (router discovery) + SOAP over HTTP (port mapping).
 // ============================================================================
 const dgram = require("dgram");
 const http = require("http");
@@ -571,13 +601,13 @@ async function upnpOpenPort(port) {
       const ip = await soap(svc.controlUrl, svc.serviceType, "GetExternalIPAddress", "", 5000);
       if (ip && ip.body) out.publicIp = parseIp(ip.body);
     }
-    if (!out.publicIp) { out.publicIp = await publicIpFallback(); if (out.publicIp) log("UPnP: router nie podal adresu — ustalony zewnetrznie"); }
+    if (!out.publicIp) { out.publicIp = await publicIpFallback(); if (out.publicIp) log("UPnP: router did not provide address — determined externally"); }
   } catch (e) { out.error = e.message; }
   return out;
 }
 
-// Gdy router nie chce podac adresu zewnetrznego — pytamy uslugi zwracajacej czysty tekst.
-// To WLASNY adres hosta, potrzebny zeby podac go koledze; nic wiecej nie wysylamy.
+// When the router won't provide the external address — we ask a service that returns plain text.
+// This is the host's OWN address, needed to give it to a friend; we send nothing else.
 function publicIpFallback() {
   return new Promise((resolve) => {
     try {
@@ -597,18 +627,18 @@ async function upnpClosePort() {
   try {
     await soap(u.ctrl, u.type, "DeletePortMapping",
       "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + u.port + "</NewExternalPort><NewProtocol>TCP</NewProtocol>", 4000);
-    log("UPnP: mapowanie portu " + u.port + " usuniete");
+    log("UPnP: mapping port " + u.port + " removed");
   } catch (e) {}
 }
 
 function autoUpdateFromWorkshop() {
   try {
-    // FIX 0.9.72 (KRYTYCZNY): appDir zniknal w 0.9.40 przy walk-upie do steamapps, uzycia zostaly
-    // -> 'appDir is not defined' przy KAZDYM starcie = auto-update martwy od 18.08 u wszystkich graczy.
-    const appDir = __dirname; // .../resources/app (Win/Linux) lub .../Contents/Resources/app (macOS)
-    // Windows: steamapps/common/Sandustry/resources/app (4 poziomy w górę)
-    // macOS:   steamapps/common/Sandustry/Sandustry.app/Contents/Resources/app (6 poziomów)
-    // → szukamy katalogu "steamapps" W GÓRĘ zamiast liczyć poziomy.
+    // FIX 0.9.72 (CRITICAL): appDir disappeared in 0.9.40 during the walk-up to steamapps, the usages remained
+    // -> 'appDir is not defined' on EVERY start = auto-update dead since 18.08 for all players.
+    const appDir = __dirname; // .../resources/app (Win/Linux) or .../Contents/Resources/app (macOS)
+    // Windows: steamapps/common/Sandustry/resources/app (4 levels upwards)
+    // macOS:   steamapps/common/Sandustry/Sandustry.app/Contents/Resources/app (6 levels)
+    // → we search for the "steamapps" directory UPWARDS instead of counting levels.
     let steamapps = __dirname;
     for (let i = 0; i < 8 && path.basename(steamapps).toLowerCase() !== 'steamapps'; i++) steamapps = path.dirname(steamapps);
     if (path.basename(steamapps).toLowerCase() !== 'steamapps') return;
@@ -619,15 +649,15 @@ function autoUpdateFromWorkshop() {
     const wv = parseVer(wsMod), lv = parseVer(localMod);
     if (!wv || !lv) return;
     const cmp = (wv[0] - lv[0]) || (wv[1] - lv[1]) || (wv[2] - lv[2]);
-    if (cmp <= 0) return; // lokalna >= Workshop → nic do roboty (m.in. autor moda)
-    log('AUTO-UPDATE: Workshop ma ' + wv.join('.') + ', lokalnie ' + lv.join('.') + ' — aktualizuję...');
+    if (cmp <= 0) return; // local >= Workshop → nothing to do (among others, the mod author)
+    log('AUTO-UPDATE: Workshop ma ' + wv.join('.') + ', locally ' + lv.join('.') + ' — updating...');
     fs.copyFileSync(wsMod, localMod);
     try { fs.copyFileSync(path.join(ws, 'src', 'st-main.js'), path.join(appDir, 'st-main.js')); } catch (e) {}
     try {
       const pl = path.join(appDir, 'preload.js');
       let ps = fs.readFileSync(pl, 'utf8');
-      // 0.9.142: mostek IPC WYMIENIAMY miedzy markerami (jak patch.js). Samo "jest sandtogetherNet" zostawialo
-      // stary mostek bez hostDirect → "net.hostDirect is not a function" u graczy z instalacja sprzed 0.9.79.
+      // 0.9.142: we REPLACE the IPC bridge between markers (like patch.js). Just checking "sandtogetherNet exists" left
+      // the old bridge without hostDirect → "net.hostDirect is not a function" for players with an install from before 0.9.79.
       const fresh = fs.readFileSync(path.join(ws, 'src', 'st-preload-append.js'), 'utf8');
       const B0 = '// --- SandTogether by Kamil Padula: network bridge (appended by patch.js) ---', B1 = '// --- /SandTogether ---';
       const i0 = ps.indexOf(B0), i1 = ps.indexOf(B1);
@@ -635,21 +665,21 @@ function autoUpdateFromWorkshop() {
       if (i0 >= 0 && i1 > i0) {
         if (ps.slice(i0, i1 + B1.length).trim() !== want) { fs.writeFileSync(pl, ps.slice(0, i0) + want + ps.slice(i1 + B1.length)); log('AUTO-UPDATE: preload.js — mostek IPC wymieniony na aktualny'); }
       } else if (ps.indexOf('sandtogetherNet') < 0) { fs.writeFileSync(pl, ps + '\n' + fresh); log('AUTO-UPDATE: preload.js — mostek IPC dodany'); }
-      else log('AUTO-UPDATE: preload.js ma mostek bez markerow — uruchom patch.js recznie');
+      else log('AUTO-UPDATE: preload.js has bridge without markers — run patch.js manually');
     } catch (e) {}
     const patches = JSON.parse(fs.readFileSync(path.join(ws, 'src', 'patches.json'), 'utf8'));
     const res = applyBundlePatches(path.join(appDir, 'dist', 'js', 'bundle.js'), patches);
-    log('AUTO-UPDATE: pliki skopiowane, patche bundle: +' + res.appliedN + (res.criticalFail ? ' (UWAGA: krytyczna kotwica nie pasuje — build gry nowszy niż mod!)' : ''));
-    // restart, żeby nowe pliki (bundle/renderer/main) faktycznie się załadowały
+    log('AUTO-UPDATE: files copied, bundle patches: +' + res.appliedN + (res.criticalFail ? ' (WARNING: critical anchor mismatch — game build newer than mod!)' : ''));
+    // restart, so the new files (bundle/renderer/main) actually get loaded
     const { app } = require('electron');
-    log('AUTO-UPDATE: restart gry z nową wersją moda ' + wv.join('.'));
+    log('AUTO-UPDATE: restarting game with new mod version ' + wv.join('.'));
     app.relaunch();
     app.exit(0);
   } catch (e) { log('autoUpdate error:', e.message); }
 }
 
-// Odcisk buildu GRY (rozmiar bundle + sha1 pierwszych 256KB): Steam potrafi serwować różnym ludziom
-// różne buildy o tym samym numerze wersji — różne enumy/kotwice. Porównywany przy wymianie mver.
+// GAME build fingerprint (bundle size + sha1 of the first 256KB): Steam can serve different people
+// different builds with the same version number — different enums/anchors. Compared during the mver exchange.
 let _gameFpCache;
 function gameFingerprint() {
   if (_gameFpCache !== undefined) return _gameFpCache;
@@ -670,10 +700,10 @@ function gameFingerprint() {
 // ---------------------------------------------------------------------------
 function init(opts) {
   S.getMainWindow = opts.getMainWindow;
-  autoUpdateFromWorkshop(); // nowsza wersja w folderze Workshop → auto-instalacja + restart gry
-  // Diagnostyka: pokaż argumenty startu (widać czy Steam podał +connect_lobby przy dołączaniu)
+  autoUpdateFromWorkshop(); // newer version in the Workshop folder → auto-install + game restart
+  // Diagnostics: show the startup arguments (shows whether Steam passed +connect_lobby when joining)
   try { log('start argv:', JSON.stringify(process.argv.slice(1))); } catch (e) {}
-  // Steam inicjalizuje się asynchronicznie po starcie appki — próbuj do skutku
+  // Steam initializes asynchronously after the app starts — keep trying until it works
   let tries = 0;
   const grabSteam = setInterval(() => {
     tries++;
@@ -686,18 +716,18 @@ function init(opts) {
         S.myId = String(c.localplayer.getSteamId().steamId64);
         registerSteamCallbacks();
         log('Steam OK — nick:', S.myNick, 'id:', S.myId);
-        // Zaproszenie zaakceptowane PRZY WYŁĄCZONEJ grze → Steam odpalił grę z +connect_lobby
+        // Invitation accepted WHILE THE GAME IS CLOSED → Steam launched the game with +connect_lobby
         if (S._pendingJoin) { const id = S._pendingJoin; S._pendingJoin = null; setTimeout(() => joinSteamLobby(String(id)).catch(() => {}), 500); }
         else setTimeout(() => tryJoinFromArgv(process.argv, 'cold-launch'), 500);
         return;
       }
-    } catch (e) { /* jeszcze nie gotowy */ }
-    if (tries >= 30) { clearInterval(grabSteam); log('Steam niedostępny po 60s — tylko transport WS'); }
+    } catch (e) { /* not ready yet */ }
+    if (tries >= 30) { clearInterval(grabSteam); log('Steam unavailable after 60s — WS transport only'); }
   }, 2000);
 
   const { ipcMain, app } = require('electron');
-  // Zaproszenie zaakceptowane gdy gra DZIAŁA a użytkownik był poza overlayem:
-  // Steam odpala drugą instancję → single-instance ją ubija, a my dostajemy jej argv tutaj.
+  // Invitation accepted while the game is RUNNING and the user was outside the overlay:
+  // Steam launches a second instance → single-instance kills it, and we get its argv here.
   try { app.on('second-instance', (event, argv) => { log('second-instance argv:', JSON.stringify(argv)); tryJoinFromArgv(argv, 'second-instance'); }); } catch (e) {}
   ipcMain.handle('st:host-steam', async () => { try { return { ok: true, ...(await hostSteam()) }; } catch (e) { return { ok: false, error: e.message }; } });
   ipcMain.handle('st:join-steam', async (ev, lobbyId) => { try { return { ok: true, ...(await joinSteamLobby(lobbyId)) }; } catch (e) { return { ok: false, error: e.message }; } });
@@ -709,7 +739,7 @@ function init(opts) {
       const p = port || 27777;
       startWsServer(p);
       const r = await upnpOpenPort(p);
-      log("HOST DIRECT: port " + p + (r.upnp ? " otwarty przez UPnP" : " BEZ UPnP (" + r.error + ")") + ", publiczny IP: " + (r.publicIp || "?"));
+      log("HOST DIRECT: port " + p + (r.upnp ? " opened via UPnP" : " WITHOUT UPnP (" + r.error + ")") + ", publiczny IP: " + (r.publicIp || "?"));
       return { ok: true, upnp: r.upnp, publicIp: r.publicIp, port: p, error: r.error };
     } catch (e) { return { ok: false, error: e.message }; }
   });
@@ -721,11 +751,11 @@ function init(opts) {
     peers: [...S.peers.values()].map((p) => ({ id: p.id, kind: p.kind, nick: p.nick })),
     gameFp: gameFingerprint(),
   }));
-  // Tryb autotestu: --st-autotest=host | --st-autotest=join (testy dwóch instancji bez klikania)
+  // Autotest mode: --st-autotest=host | --st-autotest=join (two-instance tests without clicking)
   const autotest = process.argv.find((a) => a.startsWith('--st-autotest='));
   if (autotest) {
     const mode = autotest.split('=')[1];
-    log('AUTOTEST:', mode, '(start za 10s)');
+    log('AUTOTEST:', mode, '(starting in 10s)');
     setTimeout(() => {
       try {
         if (mode === 'host') startWsServer(27777);

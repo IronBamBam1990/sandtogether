@@ -105,14 +105,47 @@ if (Test-Path "$res\app.asar") {
     else { Fail "app.asar not found in $res (Steam: verify integrity of game files first)" }
 }
 
+# --- 3b. start from a pristine bundle.js ------------------------------------
+# The installer patches bundle.js IN PLACE, so every subsequent run used to find its own earlier
+# patches already there. Until now that was worked around with extra anchor variants "from one mod
+# version to the next", which had to be added on EVERY hook change and carry no meaning beyond the
+# history of our own testing. Instead we keep a pristine copy of bundle.js next to it and start from
+# that copy every time, which leaves patches.json with variants for DIFFERENT GAME VERSIONS only.
+# When Steam replaces app.asar the "app" folder is deleted and unpacked again, so the pristine copy
+# disappears with it and is recreated from the current build - no extra handling needed.
+$bjs  = "$res\app\dist\js\bundle.js"
+$borig = "$res\app\dist\js\bundle.js.orig"
+if (Test-Path $bjs) {
+    if (Test-Path $borig) {
+        Copy-Item $borig $bjs -Force
+        Write-Host "[i] bundle.js restored from the pristine copy"
+    } else {
+        $probe = [System.IO.File]::ReadAllText($bjs)
+        if ($probe.Contains('window.SandTogether')) {
+            # the state from before this change: bundle already patched, no pristine copy yet.
+            # We restore the clean file from the app.asar backup the installer sets aside on its first run.
+            if (Test-Path "$res\app.asar.bak") {
+                Write-Host "[i] bundle.js was already patched and there is no pristine copy - unpacking a clean one from app.asar.bak..." -ForegroundColor Yellow
+                Extract-Asar "$res\app.asar.bak" "$res\app" "$res\app.asar.unpacked"
+                Copy-Item $bjs $borig -Force
+            } else {
+                Write-Host "[!] bundle.js is patched, no pristine copy and no app.asar.bak - verify the game files in Steam and run the installer again" -ForegroundColor Red
+            }
+        } else {
+            Copy-Item $bjs $borig -Force
+            Write-Host "[i] pristine bundle.js copy saved"
+        }
+    }
+}
+
 # --- 4. Version check -------------------------------------------------------
 $patches = Get-Content "$PSScriptRoot\src\patches.json" -Raw -Encoding UTF8 | ConvertFrom-Json
 try {
     $gv = (Get-Content "$res\app\package.json" -Raw | ConvertFrom-Json).version
     Write-Host "Game build: $gv (mod supports: $($patches.supportedVersions -join ', '))"
-    # wersja MODA, ktory wlasnie instalujemy - bez tego nie widac, ze Steam podsunal stara kopie
+    # the MOD version we are installing: without it a stale Steam Workshop copy is invisible
     try {
-        $head = (Get-Content "$PSScriptRoot\src\sandtogether.js" -TotalCount 40) -join "`n"   # -Raw i -TotalCount sie wykluczaja
+        $head = (Get-Content "$PSScriptRoot\src\sandtogether.js" -TotalCount 40) -join "`n"   # -Raw and -TotalCount are mutually exclusive
         $mv = [regex]::Match($head, 'const VER = "([^"]+)"')
         if ($mv.Success) { Write-Host "Mod version: $($mv.Groups[1].Value)   (installing from $PSScriptRoot)" -ForegroundColor Cyan }
     } catch {}

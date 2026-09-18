@@ -151,17 +151,47 @@ if (fs.existsSync(asar)) {
   }
 }
 
+// --- 3b. start from a pristine bundle.js --------------------------------------
+// The installer patches bundle.js IN PLACE, so every subsequent run used to find its own earlier
+// patches already there, and patches.json would have had to carry anchor variants "per mod version"
+// on top of the per-game-version ones. Instead we keep a pristine copy next to it and start from
+// that copy every time. When Steam replaces app.asar the "app" folder is unpacked again, so the
+// pristine copy disappears with it and is recreated from the current build.
+{
+  const bjs = path.join(appDir, 'dist', 'js', 'bundle.js');
+  const borig = bjs + '.orig';
+  if (fs.existsSync(bjs)) {
+    if (fs.existsSync(borig)) {
+      fs.copyFileSync(borig, bjs);
+      console.log('[i] bundle.js restored from the pristine copy');
+    } else if (fs.readFileSync(bjs, 'utf8').includes('window.SandTogether')) {
+      // the state from before this change: bundle already patched, no pristine copy yet
+      if (fs.existsSync(asar + '.bak')) {
+        console.log('[i] bundle.js was already patched and there is no pristine copy - unpacking a clean one from app.asar.bak...');
+        extractAsar(asar + '.bak', appDir, path.join(res, 'app.asar.unpacked'));
+        fs.copyFileSync(bjs, borig);
+      } else {
+        console.log('[!] bundle.js is patched, no pristine copy and no app.asar.bak - verify the game files and run it again');
+      }
+    } else {
+      fs.copyFileSync(bjs, borig);
+      console.log('[i] pristine bundle.js copy saved');
+    }
+  }
+}
+
 // --- 4. Version check ---------------------------------------------------------
 const SRC = path.join(__dirname, 'src');
+// MOD version from the installed files - shows at once when Steam served up a stale copy.
+// Printed outside the game-version block so an unreadable package.json does not hide it.
+try {
+  const mv = /const VER = "([^"]+)"/.exec(fs.readFileSync(path.join(SRC, 'sandtogether.js'), 'utf8').slice(0, 4000));
+  if (mv) console.log('Mod version: ' + mv[1] + '   (installing from ' + __dirname + ')');
+} catch (e) {}
 try {
   const gv = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8')).version;
   const sup = JSON.parse(fs.readFileSync(path.join(SRC, 'patches.json'), 'utf8')).supportedVersions;
   console.log('Game build: ' + gv + ' (mod supports: ' + sup.join(', ') + ')');
-  // wersja MODA z instalowanych plikow — pokazuje od razu, gdy Steam podsunal stara kopie
-  try {
-    const mv = /const VER = "([^"]+)"/.exec(fs.readFileSync(path.join(SRC, 'sandtogether.js'), 'utf8').slice(0, 4000));
-    if (mv) console.log('Mod version: ' + mv[1] + '   (installing from ' + __dirname + ')');
-  } catch (e) {}
 } catch (e) {}
 
 // --- 5. Patch (reuses the cross-platform patcher) -----------------------------
