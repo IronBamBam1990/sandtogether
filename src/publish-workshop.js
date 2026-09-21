@@ -20,7 +20,7 @@ const DESCRIPTION = `[h1]SandTogether — Co-op Multiplayer for Sandustry[/h1]
 Play Sandustry together in ONE living world — the same sand, the same factory, the same fluids, streamed live between players. Up to 4 players, over the internet or on a LAN.
 
 [h2]🎮 Game versions[/h2]
-[b]v0.9.167+[/b] = game [b]0.5.6[/b]. Older game (0.5.2-0.5.5) still works, minus the newest extras. All players: same game + mod version.
+[b]v0.9.287+[/b] = game [b]0.5.7[/b]. Older game (0.5.2-0.5.6) still works, minus the newest extras. All players: same game + mod version.
 
 [h2]⚠ AFTER SUBSCRIBING — READ THIS (ONE-TIME setup)[/h2]
 Sandustry has no mod loader yet, so after subscribing you run the installer [b]once[/b]:
@@ -107,7 +107,7 @@ Full source on GitHub: [url=https://github.com/IronBamBam1990/sandtogether]githu
   const details = {
     title: TITLE,
     description: DESCRIPTION,
-    changeNote: 'Finishes the pipe fix from 0.9.166. That release stopped a joining player from DESTROYING the host\u2019s buildings on pipe cells; this one makes the joining player actually see them. Same root cause, ours: when the client rebuilt the host\u2019s world it treated a pipe as if it were a normal building, and since pipes are a separate layer, asking "what is on this cell" returned the pump or vent standing on the pipe. The client read that as "wrong building here" and cleared it - which is exactly the deletion that used to be sent back to the host. Pipe entries are now recognised properly, and the pipe type is read from the game itself instead of being hardcoded, so a future game update cannot bring this back. Verified across a join on a large base: host and client now match exactly - 85258 buildings, 165 of them sitting on pipes, all 11 pumps and all 94 liquid vents present on both sides. If you were hit by this: your world was already safe after 0.9.166, and now the joining player sees it correctly too. Update on both machines.',
+    changeNote: 'v0.9.287-beta - SUPPORT FOR GAME 0.5.7. The 0.5.7 update broke 11 of the mod\u2019s hooks, so on 0.9.167 the installer warned "11 features did not match" and co-op ran half broken - most visibly, the host could not see blocks placed by the client. This release fixes that and brings a large pass over co-op sync, contributed by Qustux (huge thanks): pipes that could only be removed on the host, Ctrl+Z no longer touching the other player\u2019s blocks or colours, no ghosts or red copies after moving and demolishing, a faster and lighter world mirror (raw bytes instead of base64, only changed cells sent), and you now see what the other player is shooting, with its real sprite and light. Verified before release on the real 0.5.7 build: all 42 hooks match, clean install, the pipe fix from 0.9.166/167 still holds across a join, client-placed blocks reach the host, and the macOS/Linux installer passes install, re-run, game-update and old-install upgrade scenarios. UPDATE THE GAME TO 0.5.7 AND RE-RUN THE INSTALLER on every machine - all players need the same game and mod version.',
     previewPath: PREVIEW,
     contentPath: CONTENT,
     visibility: vis,

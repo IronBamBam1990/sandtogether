@@ -1,5 +1,14 @@
 ## 0.9.287-beta
 
+**Maintainer verification before release.** Merged as PR #21 and checked on the real 0.5.7 build:
+42/42 anchors match the clean bundle extracted from `app.asar`, with no ambiguous matches. Clean install
+on 0.5.7 with no warnings. The pipe regression test from 0.9.166/167 still passes across a join (host and
+client identical: 85258 structures, 165 on pipe cells, 11 pumps, 94 liquid vents), and both
+`_applyingNet` guards in the frame-loop workers survived the mirror rewrite. A block placed by the client
+reaches the host (the 0.5.7 breakage of the placement hook, reported by IronHide). The macOS/Linux
+installer was exercised against the real 0.5.7 asar in a sandbox: first install, re-run from the pristine
+copy, a Steam game update and an upgrade from an old install without the pristine copy all pass.
+
 **Compatibility with Sandustry 0.5.7, and a pass over co-op sync built on top of it: pipes, undo, moving
 and demolishing, projectiles and light, action previews, and a lighter, faster world mirror.**
 Contributed by **Qustux**, tested by two players on 0.5.7 on a large base, both over Steam's P2P
