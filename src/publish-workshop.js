@@ -3,13 +3,16 @@
 // Author / Autor: KAMIL PADULA
 // Steam Workshop publisher. Creates/updates the Workshop item as PRIVATE so the
 // author can review the page before making it public.
-// Usage: node publish-workshop.js [existingItemId]
+// Usage: SANDUSTRY_DIR=<game folder> node publish-workshop.js [existingItemId]
 // ============================================================================
 'use strict';
 const path = require('path');
 
 const APP_ID = 2764460; // Sandustry
-const GAME_SW = 'F:/SteamLibrary/steamapps/common/Sandustry/resources/app/node_modules/steamworks.js';
+// Game folder (the one with Sandustry.exe), e.g. SANDUSTRY_DIR=D:/SteamLibrary/steamapps/common/Sandustry
+const GAME_DIR = process.env.SANDUSTRY_DIR;
+if (!GAME_DIR) { console.error('Set SANDUSTRY_DIR to the Sandustry game folder (steamworks.js is loaded from its resources/app)'); process.exit(1); }
+const GAME_SW = path.join(GAME_DIR, 'resources/app/node_modules/steamworks.js');
 const CONTENT = path.resolve(__dirname, '../workshop/content');
 const PREVIEW = path.resolve(__dirname, '../workshop/preview.png');
 

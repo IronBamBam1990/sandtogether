@@ -17,6 +17,9 @@
 		} catch (e) {}
 	};
 	const VER = "0.9.287-beta";
+	// Wire protocol (messages and world packets). Peers with the same PROTO_VER sync fully even when VER
+	// differs; VER only orders releases for the auto-updater. Bump this on any incompatible change.
+	const PROTO_VER = 6;
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "Qustux, dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // capacity table from the game code (module 6420)
@@ -71,6 +74,7 @@
 			loading_world: "Loading the host's world... (a big map can take a few minutes — the game may look frozen)",
 			join_prompt: "Host address (ip or ip:port):",
 			ver_mismatch: "MOD VERSION MISMATCH — both players must update SandTogether!",
+			hooks_off: "Not synced on this game build: {0} (reinstall the mod: {1})",
 			waiting_world: "Connected. Waiting for host's world — HOST must click 'Send world', then you: menu → Load Game.",
 			unsupported: "⚠ Unsupported game version — the game updated and broke the mod. Re-run install, or check the Workshop page for an update.",
 			mp_btn: "Multiplayer",
@@ -137,6 +141,7 @@
 			loading_world: "Wczytywanie świata hosta... (duża mapa może potrwać kilka minut — gra może wyglądać na zawieszoną)",
 			join_prompt: "Adres hosta (ip lub ip:port):",
 			ver_mismatch: "RÓŻNE WERSJE MODA — obaj gracze muszą zaktualizować SandTogether!",
+			hooks_off: "Nie synchronizuje się na tej wersji gry: {0} (przeinstaluj moda: {1})",
 			waiting_world: "Połączono. Czekam na świat hosta — HOST musi kliknąć 'Wyślij świat', potem Ty: menu → Load Game.",
 			unsupported: "⚠ Niewspierana wersja gry — gra się zaktualizowała i rozjechała moda. Uruchom install ponownie albo sprawdź update na Warsztacie.",
 			mp_btn: "Multiplayer",
@@ -203,6 +208,7 @@
 			loading_world: "正在加载房主的世界...(大地图可能需要几分钟——游戏可能看起来像卡住了)",
 			join_prompt: "房主地址(ip 或 ip:port):",
 			ver_mismatch: "模组版本不匹配——双方玩家都必须更新 SandTogether!",
+			hooks_off: "此游戏版本无法同步：{0}（请重新安装模组：{1}）",
 			waiting_world: "已连接。正在等待房主的世界——房主需要点击'发送世界',然后你:菜单 → 加载游戏。",
 			unsupported: "⚠ 不支持的游戏版本——游戏已更新并导致模组失效。请重新运行安装程序,或前往创意工坊页面查看更新。",
 			mp_btn: "多人游戏",
@@ -742,6 +748,12 @@
 	}, 1000);
 
 	log("Renderer mod loaded", VER);
+	// the bundle (a module script, so it runs before DOMContentLoaded) announces its hooks in its first line
+	document.addEventListener("DOMContentLoaded", () => {
+		const h = ST._hooks;
+		if (!h) log("hooks: unknown (bundle patched by an older installer)");
+		else log("hooks: " + h.ok.length + " applied, " + (h.wild || []).length + " auto-adapted" + ((h.wild || []).length ? " [" + h.wild.join(",") + "]" : "") + ", missing: " + ((h.miss || []).join(",") || "none"));
+	});
 	// 0.9.161: the renderer's EXCEPTION RECORDER — every uncaught error and rejected promise ends up
 	// in the log file (the first 20). Without this a "static screen" left no trace at all.
 	window.addEventListener("error", (ev) => {
@@ -758,6 +770,46 @@
 		ST._lastRejection = { t: Date.now(), msg: m, stack: stk };
 		if (ST._winRejN <= 20) { try { log("UNHANDLED REJECTION:", m, stk); } catch (e) {} try { console.error("[SandTogether] REJECTION:", m, stk); } catch (e) {} }
 	});
+
+	// ------------------------------------------------------------------
+	// Version and hook exchange (mver)
+	// ------------------------------------------------------------------
+	// A peer that sent no PROTO_VER (older mod) is compatible only on the exact same release.
+	function sameProto(pp) { return !!pp && (pp.proto != null ? pp.proto === PROTO_VER : pp.modVer === VER); }
+	// Hooks the installer applied (first line of the patched bundle, see st-patch-engine.js); null = unknown.
+	function hookList() { const h = ST._hooks; return h && Array.isArray(h.ok) ? h.ok.concat(h.wild || []) : null; }
+	function mverMsg(reply) { const m = { t: "mver", v: VER, pv: PROTO_VER, gf: ST._gameFp || null, hk: hookList() }; if (reply) m.r = 1; return m; }
+	// patches.json ids each synced action needs, per side. Without them the action was silently dead.
+	const HOOK_FEATURES = {
+		dig: { client: ["dig"] },
+		build: { client: ["place"] },
+		vacuum: { client: ["vac"] },
+		pipes: { client: ["pipeRun"], host: ["pipeApi"] },
+		delete: { client: ["delSel"], host: ["demolExports"] },
+	};
+	// Features this session can't sync, with whose game lacks which hook. Unknown hook sets count as complete.
+	function checkHookFeatures() {
+		const off = {};
+		const lacks = (have, role, who) => {
+			if (!Array.isArray(have)) return;
+			for (const f in HOOK_FEATURES) for (const id of HOOK_FEATURES[f][role] || []) if (have.indexOf(id) < 0) (off[f] = off[f] || []).push(who + ":" + id);
+		};
+		const me = ST.net.role;
+		if (me === "host" || me === "client") {
+			lacks(hookList(), me, ST._myNick || "me");
+			for (const [, p] of ST.peers) lacks(p.hooks, me === "host" ? "client" : "host", p.nick || "?");
+		}
+		const sig = JSON.stringify(off);
+		if (sig !== ST._featOffSig) {
+			ST._featOffSig = sig;
+			if (sig !== "{}") {
+				log("HOOKS: not synced on this game build:", sig, "— reinstall the mod on that side");
+				setStatus(t("hooks_off", Object.keys(off).join(", "), [...new Set([].concat(...Object.values(off)).map((x) => x.split(":")[0]))].join(", ")), "#fd5");
+			}
+		}
+		ST._featOff = off;
+	}
+	const featOn = (f) => !(ST._featOff && ST._featOff[f]);
 
 	// ------------------------------------------------------------------
 	// Tools
@@ -1050,6 +1102,7 @@
 				ST._greeted.clear(); ST.net.role = "idle"; ST.peers.clear(); removeAllPeerPuppets(); setStatus(t("offline"), "#aaa"); showInviteButton(false); ST.net.lobbyId = null; updateLobbyIdDisplay(); updatePingDisplay();
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = [];
 				ST._gotHostWorld = false;
+				ST._featOff = null; ST._featOffSig = null; // the next session exchanges hook sets again
 				ST._lastAppliedSq = null; // drop the ack so it cannot throttle the next session
 				resetWorldQueue();        // queue, row hashes and congestion state are all per session
 				setClientPaused(false);
@@ -1269,7 +1322,7 @@
 			p.nick = msg.nick || "?";
 			ST.peers.set(from, p);
 			setStatus(t("players", ST.peers.size + 1));
-			try { net.send({ t: "mver", v: VER, gf: ST._gameFp || null }, from); } catch (e) {} // MOD version + GAME build fingerprint
+			try { net.send(mverMsg(), from); } catch (e) {} // MOD version + GAME build fingerprint
 			// old mod (≤0.9.7) doesn't know mver and won't reply — after 5s with no reply, ALARM (the "buddy on 0.9.0" case)
 			// "Old mod" check WITH RETRIES (0.9.88): no reply within 5 s doesn't mean old mod —
 			// the peer might be in the middle of loading a world, or their renderer is just coming up after a reload.
@@ -1278,7 +1331,7 @@
 					const pp = ST.peers.get(from);
 					if (!pp || pp.modVer) return;                       // we already know — done
 					if (attempt < 3) {
-						try { net.send({ t: "mver", v: VER, gf: ST._gameFp || null }, from); } catch (e) {}
+						try { net.send(mverMsg(), from); } catch (e) {}
 						setTimeout(() => askVer(attempt + 1), attempt === 1 ? 7000 : 13000);
 						return;
 					}
@@ -1354,11 +1407,14 @@
 			// delta, no raw stream, whole rows instead. Every local test we have run was measuring the v5
 			// fallback while both logs cheerfully said "mod version OK". Now the message answers itself once;
 			// msg.r marks the reply, so there is no ping-pong.
-			if (!msg.r) { try { net.send({ t: "mver", v: VER, gf: ST._gameFp || null, r: 1 }, from); } catch (e) {} }
-			if (msg.v !== VER) {
+			if (!msg.r) { try { net.send(mverMsg(true), from); } catch (e) {} }
+			if (p) { p.proto = msg.pv; p.hooks = Array.isArray(msg.hk) ? msg.hk : null; }
+			if (!sameProto(p || { modVer: msg.v, proto: msg.pv })) {
 				setStatus(t("ver_mismatch") + " [" + ((p && p.nick) || from) + ": " + msg.v + " / you: " + VER + "]", "#f66");
-				log("DIFFERENT MOD VERSIONS:", from, "ma", msg.v, "— I have", VER);
-			} else log("mod version OK at", (p && p.nick) || from, "->", msg.v);
+				log("DIFFERENT MOD VERSIONS:", from, "ma", msg.v, "proto", msg.pv, "— I have", VER, "proto", PROTO_VER);
+			} else if (msg.v !== VER) log("mod release differs at", (p && p.nick) || from, "->", msg.v, "/ mine", VER, "— same protocol v" + PROTO_VER + ", compatible");
+			else log("mod version OK at", (p && p.nick) || from, "->", msg.v);
+			checkHookFeatures();
 			// GAME build fingerprint (guard R3): different builds = different element enums/anchors → warn instead of silent corruption
 			if (msg.gf && ST._gameFp && msg.gf !== ST._gameFp) {
 				setStatus("⚠ DIFFERENT GAME BUILDS! [" + ((p && p.nick) || from) + "] — update the game on both sides", "#f66");
@@ -2250,14 +2306,14 @@
 			// stream, the packet format (v6 cell delta) and the binary wire. All three have to fall back together
 			// for anyone still on an older mod, so the check lives in one place.
 			let sameVerAll = ST.peers.size > 0;
-			for (const pp of ST.peers.values()) if (pp.modVer !== VER) sameVerAll = false;
+			for (const pp of ST.peers.values()) if (!sameProto(pp)) sameVerAll = false;
 			// 0.9.274: three things hang off this flag, and when it is false the mirror silently falls back to
 			// whole rows and no raw stream — which is what happened in the local test of 16.09 even though both
 			// sides logged "mod version OK". A flag that expensive should say who is holding it down.
 			if (!sameVerAll && now - (w.verLogT || 0) > 20000) {
 				w.verLogT = now;
 				const kto = [];
-				for (const [pid, pp] of ST.peers) if (pp.modVer !== VER) kto.push((pp.nick || "?") + " [" + pid + "] ver=" + (pp.modVer || "unknown"));
+				for (const [pid, pp] of ST.peers) if (!sameProto(pp)) kto.push((pp.nick || "?") + " [" + pid + "] ver=" + (pp.modVer || "unknown") + " proto=" + (pp.proto != null ? pp.proto : "?"));
 				log("CELL DELTA OFF (peer version): " + (kto.join(", ") || "no peers") + " — I am " + VER);
 			}
 			let willSendRaw = sameVerAll && ST.net.transport === "ws";
@@ -3479,6 +3535,9 @@
 	// of the enum for the pipe. We take it from there instead of the hardcoded 23; the old path (first pipe in the world)
 	// remains as a fallback, because it only works when pipes are already on the map.
 	function isPipeType(state, t) {
+		// 0.6.0: the game's own segment test covers every pipe network (water, gas, modded)
+		const API = ST._pipeApi;
+		if (state && API && typeof API.isSegment === "function") { try { return !!API.isSegment(state, t); } catch (e) { swallow("isPipeType", e); } }
 		try {
 			// isPipe/isPipeType run in loops over all structures, so when there is no answer
 			// we retry the query at most once per second, not on every block
@@ -3633,6 +3692,7 @@
 		const d = (q && q.data) || {};
 		return {
 			x: q.x, y: q.y,
+			type: q.type,     // 0.6.0 restoreSnapshots defaults a missing type to the water pipe (gas pipes!)
 			data: {
 				pipeConnectionMask: d.pipeConnectionMask || 0,
 				pipeBridgeConnectionMask: d.pipeBridgeConnectionMask || 0,
@@ -3715,7 +3775,7 @@
 				P.restoreSnapshots = function (state, snaps) {
 					if (isClientSync() && ST.wsx.paused && !ST._applyingNet) {
 						try {
-							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, data: q.data }));
+							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, type: q.type, data: q.data }));   // type: gas pipes (0.6.0)
 							if (lista.length) { net.send({ t: "act", k: "pipeRestore", s: lista }); stampAct("placeN", lista.length); }
 							if (lim("pipeRestTx", 200, 600000)) log("CLIENT pipe undo -> host: restore " + lista.length);
 						} catch (e) { swallow("pipe undo", e); }
@@ -3747,6 +3807,7 @@
 	ST._delSel = (state) => {
 		try {
 			if (!isClientSync() || !ST.wsx.paused) return false;     // host and solo: the game does it itself
+			if (!featOn("delete")) return true;                       // the host can't replay it: keep the client unchanged
 			const cd = state.session && state.session.action && state.session.action.customData;
 			if (!cd || cd.selectedStructures === undefined) return false;
 			if (cd.mode !== 1 && cd.mode !== 3) return false;        // Selected / Moving — same as the game
@@ -3792,6 +3853,7 @@
 	ST._pipeRun = (state, positions, start, end) => {
 		try {
 			if (!isClientSync() || !ST.wsx.paused || ST._applyingNet) return;
+			if (!featOn("pipes")) return;
 			if (!start || !end) return;
 			// 0.9.256 (CAUSE OF BOTH REPORTS, straight from the log). One drag produced TWO entries
 			// in the history. The log shows this four times in a row, without exception:
@@ -3855,6 +3917,8 @@
 				} catch (e) { swallow("drag probe", e); }
 			} catch (e) { swallow("pipe drag history", e); }
 			const m = { t: "act", k: "pipeRun", s: { x: start.x, y: start.y }, e: { x: end.x, y: end.y } };
+			const ty = positions && positions[0] && positions[0].structureType;   // 0.6.0: gas pipes
+			if (ty != null) m.ty = ty;
 			if (ST._placeQ) { (ST._pipeRunQ || (ST._pipeRunQ = [])).push(m); }   // there are pipes in the queue — wait for them
 			else net.send(m);                                                    // the drag itself over existing pipes
 			if (lim("pipeRunTx", 30)) log("CLIENT pipe drag -> host: (" + start.x + "," + start.y + ") -> ("
@@ -3940,7 +4004,7 @@
 	// each other could get glued together) and the closing of two-cell gaps.
 	// We don't transmit the route: cZ walks a straight line from start to end in grid steps anyway
 	// (function V in the game's code), so the host only needs two points and replays it without loss.
-	function pipeRunHost(state, poczatek, koniec) {
+	function pipeRunHost(state, poczatek, koniec, typ) {
 		// EVERY exit says why. The 0.9.250 regression survived the entire test precisely because these
 		// exits were silent: the log showed the client's send and nothing on the host's side.
 		const nie = (powod) => { if (lim("pdRunNie:" + powod, 5)) log("HOST: pipe drag skipped — " + powod); return 0; };
@@ -3960,6 +4024,13 @@
 		const naTrasie = [];
 		for (const punkt of trasa) { const q = pipeAt(state, punkt.x, punkt.y); if (q) naTrasie.push(q); }
 		if (!naTrasie.length) return nie("na trasie nie ma ani jednej rury (" + (kroki + 1) + " punktow) — paczka rur jeszcze nie doszla?");
+		// 0.6.0: the route planner takes the pipe type from the points and assumes the water pipe otherwise,
+		// which blocks gas pipe endpoints. Type from the client, else from the pipe at the start of the route.
+		if (typ == null || (typeof API.isSegment === "function" && !isPipeType(state, typ))) {
+			const q0 = pipeAt(state, poczatek.x, poczatek.y);
+			typ = q0 ? q0.type : undefined;
+		}
+		if (typ != null) for (const punkt of trasa) punkt.structureType = typ;
 		let wynik = null, role = "";
 		try {
 			API.path(state, trasa, poczatek, koniec);              // point roles according to the HOST'S WORLD
@@ -4602,7 +4673,7 @@
 			const sh = state.shared;
 			const conv = arr(sh.conveyorBeltsAnimationIndex);
 			let sameVer = ST.peers.size > 0;
-			for (const pp of ST.peers.values()) if (pp.modVer !== VER) sameVer = false;
+			for (const pp of ST.peers.values()) if (!sameProto(pp)) sameVer = false;
 			// scalars — cheap, every 1 s as before
 			const m = {
 				t: "res",
@@ -4699,7 +4770,7 @@
 					// rides inside the 1 Hz message.
 					// a peer on an older mod has no "resz" handler, so for mixed versions we keep the old raw path
 					let rownaWersja = ST.peers.size > 0;
-					for (const pp of ST.peers.values()) if (pp.modVer !== VER) rownaWersja = false;
+					for (const pp of ST.peers.values()) if (!sameProto(pp)) rownaWersja = false;
 					if (rownaWersja && j != null && j.length > 8 * 1024) {
 						const ladunek = {}; ladunek[key] = ciezkie[key];
 						wyslijCiezkie(ladunek, key, j.length);
@@ -4717,7 +4788,7 @@
 				if (fj != null && fj !== ST._foliageSig) {
 					ST._foliageSig = fj;
 					let rownaW = ST.peers.size > 0;
-					for (const pp of ST.peers.values()) if (pp.modVer !== VER) rownaW = false;
+					for (const pp of ST.peers.values()) if (!sameProto(pp)) rownaW = false;
 					if (rownaW) wyslijCiezkie({ st: { foliage: modsAll.foliage } }, "foliage", fj.length);
 				}
 			}
@@ -4929,7 +5000,7 @@
 				// must go through _entDrop (sprite+light), because swapping the reference does NOT clean up the renderer.
 				try {
 					if (ST._entDrop && ST.FH && ST.FH.entities && ST.FH.entities.getAll) {
-						const oldList = ST.FH.entities.getAll(state) || [];
+						const oldList = (ST.FH.entities.getAll(state) || []).slice(); // copy: _entDrop splices the live list
 						let newIds = null;
 						for (const k2 in (msg.st || {})) { const v2 = msg.st[k2]; if (v2 && Array.isArray(v2.list)) { newIds = new Set(v2.list.map((c5) => c5 && c5.id)); break; } }
 						if (newIds) for (const c6 of oldList) { if (c6 && c6.id >= 0 && !newIds.has(c6.id)) { if (ST._entCollectFx) { try { ST._entCollectFx(state, c6); } catch (e2) {} } try { ST._entDrop(c6); } catch (e2) {} } }
@@ -4942,7 +5013,7 @@
 				// we clear lightIndex (light+sprite will be assigned to them by _entInit from the fast bus).
 				try {
 					const EN9 = ST.FH && ST.FH.entities;
-					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []) : [];
+					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []).slice() : []; // copy: _entDrop splices the live list
 					const oldBy9 = new Map(oldL9.map((c9) => [c9 && c9.id, c9]));
 					for (const k9 in (msg.st || {})) {
 						const v9 = msg.st[k9];
@@ -6096,6 +6167,7 @@
 		// Anti-flood guard: while LOADING the world the game fires building:place for many structures at once
 		// (reconstruction). We don't forward for ~3s after a scene change — otherwise the host gets hundreds of positions from the save.
 		if (ST._loadGuardUntil && performance.now() < ST._loadGuardUntil) return false; // load → allow the local reconstruction, don't forward
+		if (!featOn("pipes") && isPipeType(state, structureType)) return true; // the host can't connect them: no half-built pipes
 		if (lim("plDiag2", 300)) log("CLIENT forward place:", structureType, "@", x, y, "(typeof " + typeof structureType + ")", data ? "z data" : "no data");
 		// KEY (fix "foundations can't be removed"): we also forward the structure's DATA. Foundations
 		// (box/slopes/color) carry their definition in data — without it the host built a DEGENERATE version, whose
@@ -6489,7 +6561,7 @@
 				// client pipe drag — we replay it with the game's functions AFTER the placeN batch
 				// has placed the pipes themselves (the channel is ordered, so they're already here)
 				ST._applyingNet = true;
-				try { pipeRunHost(state, msg.s, msg.e); } finally { ST._applyingNet = false; }
+				try { pipeRunHost(state, msg.s, msg.e, msg.ty); } finally { ST._applyingNet = false; }
 			} else if (msg.k === "pd") {
 				// client pipe connections: we apply them locally, and our own watcher broadcasts them further
 				ST._applyingNet = true;
@@ -6652,8 +6724,9 @@
 						state.store.conservatory.tickets += Math.pow(2, types);
 					}
 					try { ST.FH.events.emit(state, "entity:collected", { typeId: msg.ty }); } catch (e) { swallow("act:" + msg.k, e); }
-					// remove the entity from the host's map (no official remove — emulated: splice from the LIVE getAll list
-					// + hide the sprite via getSprite + turn off the light). Without this the critter hung around until the 2nd collection.
+					// remove the entity from the host's map via _entDrop (full removal incl. the 0.6.0 id cache and pet overlay);
+					// fallback emulation: splice from the LIVE getAll list + hide the sprite + turn off the light.
+					// Without this the critter hung around until the 2nd collection.
 					try {
 						const EN = ST.FH.entities;
 						if (msg.eid != null && EN && EN.getAll) {
@@ -6661,9 +6734,13 @@
 							const idxE = listE.findIndex((en) => en && en.id === msg.eid);
 							if (idxE >= 0) {
 								const en = listE[idxE];
-								try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
-								try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
-								listE.splice(idxE, 1);
+								let dropped = false;
+								if (ST._entDrop) { try { ST._entDrop(en); dropped = true; } catch (e) { swallow("act:" + msg.k, e); } }
+								if (!dropped) {
+									try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
+									try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
+									const i2 = listE.indexOf(en); if (i2 >= 0) listE.splice(i2, 1);
+								}
 							}
 						}
 					} catch (e) { swallow("act:" + msg.k, e); }
@@ -7447,7 +7524,7 @@
 				};
 				mk("#5f5", ST._myNick || "Player", "(" + t("lb_you") + (role === "host" ? " · host)" : ")"));
 				for (const [, pr] of ST.peers) {
-					const ok = !pr.modVer || pr.modVer === VER;
+					const ok = !pr.modVer || sameProto(pr);
 					mk(ok ? "#5f5" : "#f66", pr.nick || "?", ok ? "" : pr.modVer);
 				}
 			}
@@ -7843,7 +7920,7 @@
 					return r;
 				};
 				pl2.appendChild(mk(ST._myNick || "Player", "(" + t("lb_you") + ") " + VER, true));
-				for (const [, pr] of ST.peers) pl2.appendChild(mk(pr.nick || "?", pr.modVer || "?", !pr.modVer || pr.modVer === VER));
+				for (const [, pr] of ST.peers) pl2.appendChild(mk(pr.nick || "?", pr.modVer || "?", !pr.modVer || sameProto(pr)));
 			}
 		}
 	}
@@ -8327,19 +8404,24 @@
 	// We were seeing the symptom the whole time — a problem that surfaced in the second hour of play left no
 	// not a trace in the log, because the limit was used up in the first minutes and another test had to be requested.
 	// Now the limit resets every window (5 minutes by default), and the suppressed entries are counted.
+	// A fixed window still muted a tag for up to 5 minutes after a burst and only reported the suppressed
+	// count if the tag fired again. Now: a token bucket (n per window, refilled continuously), suppressed
+	// counts flushed every 30 s, and SandTogether._logAll = true lifts the log limits for a test session.
 	const LIMW = new Map();
 	function lim(tag, n, windowMs) {
 		try {
-			const now6 = performance.now(), w = windowMs || 300000;
+			if (ST._logAll && tag !== "regFixN") return true; // regFixN throttles work, not the log
+			const now6 = performance.now(), cap = n || 10;
 			let s = LIMW.get(tag);
-			if (!s || now6 - s.t0 >= w) {
-				if (s && s.skipped) log("(" + tag + ": suppressed " + s.skipped + " similar entries in previous window)");
-				s = { t0: now6, used: 0, skipped: 0 }; LIMW.set(tag, s);
-			}
-			if (s.used < (n || 10)) { s.used++; return true; }
+			if (!s) { s = { tok: cap, t: now6, skipped: 0 }; LIMW.set(tag, s); }
+			s.tok = Math.min(cap, s.tok + (now6 - s.t) * cap / (windowMs || 300000)); s.t = now6;
+			if (s.tok >= 1) { s.tok -= 1; return true; }
 			s.skipped++; return false;
 		} catch (e) { return true; }
 	}
+	setInterval(() => {
+		try { for (const [tag, s] of LIMW) if (s.skipped) { log("(" + tag + ": suppressed " + s.skipped + " similar entries)"); s.skipped = 0; } } catch (e) {}
+	}, 30000);
 	// 0.9.219 (REVISION 3.2): an EMPTY catch ON AN ACTION PATH is the most expensive kind of silence in this mod.
 	// Within a single day it swallowed three bugs in a row for me: a ReferenceError in the measurement timestamp, the same bug
 	// in the host's time intent, and four references to a non-existent "from" in the creature handling (this last
@@ -8981,7 +9063,8 @@
 							if (q3[5] && ST._drawBridge) {
 								try {
 									ctx.save(); ctx.globalAlpha = 0.75;
-									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx });
+									// segmentStructureType: 0.6.0 needs it for bridges not built yet (otherwise draws nothing)
+									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx, segmentStructureType: q3[2] });
 									ctx.restore(); drawn = true;
 								} catch (e) { ST._drawBridge = null; try { ctx.restore(); } catch (e2) {} }
 							}

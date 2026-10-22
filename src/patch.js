@@ -3,30 +3,39 @@
 // Author / Autor: KAMIL PADULA
 // Patcher: applies the mod onto the unpacked game copy (resources/app).
 // Idempotent — safe to run repeatedly and after every game update.
-// Usage: node patch.js [path-to-resources/app]
+// Usage: node patch.js <path-to-resources/app> [--report <file.json>] [--no-wildcard]
 // ============================================================================
 
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const engine = require('./st-patch-engine.js');
 
-const APP = process.argv[2] || 'F:/SteamLibrary/steamapps/common/Sandustry/resources/app';
+const args = process.argv.slice(2);
+const opt = (name) => { const i = args.indexOf(name); return i >= 0 ? args.splice(i, 2)[1] : null; };
+const REPORT = opt('--report');
+const WILDCARD = !(args.includes('--no-wildcard') || process.env.ST_NO_WILDCARD === '1');
+const APP = args.find((a) => !a.startsWith('--'));
 const SRC = __dirname;
+if (!APP) { console.error('Usage: node patch.js <path-to-resources/app> [--report <file.json>] [--no-wildcard]'); process.exit(1); }
 
 const read = (p) => fs.readFileSync(p, 'utf8');
 const write = (p, s) => fs.writeFileSync(p, s, 'utf8');
 let changes = 0;
 const done = (msg) => { changes++; console.log('  [+]', msg); };
 const skip = (msg) => console.log('  [=]', msg, '(already applied)');
+// install.ps1 reads this file to know the patcher really ran (and how it went)
+const report = (o) => { if (REPORT) try { write(REPORT, JSON.stringify(o)); } catch (e) { console.error('report:', e.message); } };
 
 console.log('SandTogether patcher - target:', APP);
-if (!fs.existsSync(path.join(APP, 'main.js'))) { console.error('ERROR: main.js not found in ' + APP); process.exit(1); }
+report({ ran: true });
+if (!fs.existsSync(path.join(APP, 'main.js'))) { console.error('ERROR: main.js not found in ' + APP); report({ ran: true, ok: false, error: 'main.js not found' }); process.exit(1); }
 
 // 1. Copying mod files
-fs.copyFileSync(path.join(SRC, 'sandtogether.js'), path.join(APP, 'dist/js/sandtogether.js'));
-done('dist/js/sandtogether.js copied');
-fs.copyFileSync(path.join(SRC, 'st-main.js'), path.join(APP, 'st-main.js'));
-done('st-main.js copied');
+for (const [from, to] of [['sandtogether.js', 'dist/js/sandtogether.js'], ['st-main.js', 'st-main.js'], ['st-patch-engine.js', 'st-patch-engine.js']]) {
+  fs.copyFileSync(path.join(SRC, from), path.join(APP, to));
+  done(to + ' copied');
+}
 
 // 2. index.html — tag <script> przed bundle.js
 {
@@ -42,66 +51,34 @@ done('st-main.js copied');
   }
 }
 
-// 3. bundle.js — hooks (multi-version: tries variants from patches.json)
+let bundleRes = null;
+// 3. bundle.js — hooks (multi-version: variants from patches.json, see st-patch-engine.js)
 {
   const p = path.join(APP, 'dist/js/bundle.js');
-  // 0.9.259: start from a CLEAN bundle.js. Patches go in place, so without a pristine copy the next
-  // run would encounter its own earlier patches, and patches.json would have to keep
-  // additional anchor variants "from mod version to version" (now there are only GAME versions there).
-  try {
-    const orig = p + '.orig';
-    if (fs.existsSync(orig)) fs.copyFileSync(orig, p);
-    else if (!fs.readFileSync(p, 'utf8').includes('window.SandTogether')) fs.copyFileSync(p, orig);
-  } catch (e) {}
   const defs = JSON.parse(read(path.join(SRC, 'patches.json')));
-  let s = read(p);
-  let dirty = false;
-  let criticalFail = false;
-  let featureMiss = 0;
-  // Steam can serve different RE-MINIFIED builds under the same version number (report
-  // cayden.sieteski 29.08: for him the FH module alias is "se", for us it's "ie" — literal anchors didn't match
-  // and the installer wrongly claimed "unsupported version"). We detect the FH alias from the bundle itself, and when the literal
-  // anchor doesn't match, we try a variant with the rewritten alias (only the "<alias>.FH" prefix).
-  let fhAlias = null;
-  {
-    // Detection must also work on an ALREADY patched bundle (after the hook is applied the form
-    // `emit(e,"frame:update"` disappears — 30.08: false "critical" on repeated patch.js).
-    // Bierzemy alias z dowolnego `X.FH.events.emit(` majacego "frame:update" tuz za soba.
-    const re = /([A-Za-z_$][A-Za-z0-9_$]{0,3})\.FH\.events\.emit\(/g;
-    let mFH;
-    while ((mFH = re.exec(s))) {
-      if (s.slice(mFH.index, mFH.index + 220).includes('"frame:update"')) { fhAlias = mFH[1]; break; }
-    }
-    if (fhAlias && fhAlias !== 'ie') console.log('  [i] FH module alias in this build: "' + fhAlias + '" (re-minified bundle - anchors rewritten from "ie.FH")');
+  const res = engine.patchBundleFile(p, defs, { wildcard: WILDCARD });
+  if (res.fhAlias && res.fhAlias !== 'ie') console.log('  [i] FH module alias in this build: "' + res.fhAlias + '" (re-minified bundle - anchors rewritten from "ie.FH")');
+  if (res.wildcardDropped) console.warn('  [!] auto-adapted hooks broke the bundle syntax - applied without them');
+  for (const r of res.results) {
+    if (r.ambiguous) console.error('ERROR: variant "' + r.name + '" occurrences>1 (' + r.ambiguous + 'x)');
+    if (r.status === 'applied') done('bundle.js: ' + r.name);
+    else if (r.status === 'already') skip('bundle.js ' + r.name);
+    else if (r.status === 'wildcard') { changes++; console.log('  [~] bundle.js: ' + r.name + ' (auto-adapted from variant ' + r.variant + ': ' + Object.entries(r.map).map(([a, b]) => a + '->' + b).join(' ') + ')'); }
+    else if (r.critical) console.error('  [X] CRITICAL hook "' + r.name + '" did not match - this game build is not supported yet');
+    else console.warn('  [!] skipped (feature unavailable on this game build): ' + r.name);
   }
-  const adapt = (t) => (fhAlias && fhAlias !== 'ie') ? t.split('ie.FH').join(fhAlias + '.FH') : t;
-  for (const pt of defs.bundle) {
-    let applied = false, already = false;
-    for (const v of pt.variants) {
-      for (const [anch, patched] of (fhAlias && fhAlias !== 'ie')
-        ? [[v.anchor, v.patched], [adapt(v.anchor), adapt(v.patched)]]
-        : [[v.anchor, v.patched]]) {
-        if (s.includes(patched)) { already = true; break; }
-        const count = s.split(anch).length - 1;
-        if (count === 0) continue;
-        if (count !== 1) { console.error('ERROR: variant "' + pt.name + '" occurrences=' + count); continue; }
-        s = s.replace(anch, patched);
-        applied = true; dirty = true;
-        break;
-      }
-      if (applied || already) break;
-    }
-    if (applied) done('bundle.js: ' + pt.name);
-    else if (already) skip('bundle.js ' + pt.name);
-    else if (pt.critical) { console.error('  [X] CRITICAL hook "' + pt.name + '" did not match - this game build is not supported yet'); criticalFail = true; }
-    else { console.warn('  [!] skipped (feature unavailable on this game build): ' + pt.name); featureMiss++; }
-  }
-  if (dirty) write(p, s);
-  if (featureMiss > 8) {
-    console.error('  WARNING: ' + featureMiss + ' hooks did not match this game build - the game is likely NEWER than the mod.');
+  if (res.error) { console.error('ERROR: ' + res.error + ' - bundle.js left unpatched'); report({ ran: true, ok: false, error: res.error }); process.exit(1); }
+  if (res.featureMiss > 8) {
+    console.error('  WARNING: ' + res.featureMiss + ' hooks did not match this game build - the game is likely NEWER than the mod.');
     console.error('  Co-op will connect, but many tools will NOT sync. Update the mod (Workshop) and run the installer again.');
   }
-  if (criticalFail) { console.error('ERROR: unsupported game build (even after adapting the module alias "' + (fhAlias || '?') + '"). Mod supports game: ' + defs.supportedVersions.join(', ') + '. Your game may have updated - watch the Workshop page for a mod update.'); process.exit(1); }
+  if (res.criticalFail) {
+    const msg = 'unsupported game build (even after adapting the module alias "' + (res.fhAlias || '?') + '"). Mod supports game: ' + defs.supportedVersions.join(', ') + '. Your game may have updated - watch the Workshop page for a mod update.';
+    console.error('ERROR: ' + msg);
+    report({ ran: true, ok: false, critical: true, error: msg });
+    process.exit(1);
+  }
+  bundleRes = res;
 }
 
 // 4. preload.js — bridge sieciowy
@@ -212,4 +189,5 @@ done('st-main.js copied');
   }
 }
 
+report({ ran: true, ok: true, featureMiss: bundleRes.featureMiss, manifest: bundleRes.manifest });
 console.log('Done. Changes:', changes);

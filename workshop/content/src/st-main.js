@@ -25,7 +25,7 @@ const log = (...a) => {
 };
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-const PROTO_VER = 5;
+const PROTO_VER = 5; // main-process hello only; the renderer's wire protocol is PROTO_VER in sandtogether.js
 
 // ---------------------------------------------------------------------------
 // State
@@ -447,33 +447,14 @@ function parseVer(file) {
     return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
   } catch (e) { return null; }
 }
-function applyBundlePatches(bundlePath, patches) {
-  // 0.9.259: we start from a CLEAN bundle.js, if we have its pristine copy next to it. We apply patches
-  // in place, so without this each subsequent run would run into its own earlier patches and
-  // patches.json would have to carry additional anchor variants "from mod version to version".
-  // The pristine copy is set up by the installer; when it's not there, we behave as before.
-  try {
-    const orig = bundlePath + '.orig';
-    if (fs.existsSync(orig)) fs.copyFileSync(orig, bundlePath);
-    else if (!fs.readFileSync(bundlePath, 'utf8').includes('window.SandTogether')) fs.copyFileSync(bundlePath, orig);
-  } catch (e) { log('bundle.js pattern:', e.message); }
-  let s = fs.readFileSync(bundlePath, 'utf8');
-  let dirty = false, criticalFail = false, appliedN = 0;
-  for (const pt of patches.bundle || []) {
-    let applied = false, already = false;
-    for (const v of pt.variants || []) {
-      if (s.indexOf(v.patched) >= 0) { already = true; break; }
-      const i1 = s.indexOf(v.anchor);
-      if (i1 < 0) continue;
-      if (s.indexOf(v.anchor, i1 + 1) >= 0) continue; // anchor not unique in this variant
-      s = s.slice(0, i1) + v.patched + s.slice(i1 + v.anchor.length);
-      dirty = true; applied = true; appliedN++;
-      break;
-    }
-    if (!applied && !already && pt.critical) criticalFail = true;
-  }
-  if (dirty) fs.writeFileSync(bundlePath, s);
-  return { criticalFail, appliedN };
+// Same engine as patch.js. The update's own copy wins (newest rules), else the installed one.
+function applyBundlePatches(bundlePath, patches, srcDir) {
+  let engine;
+  try { engine = require(path.join(srcDir, 'st-patch-engine.js')); } catch (e) { engine = require('./st-patch-engine.js'); }
+  const res = engine.patchBundleFile(bundlePath, patches, { wildcard: process.env.ST_NO_WILDCARD !== '1' });
+  for (const r of res.results) if (r.status === 'wildcard' || r.status === 'missing') log('AUTO-UPDATE: hook ' + r.status + ': ' + r.name + (r.reason ? ' (' + r.reason + ')' : ''));
+  if (res.error) log('AUTO-UPDATE: ' + res.error + ' - bundle.js left unpatched');
+  return { criticalFail: res.criticalFail || !!res.error, appliedN: res.results.filter((r) => r.status === 'applied' || r.status === 'wildcard').length };
 }
 
 // ============================================================================
@@ -653,6 +634,7 @@ function autoUpdateFromWorkshop() {
     log('AUTO-UPDATE: Workshop ma ' + wv.join('.') + ', locally ' + lv.join('.') + ' — updating...');
     fs.copyFileSync(wsMod, localMod);
     try { fs.copyFileSync(path.join(ws, 'src', 'st-main.js'), path.join(appDir, 'st-main.js')); } catch (e) {}
+    try { fs.copyFileSync(path.join(ws, 'src', 'st-patch-engine.js'), path.join(appDir, 'st-patch-engine.js')); } catch (e) {}
     try {
       const pl = path.join(appDir, 'preload.js');
       let ps = fs.readFileSync(pl, 'utf8');
@@ -668,7 +650,7 @@ function autoUpdateFromWorkshop() {
       else log('AUTO-UPDATE: preload.js has bridge without markers — run patch.js manually');
     } catch (e) {}
     const patches = JSON.parse(fs.readFileSync(path.join(ws, 'src', 'patches.json'), 'utf8'));
-    const res = applyBundlePatches(path.join(appDir, 'dist', 'js', 'bundle.js'), patches);
+    const res = applyBundlePatches(path.join(appDir, 'dist', 'js', 'bundle.js'), patches, path.join(ws, 'src'));
     log('AUTO-UPDATE: files copied, bundle patches: +' + res.appliedN + (res.criticalFail ? ' (WARNING: critical anchor mismatch — game build newer than mod!)' : ''));
     // restart, so the new files (bundle/renderer/main) actually get loaded
     const { app } = require('electron');

@@ -1,7 +1,8 @@
 # ============================================================
 # SandTogether - co-op multiplayer mod for Sandustry
 # Author / Autor: KAMIL PADULA
-# Self-contained installer: no Node.js, no internet required.
+# Self-contained installer: no Node.js, no internet required (uses the game's own
+# runtime for the shared patcher, else its built-in PowerShell patcher).
 # Run install.bat (recommended) or right-click -> Run with PowerShell
 # ============================================================
 
@@ -151,12 +152,80 @@ try {
     } catch {}
 } catch {}
 
-# --- 5. Copy mod files ------------------------------------------------------
+# --- 5. Shared patcher: src\patch.js, the engine the other installers and the auto-updater use ---
+# Runs under the game's own Electron as Node, else a node on PATH. patch.js writes its report file
+# as soon as it starts; no report means it never ran, and steps 6-10 below do the work instead.
+function Show-Done {
+    Write-Host ""
+    Write-Host "=== DONE! SandTogether installed. ===" -ForegroundColor Green
+    Write-Host "Launch Sandustry from Steam. The SandTogether panel appears top-right (click its header or Ctrl+Shift+H to hide)."
+    Write-Host "TIP: if Steam keeps updating the game and reverting the mod, set Steam -> Sandustry -> Properties -> Updates -> 'Only update on launch', and launch via SandTogether-START.bat."
+    Write-Host "Uninstall: Steam -> Sandustry -> Properties -> Installed Files -> Verify integrity, then delete resources\app."
+    if ($Host.Name -eq "ConsoleHost") { Read-Host "Press Enter to close" }
+}
+
+# Electron fuse wire: sentinel, version byte (1), length byte, then one byte per fuse.
+# Fuse 0 is RunAsNode: '1' = the exe runs scripts with ELECTRON_RUN_AS_NODE, anything else = it would start the game.
+function Test-RunAsNode($exe) {
+    if (-not (Test-Path $exe)) { return $false }
+    $sentinel = 'dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX'
+    $enc = [System.Text.Encoding]::GetEncoding(28591)
+    $fs = [System.IO.File]::OpenRead($exe)
+    try {
+        $buf = New-Object byte[] (8MB)
+        $carry = ''
+        while (($n = $fs.Read($buf, 0, $buf.Length)) -gt 0) {
+            $text = $carry + $enc.GetString($buf, 0, $n)
+            $i = $text.IndexOf($sentinel, [System.StringComparison]::Ordinal)
+            if ($i -ge 0 -and $i + $sentinel.Length + 2 -lt $text.Length) {
+                $w = $i + $sentinel.Length
+                return (([int]$text[$w] -eq 1) -and ([int]$text[$w + 2] -eq 0x31))
+            }
+            $carry = $text.Substring([Math]::Max(0, $text.Length - 64))
+        }
+    } finally { $fs.Close() }
+    return $false
+}
+
+function Invoke-SharedPatcher($runtime, $asNode) {
+    $report = Join-Path $env:TEMP ("sandtogether-patch-" + $PID + ".json")
+    Remove-Item $report, "$report.out", "$report.err" -ErrorAction SilentlyContinue
+    $argList = @("`"$PSScriptRoot\src\patch.js`"", "`"$res\app`"", '--report', "`"$report`"")
+    $prev = $env:ELECTRON_RUN_AS_NODE
+    if ($asNode) { $env:ELECTRON_RUN_AS_NODE = '1' }
+    try {
+        $p = Start-Process -FilePath $runtime -ArgumentList $argList -NoNewWindow -PassThru -RedirectStandardOutput "$report.out" -RedirectStandardError "$report.err"
+        $null = $p.Handle   # keeps ExitCode readable after the process ends
+        if (-not $p.WaitForExit(90000)) { try { $p.Kill() } catch {}; Write-Host "[!] patcher did not finish within 90 s - stopped" -ForegroundColor Yellow }
+    } catch { Write-Host "[!] could not run $runtime : $($_.Exception.Message)" -ForegroundColor Yellow; return $null }
+    finally { $env:ELECTRON_RUN_AS_NODE = $prev }
+    if (Test-Path "$report.out") { Get-Content "$report.out" | ForEach-Object { Write-Host $_ } }
+    if (Test-Path "$report.err") { Get-Content "$report.err" | ForEach-Object { Write-Host $_ -ForegroundColor Yellow } }
+    if (-not (Test-Path $report)) { return $null }
+    $r = Get-Content $report -Raw | ConvertFrom-Json
+    $r | Add-Member -NotePropertyName exitCode -NotePropertyValue $p.ExitCode
+    return $r
+}
+
+$shared = $null
+if ($env:ST_PS_PATCHER -ne '1') {
+    if (Test-RunAsNode "$gamePath\Sandustry.exe") { Write-Host "Patching with the game's runtime..."; $shared = Invoke-SharedPatcher "$gamePath\Sandustry.exe" $true }
+    else { Write-Host "[i] Sandustry.exe can't run scripts (RunAsNode fuse off or not found)" }
+    $nodeCmd = Get-Command node -ErrorAction SilentlyContinue
+    if (-not $shared -and $nodeCmd) { Write-Host "Patching with node ($($nodeCmd.Source))..."; $shared = Invoke-SharedPatcher $nodeCmd.Source $false }
+}
+if ($shared -and $shared.ok -and $shared.exitCode -eq 0) { Show-Done; exit 0 }
+if ($shared -and $shared.error) { Fail $shared.error }
+if ($shared) { Write-Host "[!] the shared patcher stopped without a result - using the built-in PowerShell patcher" -ForegroundColor Yellow }
+else { Write-Host "[i] using the built-in PowerShell patcher" }
+
+# --- 6. Copy mod files ------------------------------------------------------
 Copy-Item "$PSScriptRoot\src\sandtogether.js" "$res\app\dist\js\sandtogether.js" -Force
 Copy-Item "$PSScriptRoot\src\st-main.js" "$res\app\st-main.js" -Force
+Copy-Item "$PSScriptRoot\src\st-patch-engine.js" "$res\app\st-patch-engine.js" -Force
 Write-Host "[+] mod files copied"
 
-# --- 6. index.html ----------------------------------------------------------
+# --- 7. index.html ----------------------------------------------------------
 $p = "$res\app\dist\index.html"
 $s = [System.IO.File]::ReadAllText($p)
 if ($s.Contains("js/sandtogether.js")) { Write-Host "[=] index.html (already patched)" }
@@ -167,7 +236,7 @@ else {
     Write-Host "[+] index.html"
 }
 
-# --- 7. preload.js ----------------------------------------------------------
+# --- 8. preload.js ----------------------------------------------------------
 $p = "$res\app\preload.js"
 $s = [System.IO.File]::ReadAllText($p)
 if ($s.Contains("sandtogetherNet")) { Write-Host "[=] preload.js (already patched)" }
@@ -177,7 +246,7 @@ else {
     Write-Host "[+] preload.js"
 }
 
-# --- 8. main.js -------------------------------------------------------------
+# --- 9. main.js -------------------------------------------------------------
 $p = "$res\app\main.js"
 $s = [System.IO.File]::ReadAllText($p)
 $MARK_A = "// --- SandTogether init ---"
@@ -206,7 +275,7 @@ if ($s.Contains($anchor)) { $s = $s.Replace($anchor, $patches.mainJs.singleInsta
 [System.IO.File]::WriteAllText($p, $s)
 Write-Host "[+] main.js"
 
-# --- 9. bundle.js anchor patches (multi-version: tries each variant) --------
+# --- 10. bundle.js anchor patches (multi-version: tries each variant) --------
 $p = "$res\app\dist\js\bundle.js"
 $s = [System.IO.File]::ReadAllText($p)
 
@@ -262,9 +331,4 @@ if ($featureMiss -gt 8) {
     Write-Host "Co-op will connect, but many tools will NOT sync. Check the Workshop page for a mod update and re-run install.bat after updating." -ForegroundColor Red
 } elseif ($featureMiss -gt 0) { Write-Host "Note: $featureMiss optional feature(s) not available on this game build, but co-op will work." -ForegroundColor Yellow }
 
-Write-Host ""
-Write-Host "=== DONE! SandTogether installed. ===" -ForegroundColor Green
-Write-Host "Launch Sandustry from Steam. The SandTogether panel appears top-right (click its header or Ctrl+Shift+H to hide)."
-Write-Host "TIP: if Steam keeps updating the game and reverting the mod, set Steam -> Sandustry -> Properties -> Updates -> 'Only update on launch', and launch via SandTogether-START.bat."
-Write-Host "Uninstall: Steam -> Sandustry -> Properties -> Installed Files -> Verify integrity, then delete resources\app."
-if ($Host.Name -eq "ConsoleHost") { Read-Host "Press Enter to close" }
+Show-Done

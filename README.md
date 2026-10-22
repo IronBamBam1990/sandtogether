@@ -44,19 +44,24 @@ The game is an Electron app; the simulation is non-deterministic (83× `Math.ran
 |------|------|
 | `src/sandtogether.js` | The mod (renderer side): HUD, world sync, action forwarding/replay, player models, i18n EN/PL |
 | `src/st-main.js` | Electron main-process side: Steam P2P + WebSocket transports, invites, relays |
-| `src/patches.json` | Anchor/patched string pairs applied to the game's `bundle.js` (+ per-game-version variants) |
+| `src/patches.json` | Anchor/patched string pairs applied to the game's `bundle.js` (+ per-game-version variants); each entry has a stable `id` |
+| `src/st-patch-engine.js` | The one patch engine every installer and the auto-updater use: first unique literal variant, FH-alias rewrite, wildcard fallback, syntax guard, hook manifest |
 | `src/st-preload-append.js` | Preload bridge (`sandtogetherNet`) |
-| `src/patch.js` | Node-based patcher (dev convenience) |
-| `dist-package/` | What players get: pure-PowerShell installer (no Node needed) + docs |
-| `src/publish-workshop.js` | Steam Workshop publisher (uses the game's bundled steamworks.js) |
+| `src/patch.js` | Node-based patcher: `node src/patch.js <resources/app>` (all installers run it) |
+| `src/check-anchors.js` | Checks `patches.json` against game builds: `node src/check-anchors.js [--wildcard] [--emit] <bundle.js, app folder or folder of builds>` |
+| `tools/sync-dist.js` | Regenerates `dist-package/src` and `workshop/content` from `src` (`--check` for CI) |
+| `tools/test/` | Unit tests: `node --test "tools/test/*.test.js"` (`ST_GAME_VERSIONS=<dir>` adds the real-bundle check) |
+| `dist-package/` | What players get: installers (no Node needed) + docs. Generated parts: run `tools/sync-dist.js` |
+| `src/publish-workshop.js` | Steam Workshop publisher (uses the game's bundled steamworks.js; set `SANDUSTRY_DIR`) |
 | `BUNDLE_MAP.md`, `WORKERS_MAP.md`, `COOP_PLAN.md`, `RECON.md`, `CHANGELOG.md` | Reverse-engineering notes, architecture plan & full changelog |
 
 ### Dev loop
 
 1. Install the mod into your game once (`dist-package/install.bat`; macOS: `dist-package/install.command`; Linux: `dist-package/install-linux.sh` — the Unix installers need no Node, they run on the game's own Electron via `ELECTRON_RUN_AS_NODE`).
-2. Edit `src/sandtogether.js`, then copy it to `<game>/resources/app/dist/js/sandtogether.js` and restart the game (bundle patches only need re-applying when `patches.json` changes).
+2. Edit `src/sandtogether.js`, then copy it to `<game>/resources/app/dist/js/sandtogether.js` and restart the game (bundle patches only need re-applying when `patches.json` changes). Before committing, run `node tools/sync-dist.js` and the tests.
 3. Two-instance local testing: launch a second copy with `--st-userdata=<dir>` (bypasses the single-instance lock; any `--st-*` arg does) and use `Host LAN` / `Join LAN` on `127.0.0.1`.
-4. Logs: `%APPDATA%\Sandustry\logs\main.log` (macOS: `~/Library/Logs/Sandustry/main.log`) — everything the mod does is tagged `[SandTogether]`.
+4. Logs: `%APPDATA%\Sandustry\logs\main.log` (macOS: `~/Library/Logs/Sandustry/main.log`) — everything the mod does is tagged `[SandTogether]`. Repeated log lines are rate-limited per tag; `SandTogether._logAll = true` in the devtools console lifts that for a test.
+5. Game update: `node src/check-anchors.js --emit <new build>` lists what still matches and prints auto-adapted variants to review and add to `patches.json` (newest variant first).
 
 ### Contributing
 
