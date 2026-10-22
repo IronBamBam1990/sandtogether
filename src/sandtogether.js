@@ -17,6 +17,9 @@
 		} catch (e) {}
 	};
 	const VER = "0.9.287-beta";
+	// Wire protocol of the renderer (mirror, handshake). Peers on a different PROTO_VER get no mirror at all,
+	// with a status saying why. 7: per-peer baselines and the background hash check ("wh").
+	const PROTO_VER = 7;
 	const AUTHOR = "Kamil Padula";
 	const CONTRIBUTORS = "Qustux, dotNine, Knight-HD, DwoaC, Cr0ss0vr, TCentraL, AlyxiaFox, NanYu_sad.";
 	const VACUUM_CAPS = [500, 1000, 1500, 2000, 2500, 3000]; // capacity table from the game code (module 6420)
@@ -71,6 +74,9 @@
 			loading_world: "Loading the host's world... (a big map can take a few minutes — the game may look frozen)",
 			join_prompt: "Host address (ip or ip:port):",
 			ver_mismatch: "MOD VERSION MISMATCH — both players must update SandTogether!",
+			proto_mismatch: (who, theirs, mine) => "SandTogether protocol differs (" + who + ": v" + theirs + ", you: v" + mine + ") — no world sync until both update",
+			host_reloading: "Host is loading — the world continues when it is back",
+			sending_world: (who, a, b) => "Sending world to " + who + ": " + a + "/" + b,
 			waiting_world: "Connected. Waiting for host's world — HOST must click 'Send world', then you: menu → Load Game.",
 			unsupported: "⚠ Unsupported game version — the game updated and broke the mod. Re-run install, or check the Workshop page for an update.",
 			mp_btn: "Multiplayer",
@@ -137,6 +143,9 @@
 			loading_world: "Wczytywanie świata hosta... (duża mapa może potrwać kilka minut — gra może wyglądać na zawieszoną)",
 			join_prompt: "Adres hosta (ip lub ip:port):",
 			ver_mismatch: "RÓŻNE WERSJE MODA — obaj gracze muszą zaktualizować SandTogether!",
+			proto_mismatch: (who, theirs, mine) => "Inny protokół SandTogether (" + who + ": v" + theirs + ", ty: v" + mine + ") — brak synchronizacji świata, zaktualizujcie obaj",
+			host_reloading: "Host wczytuje — świat ruszy, gdy wróci",
+			sending_world: (who, a, b) => "Wysyłanie świata do " + who + ": " + a + "/" + b,
 			waiting_world: "Połączono. Czekam na świat hosta — HOST musi kliknąć 'Wyślij świat', potem Ty: menu → Load Game.",
 			unsupported: "⚠ Niewspierana wersja gry — gra się zaktualizowała i rozjechała moda. Uruchom install ponownie albo sprawdź update na Warsztacie.",
 			mp_btn: "Multiplayer",
@@ -203,6 +212,9 @@
 			loading_world: "正在加载房主的世界...(大地图可能需要几分钟——游戏可能看起来像卡住了)",
 			join_prompt: "房主地址(ip 或 ip:port):",
 			ver_mismatch: "模组版本不匹配——双方玩家都必须更新 SandTogether!",
+			proto_mismatch: (who, theirs, mine) => "SandTogether 协议不同 (" + who + ": v" + theirs + ", 你: v" + mine + ") — 双方更新前不同步世界",
+			host_reloading: "房主正在加载——返回后世界继续",
+			sending_world: (who, a, b) => "正在向 " + who + " 发送世界: " + a + "/" + b,
 			waiting_world: "已连接。正在等待房主的世界——房主需要点击'发送世界',然后你:菜单 → 加载游戏。",
 			unsupported: "⚠ 不支持的游戏版本——游戏已更新并导致模组失效。请重新运行安装程序,或前往创意工坊页面查看更新。",
 			mp_btn: "多人游戏",
@@ -258,7 +270,6 @@
 		wsx: {
 			pending: new Set(),   // host: indices of chunks to send
 			priority: new Set(),  // host: grabber/vacuum chunks — ALWAYS sent first (bypasses the 120 fast-lane limit)
-			sweep: 0,             // host: rolling full sweep
 			lastBatch: 0,
 			busy: false,
 			paused: false,        // client: czy sim zapauzowany
@@ -964,6 +975,7 @@
 				ST._directAddr = null; autoLoadClear(); // new client session = fresh auto-load guard (0.9.72)
 				ST._gotHostWorld = false; // CRITICAL: world trust does NOT carry over between sessions (different host = different world; without a reset the mirror would overwrite the wrong world)
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; if (ST._projSent) ST._projSent.clear(); // state from the previous session = different coordinates/world
+				ST._hostProto = undefined; ST._hcRep = null; // PROTO 7: the host's protocol arrives with its mver
 				// own nick (localStorage) broadcast via the existing hello protocol — no changes to the IPC bridge
 				if (ST._nickCustom) { try { net.send({ t: "hello", nick: ST._nickCustom }); } catch (e) {} }
 				setStatus(t("joined", ev.transport));
@@ -996,21 +1008,15 @@
 					if (hostInWorld && powrot) {
 						const wRe = ST.wsx;
 						let wroc = 0;
+						// the client may never have received these: whole rows again, to this peer only
 						if (wRe && wRe.unacked && wRe.unacked.size) {
-							for (const rec of wRe.unacked.values()) {
-								if (!rec || !rec.idx) continue;
-								for (const i of rec.idx) {
-									if (wRe.rowH) wRe.rowH.delete(i);        // the client may never have received these
-									if (wRe.rowPrev) wRe.rowPrev.delete(i);  // so no cell delta may be based on them
-									wRe.pending.add(i); wroc++;
-								}
-							}
+							for (const rec of wRe.unacked.values()) if (rec && rec.idx) wroc += needChunks(ev.id, rec.idx);
 						}
 						resetAckBaseline(ev.id, "powrot pira po zerwaniu polaczenia");
 						log("peer " + ev.id + " came back after " + Math.round(performance.now() - wrocilT)
 							+ " ms: reconnect, not a join. Re-queued " + wroc + " chunks that were in flight.");
 					} else if (hostInWorld) {
-						resetAckBaseline(null, "powitanie/pelny swiat"); enqueueFullWorld();
+						resetAckBaseline(ev.id, "powitanie/pelny swiat"); enqueueFullWorld(ev.id);
 						// 0.9.185 (CAUSE of the second, unnecessary transfer): this event does NOT know whether the client
 						// is already on our world — only the "hello" MESSAGE handler (gen/wid/ready) knows that,
 						// which arrives a few ms later. In the 15:42:06 log the event fired sendWorld, and
@@ -1026,7 +1032,7 @@
 								if (!sc || sc.active === 1) return;
 								const hs = ST._helloMsgT && ST._helloMsgT.get(pid);
 								if (hs && performance.now() - hs < 5000) return; // the "hello" handler already decided
-								if (performance.now() - (ST._autoSendT || 0) > 20000) { ST._autoSendT = performance.now(); log("auto-send save (no hello message from " + pid + ")"); sendWorld(); }
+								if (performance.now() - (ST._autoSendT || 0) > 20000) { ST._autoSendT = performance.now(); log("auto-send save (no hello message from " + pid + ")"); sendWorld(pid); }
 								else log("auto-send save SKIPPED (cooldown 20 s since previous)");
 							} catch (e) {}
 						}, 1500);
@@ -1053,6 +1059,24 @@
 				ST._lastAppliedSq = null; // drop the ack so it cannot throttle the next session
 				resetWorldQueue();        // queue, row hashes and congestion state are all per session
 				setClientPaused(false);
+			} else if (ev.kind === "peer-epoch") {
+				// PROTO 7: a peer's renderer went away (reload, crash) or came back as a new epoch
+				const pe = ST.peers.get(ev.id);
+				if (ST.net.role === "host") {
+					if (pe) { pe.detached = !ev.attached; pe.epoch = ev.epoch; }
+					log("peer " + ev.id + " renderer " + (ev.attached ? "attached, epoch " + ev.epoch : "detached — mirror to it paused, nobody else waits for it"));
+				} else if (ST.net.role === "client") {
+					if (!ev.attached) { ST._hostDetached = true; setStatus(t("host_reloading"), "#fd5"); }
+					else {
+						// a new host renderer numbers its batches from zero again: our ack and hash report start over too
+						if (ST._hostDetached || (ST._hostEpoch !== undefined && ev.epoch !== ST._hostEpoch)) { ST._lastAppliedSq = null; ST._hcRep = null; }
+						if (ST._hostDetached) setStatus(t("players", ST.peers.size + 1));
+						ST._hostDetached = false;
+					}
+					ST._hostEpoch = ev.epoch;
+				}
+			} else if (ev.kind === "wx-start" || ev.kind === "wx-progress" || ev.kind === "wx-done" || ev.kind === "wx-fail" || ev.kind === "world-ready") {
+				onWorldTransferEvent(ev);
 			} else if (ev.kind === "reconnecting") { setStatus(t("reconnecting", ev.attempt), "#fd5");
 			} else if (ev.kind === "version-mismatch") setStatus(t("ver_mismatch"), "#f66");
 			else if (ev.kind === "error" && /ECONNREFUSED/i.test(String(ev.message || "")) && /\b(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})\b/.test(String(ev.message || ""))) {
@@ -1071,12 +1095,22 @@
 			if (bin && msg) msg.__bytes = bin instanceof Uint8Array ? bin : new Uint8Array(bin);
 			handleMsg(from, msg);
 		});
-		net.status().then((s) => {
+		// PROTO 7: attach first. The main process counts it as a new epoch of this renderer and tells the peers, so
+		// a host resets only us, and a verified world file we never imported is announced again (world-ready).
+		(net.attach ? net.attach().catch(() => null) : Promise.resolve(null)).then((a) => { if (a) { ST._epoch = a.epoch; log("renderer attached as epoch " + a.epoch + (a.wx ? ", world transfer " + a.wx.got + "/" + a.wx.total : "")); } return net.status(); }).then((s) => {
 			ST.net.role = s.role; ST.net.transport = s.transport;
 			try { ST._nickCustom = localStorage.getItem("st_nick") || null; } catch (e) { ST._nickCustom = null; }
 			ST._myNick = ST._nickCustom || s.myNick || null; // own nick > Steam nick > default (feedback from TCentraL: LAN = "Player" permanently)
 			ST._gameFp = s.gameFp || null; // game build fingerprint (guard against different builds between players)
 			for (const p of s.peers) { const old = ST.peers.get(p.id); ST.peers.set(p.id, Object.assign({ x: 0, y: 0, tx: 0, ty: 0 }, old || {}, { nick: p.nick, lastSeen: performance.now() })); } // 0.9.82: keep the modVer/ping of a peer we already know
+			// PROTO 7: what the main process kept across our reload (protocol and release from mver, renderer epoch)
+			for (const p of s.peers) {
+				const pp = ST.peers.get(p.id);
+				if (typeof p.pv === "number") pp.proto = p.pv;
+				if (typeof p.ver === "string") pp.modVer = p.ver;
+				if (p.att === false) pp.detached = true;
+				if (ST.net.role === "client" && typeof p.pv === "number") ST._hostProto = p.pv;
+			}
 			// 0.9.76 HANDSHAKE: the renderer came up (game start OR a reload after loading a world).
 			// The connection lives in the main process, so the host does NOT know we lost the entire session state —
 			// we tell it explicitly and state which world we're on (this decides: stream or save).
@@ -1269,7 +1303,7 @@
 			p.nick = msg.nick || "?";
 			ST.peers.set(from, p);
 			setStatus(t("players", ST.peers.size + 1));
-			try { net.send({ t: "mver", v: VER, gf: ST._gameFp || null }, from); } catch (e) {} // MOD version + GAME build fingerprint
+			try { net.send({ t: "mver", v: VER, pv: PROTO_VER, gf: ST._gameFp || null }, from); } catch (e) {} // MOD version + GAME build fingerprint
 			// old mod (≤0.9.7) doesn't know mver and won't reply — after 5s with no reply, ALARM (the "buddy on 0.9.0" case)
 			// "Old mod" check WITH RETRIES (0.9.88): no reply within 5 s doesn't mean old mod —
 			// the peer might be in the middle of loading a world, or their renderer is just coming up after a reload.
@@ -1278,7 +1312,7 @@
 					const pp = ST.peers.get(from);
 					if (!pp || pp.modVer) return;                       // we already know — done
 					if (attempt < 3) {
-						try { net.send({ t: "mver", v: VER, gf: ST._gameFp || null }, from); } catch (e) {}
+						try { net.send({ t: "mver", v: VER, pv: PROTO_VER, gf: ST._gameFp || null }, from); } catch (e) {}
 						setTimeout(() => askVer(attempt + 1), attempt === 1 ? 7000 : 13000);
 						return;
 					}
@@ -1311,15 +1345,9 @@
 			if (ST.net.role === "host" && pustePowitanie) {
 				const wRe = ST.wsx;
 				let wroc = 0;
+				// the client may never have got these rows: whole rows again, to this peer only
 				if (wRe && wRe.unacked && wRe.unacked.size) {
-					for (const rec of wRe.unacked.values()) {
-						if (!rec || !rec.idx) continue;
-						for (const i of rec.idx) {
-							if (wRe.rowH) wRe.rowH.delete(i);        // the client may never have got these rows
-							if (wRe.rowPrev) wRe.rowPrev.delete(i);  // so no cell delta may be based on them
-							wRe.pending.add(i); wroc++;
-						}
-					}
+					for (const rec of wRe.unacked.values()) if (rec && rec.idx) wroc += needChunks(from, rec.idx);
 				}
 				resetAckBaseline(from, "greeting without world state (transport reconnect or nick change)");
 				log("greeting from " + ((p && p.nick) || from) + " carries no world state: not a join. Re-queued "
@@ -1327,7 +1355,7 @@
 			} else if (ST.net.role === "host") {
 				if (!ST._helloMsgT) ST._helloMsgT = new Map();
 				ST._helloMsgT.set(from, performance.now()); // 0.9.185: marker for a deferred auto-send from the peer-hello event
-				ST._snapForce = true; resetAckBaseline(null, "powitanie/pelny swiat"); enqueueFullWorld(); // 0.9.76: EVERY hello (even after a client renderer reload) = full world from scratch
+				ST._snapForce = true; resetAckBaseline(from, "powitanie/pelny swiat"); enqueueFullWorld(from); // 0.9.76: EVERY hello (even after a client renderer reload) = full world from scratch; PROTO 7: for that peer only
 				const hst = ST.state, myWid = hst && hst.store.meta && hst.store.meta.worldId;
 				const hostInWorld = hst && hst.store.scene && hst.store.scene.active !== 1;
 				// SAVE only when the client is NOT already on our world. After a reload the client already has our world
@@ -1340,12 +1368,17 @@
 				const genOk = msg.gen !== undefined ? (msg.gen != null && msg.gen === ST._worldGen) : !clientElsewhere;
 				// 0.9.152: a matching gen is enough — import assigns the client a NEW local wid, so a "different wid"
 				// with a matching gen is normal, not a reason for another transfer (a resend loop on every hello).
-				if (hostInWorld && (!genOk || (clientInMenu && msg.ready))) { ST._autoSendT = performance.now(); log("hello: client without my world (wid=" + msg.wid + " gen=" + msg.gen + "/" + ST._worldGen + " scene=" + msg.scene + ") — sending save"); sendWorld(); }
-				else if (hostInWorld && !msg.ready) { ST._autoSendT = performance.now(); log("hello: new player — sending save"); sendWorld(); }
+				if (hostInWorld && (!genOk || (clientInMenu && msg.ready))) { ST._autoSendT = performance.now(); log("hello: client without my world (wid=" + msg.wid + " gen=" + msg.gen + "/" + ST._worldGen + " scene=" + msg.scene + ") — sending save"); sendWorld(from); }
+				else if (hostInWorld && !msg.ready) { ST._autoSendT = performance.now(); log("hello: new player — sending save"); sendWorld(from); }
 				else if (hostInWorld) log("hello: client ALREADY on my world — stream only, no save");
 			}
 		} else if (msg.t === "mver") {
 			const p = ST.peers.get(from); if (p) p.modVer = msg.v;
+			// wire protocol: no pv = an older mod (0). The host streams the mirror only to peers on our PROTO_VER,
+			// the client applies it only from a host on our PROTO_VER (see maybeSendBatch / applyWorldBatch).
+			const pv = typeof msg.pv === "number" ? msg.pv : 0;
+			if (p) p.proto = pv;
+			if (ST.net.role === "client") ST._hostProto = pv;   // a client only hears mver from its host (never relayed; "host" or steam:<id>)
 			// 0.9.275 (MEASURED, the diagnostic added in 0.9.274 named it in one run: "CELL DELTA OFF (peer
 			// version): Qustux [ws:::ffff:127.0.0.1:61370] ver=unknown"). The handshake was ONE-WAY. Only the
 			// side that receives a hello answers with mver, and over a local ws link only the client sends a
@@ -1354,11 +1387,16 @@
 			// delta, no raw stream, whole rows instead. Every local test we have run was measuring the v5
 			// fallback while both logs cheerfully said "mod version OK". Now the message answers itself once;
 			// msg.r marks the reply, so there is no ping-pong.
-			if (!msg.r) { try { net.send({ t: "mver", v: VER, gf: ST._gameFp || null, r: 1 }, from); } catch (e) {} }
+			if (!msg.r) { try { net.send({ t: "mver", v: VER, pv: PROTO_VER, gf: ST._gameFp || null, r: 1 }, from); } catch (e) {} }
 			if (msg.v !== VER) {
 				setStatus(t("ver_mismatch") + " [" + ((p && p.nick) || from) + ": " + msg.v + " / you: " + VER + "]", "#f66");
 				log("DIFFERENT MOD VERSIONS:", from, "ma", msg.v, "— I have", VER);
 			} else log("mod version OK at", (p && p.nick) || from, "->", msg.v);
+			// after the release check, so this status is the one that stays: it is the reason the world is not syncing
+			if (pv !== PROTO_VER) {
+				setStatus(t("proto_mismatch", (p && p.nick) || from, pv, PROTO_VER), "#f66");
+				log("DIFFERENT PROTOCOL:", from, "pv", pv, "— I have", PROTO_VER, "— no world mirror between us");
+			}
 			// GAME build fingerprint (guard R3): different builds = different element enums/anchors → warn instead of silent corruption
 			if (msg.gf && ST._gameFp && msg.gf !== ST._gameFp) {
 				setStatus("⚠ DIFFERENT GAME BUILDS! [" + ((p && p.nick) || from) + "] — update the game on both sides", "#f66");
@@ -1378,6 +1416,8 @@
 			}
 		} else if (msg.t === "wc") {
 			applyWorldBatch(msg).catch((e) => { if (lim("applyErrN", 3)) log("apply error:", e.message, String(e.stack || "").split(String.fromCharCode(10)).slice(0, 4).join(" | "), "bin=" + (msg.__bytes ? msg.__bytes.length : "NONE") + " d=" + (msg.d ? msg.d.length : "NONE") + " z=" + msg.z); });
+		} else if (msg.t === "wh") {
+			if (ST.net.role === "host") hashCheckHost(from, msg);   // PROTO 7: a client's chunk hashes
 		} else if (msg.t === "wcack") {
 			// Client acks the last APPLIED batch. This is the only signal we have for how far behind it is:
 			// Steam's send buffer is invisible to us and sendP2PPacket never reports that it is full.
@@ -1390,7 +1430,8 @@
 				const w0 = ST.wsx;
 				if (w0.unacked && w0.unacked.size) {
 					let minAck = null;
-					for (const pp of ST.peers.values()) if (typeof pp.ackSq === "number" && (minAck === null || pp.ackSq < minAck)) minAck = pp.ackSq;
+					const tNowA = performance.now();   // PROTO 7: peers out of the stream (reloading, receiving a save) do not count
+					for (const pp of ST.peers.values()) if (pp.proto === PROTO_VER && !mirrorPaused(pp, tNowA) && typeof pp.ackSq === "number" && (minAck === null || pp.ackSq < minAck)) minAck = pp.ackSq;
 					// 0.9.264: while forgetting the confirmed batches, measure what the wire ACTUALLY drains.
 					// Everything the slowest client has just confirmed has left the socket and been applied, so
 					// bytes / elapsed is the end-to-end goodput. That number is what the in-flight gate in the
@@ -1519,7 +1560,7 @@
 			if (ST.net.role === "client" && typeof msg.et === "number" && msg.et > 0) clientFillGrabTank([msg.et], null);
 		} else if (msg.t === "redirty") {
 			// The client briefly ran its own simulation (the game save resumed its thread) — these chunks may
-			// differ from ours. We clear the row hashes for them, so they get resent in full.
+			// differ from ours. They go to that client again as whole rows.
 			if (ST.net.role !== "client" && msg.m) {
 				try {
 					const m = b64dec(msg.m), total = msg.n | 0;
@@ -1527,9 +1568,7 @@
 					// 0.9.201: the report now also goes out after the client's OWN action (outlines), not only after
 					// a game save — so we put these chunks at the front of the queue, so they come back right away.
 					for (let i = 0; i < total; i++) if (m[i >> 3] & (1 << (i & 7))) {
-						if (ST.wsx.rowH) ST.wsx.rowH.delete(i);
-						if (ST.wsx.rowPrev) ST.wsx.rowPrev.delete(i);   // 0.9.265: the client reported this area as wrong -> send full rows
-						ST.wsx.pending.add(i);
+						needChunks(from, [i]);   // the client reported this area as wrong -> whole rows, to that client only
 						// 0.9.219 (REVISION 2.5): the chunk ends up in pending anyway — the limit only takes away its priority.
 						if (ST.wsx.priority && ST.wsx.priority.size < 20000) ST.wsx.priority.add(i);
 						else if (lim("prioCap", 3)) log("priority: queue full (20000) — chunks will return via normal queue");
@@ -1540,24 +1579,15 @@
 			}
 		} else if (msg.t === "resync") {
 			if (ST.net.role !== "client") resetAckBaseline(from, "resync od gracza");
-			if (ST.net.role === "host") { ST._wtxHold = 0; log("resync od", from, "-> full world to queue (end of mirror silence)"); resetAckBaseline(null, "powitanie/pelny swiat"); enqueueFullWorld(); ST._lastSnap = 0; ST._snapForce = true; }
+			if (ST.net.role === "host") { log("resync od", from, "-> full world to queue (end of mirror silence)"); resetAckBaseline(from, "powitanie/pelny swiat"); enqueueFullWorld(from); ST._lastSnap = 0; ST._snapForce = true; }
 		} else if (msg.t === "world-req") {
-			// the client asks for a SAVE (self-healing: reconnect / auto-send didn't work) — rate-limit 15 s
+			// the client asks for a SAVE (self-healing: reconnect / auto-send didn't work) — rate-limit 15 s.
+			// PROTO 7: a transfer already under way is not restarted: the main process re-offers the same file
+			// (sendWorld reuses a recent one), and the client's main asks only for the parts it lacks.
 			if (ST.net.role === "host" && performance.now() - (ST._lastWorldReqT || 0) > 15000) {
 				ST._lastWorldReqT = performance.now();
-				// ST-FIX: if a transfer is ALREADY in progress, a new export only wipes the client's progress (new tid).
-				// The log shows 5 exports in 45 s and not one of them finished. We retry the current one.
-				if (ST._wtx && ST._wtxHold && performance.now() < ST._wtxHold) {
-					log("world-req from " + from + " — transfer tid " + ST._wtx.tid + " already in progress, retrying world-begin");
-					try { net.send({ t: "world-begin", tid: ST._wtx.tid, name: ST._wtx.name, size: (ST._wtx.sizeKB || 0) * 1024, chunks: ST._wtx.total, gen: ST._worldGen || null }, from); } catch (e) {}
-					ST._wtx.queue.length = 0;
-					for (let i = 0; i < ST._wtx.total; i++) ST._wtx.queue.push(i);
-					ST._wtxActiveT = performance.now();
-					pumpWtx();
-				} else {
-					log("world-req od", from, "-> sending save");
-					sendWorld();
-				}
+				log("world-req od", from, "-> sending save");
+				sendWorld(from);
 			}
 		} else if (msg.t === "world-wait") {
 			// the host hasn't entered the world yet — we wait calmly, the world-req attempt isn't lost
@@ -1565,86 +1595,44 @@
 				ST._worldReqN = Math.max(0, (ST._worldReqN || 0) - 1);
 				setStatus(t("waiting_host_world"), "#fd5");
 			}
-		} else if ((msg.t === "world-begin" || msg.t === "world-chunk" || msg.t === "world-end" || msg.t === "world-wait") && ST.net.role === "host") {
-			// the host never receives a world (0.9.72): a world packet at the host = echo/self-loop or a foreign client → ignore
-			if (!ST._hostWorldPktLogged) { ST._hostWorldPktLogged = true; log("HOST: ignored world packet", msg.t, "od", from); }
-		} else if (msg.t === "world-begin") {
-			// a NEW transfer while one is being received = a restart with shuffled packet indices → a world-need storm
-			// (fix TCentraL "went crazy with the retrys"): we ignore it until the current receive finishes.
-			// 0.9.75: guard only for a LIVE receive. A stuck one (the host already sent world-end, but we're
-			// missing packets, or it's been running >30 s) MUST yield — otherwise the client will never get the full world.
-			// 0.9.87: the NEWER transfer wins (packets are filtered by tid anyway, so interleaving is impossible).
-			if (ST._worldRx && !ST._worldRx.done && msg.tid !== undefined && ST._worldRx.tid !== undefined && msg.tid < ST._worldRx.tid) {
-				log("world-begin OLDER (tid " + msg.tid + " < " + ST._worldRx.tid + ") — ignoring"); return;
-			}
-			if (ST._worldRx && !ST._worldRx.done) log("switching receive: tid " + ST._worldRx.tid + " (" + ST._worldRx.got + "/" + ST._worldRx.total + ") → tid " + msg.tid);
-			
-			ST._gotHostWorld = true; // we received the world FROM the host → we trust its worldId when both are in the game (see applyWorldBatch)
-			ST._worldRx = { tid: msg.tid, name: msg.name, total: msg.chunks, parts: new Array(msg.chunks), got: 0, from, done: false, ended: false, t0: performance.now(), gen: msg.gen || null };
-			ST._rxLastGot = -1; // ST-FIX: progress counter for scheduleRxCheck
-			log("world-begin: tid", msg.tid, "-", msg.name, "-", msg.chunks, "packets,", Math.round((msg.size || 0) / 1024), "KB");
-			setStatus(t("receiving", 0, msg.chunks), "#ff5");
-			scheduleRxCheck();
-		} else if (msg.t === "world-chunk" && ST._worldRx) {
-			// a packet from a DIFFERENT transfer than the current one = interleaving (the host autosaved between sends) —
-			// letting it through would glue the save together from two world versions → CORRUPTED world (report from derErste67)
-			if (ST._worldRx.tid !== undefined && msg.tid !== undefined && msg.tid !== ST._worldRx.tid) {
-				if (!ST._tidDropLogged) { ST._tidDropLogged = true; log("world-chunk from a foreign transfer REJECTED (tid " + msg.tid + " ≠ " + ST._worldRx.tid + ")"); }
-				return;
-			}
-			if (ST._worldRx.parts[msg.i] === undefined) { ST._worldRx.parts[msg.i] = msg.data; ST._worldRx.got++; }
-			if (ST._worldRx.got % 20 === 0 || ST._worldRx.got === ST._worldRx.total)
-				setStatus(t("receiving", ST._worldRx.got, ST._worldRx.total), "#ff5");
-			maybeFinishRx();
-		} else if (msg.t === "world-end" && ST._worldRx) {
-			if (ST._worldRx.tid !== undefined && msg.tid !== undefined && msg.tid !== ST._worldRx.tid) return;
-			ST._worldRx.ended = true;
-			maybeFinishRx();
-		} else if (msg.t === "world-need") {
-			// host: the client asks for missing pieces -> resend them (as a priority)
-			// 0.9.75: we keep packets only for the CURRENT transfer. A request for an older tid (the client got stuck
-			// on the previous one) = sending it packets from the new transfer, which it will reject anyway → endless "recovering".
-			// Instead we start a fresh, complete transfer.
-			// ST-FIX (game 0.5.6, restart loop): on a foreign tid we do NOT re-export the save.
-			// The parts of the current transfer are still sitting in ST._wtx.parts — resending world-begin is enough
-			// (the client will switch to the current tid) and requeue everything from scratch. The old code did
-			// ST._wtx = null; sendWorld(), and sendWorld is ASYNC (FH.game.save + up to 10 s waiting for the file):
-			// for ~3 s the host sent NOTHING, the client sent world-need with the old tid every 700 ms, and the first
-			// of them, after the new _wtx was set, hit the mismatch again — an endless loop
-			// (host log 17:16:53-17:19:36: 41 restarts, the client never got the whole save).
-			if (ST._wtx && msg.tid !== undefined && ST._wtx.tid !== undefined && msg.tid !== ST._wtx.tid) {
-				if (performance.now() - (ST._wtxRestartT || 0) < 1500) { return; }
-				ST._wtxRestartT = performance.now();
-				log("world-need for old transfer tid " + msg.tid + " (we have " + ST._wtx.tid + ") — retrying world-begin for the current transfer");
-				try { net.send({ t: "world-begin", tid: ST._wtx.tid, name: ST._wtx.name, size: (ST._wtx.sizeKB || 0) * 1024, chunks: ST._wtx.total, gen: ST._worldGen || null }); } catch (e) {}
-				ST._wtx.queue.length = 0;
-				for (let i = 0; i < ST._wtx.total; i++) ST._wtx.queue.push(i);
-				ST._wtxActiveT = performance.now();
-				pumpWtx(); return;
-			}
-			// no current transfer (asynchronous preparation is in progress) — don't start another one
-			if (!ST._wtx) return;
-			if (ST._wtx && Array.isArray(msg.idx)) for (const i of msg.idx) if (ST._wtx.parts[i] !== undefined) ST._wtx.queue.push(i);
-			ST._wtxActiveT = performance.now();
-			pumpWtx();
 		}
 	}
 
-	function missingRxIndices() {
-		const rx = ST._worldRx; if (!rx) return [];
-		const miss = [];
-		for (let i = 0; i < rx.total; i++) if (rx.parts[i] === undefined) miss.push(i);
-		return miss;
+	// PROTO 7: the save transfer runs in the main process (st-main.js, SESSION); these are its events.
+	function onWorldTransferEvent(ev) {
+		if (ST.net.role === "host") {
+			const pe = ST.peers.get(ev.id);
+			if (ev.kind === "wx-start") { if (pe) { pe.wxBusy = true; pe.wxT = performance.now(); } }
+			else if (ev.kind === "wx-progress") {
+				if (pe) pe.wxT = performance.now();
+				setStatus(t("sending_world", (pe && pe.nick) || ev.id, ev.sent, ev.total), "#ff5");
+			} else if (ev.kind === "wx-done") {
+				setStatus(t("players", ST.peers.size + 1));
+				// the mirror skipped this peer while its file went out: whole chunks to it, nobody else is reset
+				if (pe) { pe.wxBusy = false; resetAckBaseline(ev.id, "save delivered"); enqueueFullWorld(ev.id); }
+			}
+			return;
+		}
+		if (ST.net.role !== "client") return;
+		// we receive the world FROM the host → we trust its worldId when both are in the game (see applyWorldBatch)
+		if (ev.kind === "wx-progress" || ev.kind === "world-ready") ST._gotHostWorld = true;
+		if (ev.kind === "wx-progress") { ST._wxRx = { got: ev.got, total: ev.total }; setStatus(t("receiving", ev.got, ev.total), "#ff5"); }
+		else if (ev.kind === "wx-fail") { ST._wxRx = null; setStatus(t("import_err", ev.error), "#f66"); }
+		else if (ev.kind === "world-ready") { ST._wxRx = null; importReceivedWorld(ev); }
 	}
-	function maybeFinishRx() {
-		const rx = ST._worldRx; if (!rx || rx.done) return;
-		if (rx.got < rx.total) return;
-		rx.done = true; ST._worldRx = null;
-		if (ST._rxTimer) { clearTimeout(ST._rxTimer); ST._rxTimer = null; }
+	// The main process received and verified the file (world-ready). Here we only import it and maybe load it.
+	async function importReceivedWorld(ev) {
+		if (ST._importingHash === ev.hash) return;   // announced again (renderer attach, re-offer) while we are on it
+		ST._importingHash = ev.hash;
+		const rx = { name: ev.name, gen: ev.gen || null };
+		let bytes = null;
+		try { bytes = await net.takeWorld(ev.hash); } catch (e) {}
+		if (!bytes) { ST._importingHash = null; log("world-ready, but the file is not there any more (" + ev.hash + ")"); return; }
 		try {
-			const bytes = b64dec(rx.parts.join(""));
+			bytes = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
 			window.electron.importSave(bytes).then(async (r) => {
-				if (r && r.success === false) { setStatus(t("import_err", r.error), "#f66"); return; }
+				if (r && r.success === false) { ST._importingHash = null; setStatus(t("import_err", r.error), "#f66"); return; }
+				try { net.worldImported(ev.hash); } catch (e) {}   // before a load reloads us: never announced again
 				ST._worldRxDone = true; // we have a world in this session → world-req turns itself off
 				ST._recAskN = 0; ST._recAskT = 0;   // 0.9.215: the world arrived — the next request again after 60 s, not after 5 min
 				log("World import OK:", rx.name, bytes.length, "bytes");
@@ -1704,31 +1692,9 @@
 					finally { ST._loadingWorld = false; }
 				}
 				setStatus(t("world_imported", rx.name), "#5f5");
-			}).catch((e) => setStatus(t("import_err", e.message), "#f66"));
-		} catch (e) { setStatus(t("decode_err", e.message), "#f66"); }
+			}).catch((e) => { ST._importingHash = null; setStatus(t("import_err", e.message), "#f66"); });
+		} catch (e) { ST._importingHash = null; setStatus(t("decode_err", e.message), "#f66"); }
 	}
-	// every 700 ms: if pieces are missing, ask the host for them again (recovery after Steam P2P)
-	function scheduleRxCheck() {
-		if (ST._rxTimer) clearTimeout(ST._rxTimer);
-		ST._rxTimer = setTimeout(() => {
-			const rx = ST._worldRx;
-			if (!rx || rx.done) return;
-			// ST-FIX (game 0.5.6, restart loop): world-need ONLY when the transfer is STALLED. The old version sent it
-			// every 700 ms regardless of progress — at the start there are always missing pieces, so the host got
-			// an avalanche of requests, and each one with a stale tid wiped its whole transfer and forced a save re-export.
-			const stalled = rx.ended || rx.got === ST._rxLastGot;
-			ST._rxLastGot = rx.got;
-			if (stalled) {
-				const miss = missingRxIndices();
-				if (miss.length) {
-					net.send({ t: "world-need", tid: rx.tid, idx: miss.slice(0, 200) }, rx.from);
-					setStatus(t("receiving", rx.got, rx.total) + " (recovering " + miss.length + ")", "#ff5");
-				}
-			} else setStatus(t("receiving", rx.got, rx.total), "#ff5");
-			scheduleRxCheck();
-		}, 700);
-	}
-
 	// ------------------------------------------------------------------
 	// WORLD SYNC — HOST: mirror stream of dirty chunks
 	// ------------------------------------------------------------------
@@ -1820,7 +1786,7 @@
 				if (nx < 0 || ny < 0 || nx >= d.cx || ny >= d.cy) continue;
 				const i = nx + ny * d.cx;
 				ST.wsx.pending.add(i); ST.wsx.priority.add(i);
-				if (ST.wsx.rowH) ST.wsx.rowH.delete(i);
+				mirrorForget(i);
 			}
 		} catch (e) {}
 	}
@@ -1832,7 +1798,7 @@
 				const cx = Math.floor((sp.x | 0) / CHUNK), cy = Math.floor((sp.y | 0) / CHUNK);
 				for (let dy = -3; dy <= 3; dy++) for (let dx = -4; dx <= 4; dx++) {
 					const nx = cx + dx, ny = cy + dy;
-					if (nx >= 0 && ny >= 0 && nx < d.cx && ny < d.cy) { const i = nx + ny * d.cx; ST.wsx.pending.add(i); if (ST.wsx.rowH) ST.wsx.rowH.delete(i); }
+					if (nx >= 0 && ny >= 0 && nx < d.cx && ny < d.cy) { const i = nx + ny * d.cx; ST.wsx.pending.add(i); mirrorForget(i); }
 				}
 			}
 		} catch (e) {}
@@ -1854,21 +1820,155 @@
 		w.gpT = 0; w.gpB = 0; w.inflight = 0; w.tok = 0; w.tokT = undefined;   // 0.9.264/269: the goodput window and the wire budget start over with the acks
 		log("RESET confirmations for", peerId || "everyone", "(" + why + ") — resuming full send");
 	}
-	function enqueueFullWorld() {
+	// PROTO 7: the full world goes to ONE peer (join, renderer reload, resync). Its chunks are marked in p.need and
+	// go to that peer as whole rows; everyone else keeps their baseline and gets the usual delta of the same
+	// chunks, so one player reloading no longer costs every other player a full world.
+	// Without a peer id it is a rescan: every chunk is compared with the shared baseline, nobody is reset.
+	function enqueueFullWorld(peerId) {
 		if (!ST.state) return;
+		const p = peerId ? ST.peers.get(peerId) : null;
+		if (peerId && !p) { log("Full world: unknown peer " + peerId + " — skipped"); return; }
 		// 0.9.81: handshake, peer-hello and resync can hit at the same moment — without this lock
 		// we go through 9216 chunks several times in a row with no gain at all (the queue is a set).
-		const nowE = performance.now();
-		if (nowE - (ST._fullWorldT || 0) < 3000) { log("Full world: skipping (already queued " + Math.round(nowE - ST._fullWorldT) + " ms ago)"); return; }
-		ST._fullWorldT = nowE;
+		const nowE = performance.now(), lock = p || ST.wsx;
+		// (fullT unset = never: performance.now() restarts at 0 with every renderer load, so "|| 0" skipped early joins)
+		if (lock.fullT !== undefined && nowE - lock.fullT < 3000) { log("Full world: skipping (already queued " + Math.round(nowE - lock.fullT) + " ms ago)"); return; }
+		lock.fullT = nowE;
 		const { W, H } = worldBuffers(ST.state);
 		if (!W) return;
-		const d = chunkDims(W, H);
-		for (let i = 0; i < d.cx * d.cy; i++) ST.wsx.pending.add(i);
-		if (ST.wsx.rowH) ST.wsx.rowH.clear(); // full re-send: row-delta must not skip "unchanged" rows (a new client doesn't have them)
-		if (ST.wsx.rowPrev) ST.wsx.rowPrev.clear();   // 0.9.265: a client that gets the whole world has no base for a cell delta
-		log("Full world queued:", d.cx * d.cy, "chunks");
+		const d = chunkDims(W, H), total = d.cx * d.cy;
+		if (p) { p.need = new Set(); p.needGen = (p.needGen | 0) + 1; for (let i = 0; i < total; i++) p.need.add(i); }
+		for (let i = 0; i < total; i++) ST.wsx.pending.add(i);
+		log("Full world queued:", total, "chunks", p ? "for " + (p.nick || peerId) + " only" : "(rescan against the shared baseline)");
 	}
+	// Chunks one peer may not hold as we think it does (reconnect, redirty, hash check): whole rows to that peer only.
+	function needChunks(peerId, list) {
+		const p = ST.peers.get(peerId);
+		let n = 0;
+		for (const i of list) { if (p) (p.need || (p.need = new Set())).add(i); ST.wsx.pending.add(i); n++; }
+		return n;
+	}
+
+	// ===== PROTO 7: background hash check =====
+	// The client hashes its mirror chunk by chunk in a rolling pass and reports the hashes together with the
+	// last batch it had fully applied. The host compares them with its own world and sends what differs as whole
+	// rows, to that client only. Whatever the cause (a change the host's dirty flags never showed, a batch the
+	// client dropped while loading, its own simulation running for a moment), the chunk is found within one pass.
+	// Budget: 32 chunks per 100 ms, so a 96x96-chunk world is checked every ~30 s for ~36 KB of reports. A report
+	// carries 64 chunks (every 200 ms): the host hashes each report at once, ~0.6 ms instead of ~3 ms for 320.
+	const HC_PER_TICK = 32, HC_TICK_MS = 100, HC_REPORT = 64;
+	// One hash over everything the mirror writes (colour, wall, fog, authorization, cell id, element type).
+	// Both sides run this same function, so it does not depend on the row hashes' word/byte variants.
+	function chunkCheckHash(b, cellIds32, x0, y0, cw, ch) {
+		const { map, wall, shadow, auth, etype, W } = b;
+		let h = 0x811c9dc5;
+		for (let r = 0; r < ch; r++) {
+			const c0 = (y0 + r) * W + x0;
+			for (let i = 0; i < cw; i++) {
+				const c = c0 + i, m = c * 4;
+				h = Math.imul(h ^ (map[m] | (map[m + 1] << 8) | (map[m + 2] << 16) | (map[m + 3] << 24)), 0x01000193);
+				h = Math.imul(h ^ (wall[c] | ((shadow ? shadow[c] : 0) << 8) | ((auth ? auth[c] : 0) << 16)), 0x01000193);
+				const cid = cellIds32 ? cellIds32[c] : 0;
+				h = Math.imul(h ^ cid, 0x01000193);
+				if (etype && cid >= ELEMENTS_MIN && cid <= ELEMENTS_MAX) h = Math.imul(h ^ (etype[cid - ELEMENTS_MIN] & 0xff), 0x01000193);
+			}
+		}
+		h >>>= 0;
+		return h === 0 ? 1 : h;   // 0 = "not reported"
+	}
+	function chunkFogged(shadow, W, x0, y0, cw, ch) {
+		if (!shadow) return false;
+		for (let r = 0; r < ch; r++) { const s0 = (y0 + r) * W + x0; for (let c = 0; c < cw; c++) if (shadow[s0 + c] !== 255) return false; }
+		return true;
+	}
+	// CLIENT: one slice of the pass per call (frame hook). Hashes only a fully applied state, so the report's sq
+	// (taken when the report was started, i.e. the oldest state in it) tells the host which batches it reflects.
+	function hashCheckTick(state, now) {
+		if (!ST.wsx.paused || !ST.wsx.everApplied || ST._loadingWorld || ST._hostProto !== PROTO_VER) return;
+		if (now - (ST._hcT || 0) < HC_TICK_MS) return;
+		if ((ST._applyQ && ST._applyQ.length) || ST._lastAppliedSq == null) return;
+		ST._hcT = now;
+		const b = worldBuffers(state);
+		if (!b.map || !b.W) return;
+		const d = chunkDims(b.W, b.H), total = d.cx * d.cy;
+		const cellIds32 = b.sim ? new Uint32Array(b.sim.buffer, b.sim.byteOffset, b.W * b.H) : null;
+		let rep = ST._hcRep;
+		if (!rep || rep.total !== total) rep = ST._hcRep = { total, s: (ST._hcNext || 0) % total, sq: ST._lastAppliedSq, h: [] };
+		// cells the grabber protection holds locally differ on purpose: their chunks are not reported
+		let chronione = null;
+		if (ST._grabbedCells.size || ST._placedCells.size) {
+			chronione = new Set();
+			const naChunk = (ci) => Math.floor((ci % b.W) / CHUNK) + Math.floor(Math.floor(ci / b.W) / CHUNK) * d.cx;
+			for (const ci of ST._grabbedCells.keys()) chronione.add(naChunk(ci));
+			for (const ci of ST._placedCells.keys()) chronione.add(naChunk(ci));
+		}
+		for (let k = 0; k < HC_PER_TICK && rep.h.length < Math.min(HC_REPORT, total); k++) {
+			const idx = (rep.s + rep.h.length) % total;
+			const x0 = (idx % d.cx) * CHUNK, y0 = Math.floor(idx / d.cx) * CHUNK;
+			const cw = Math.min(CHUNK, b.W - x0), ch = Math.min(CHUNK, b.H - y0);
+			rep.h.push(chronione && chronione.has(idx) ? 0 : chunkCheckHash(b, cellIds32, x0, y0, cw, ch));
+		}
+		if (rep.h.length >= Math.min(HC_REPORT, total)) {
+			ST._hcNext = (rep.s + rep.h.length) % total;
+			ST._hcRep = null;
+			try { net.send({ t: "wh", sq: rep.sq, s: rep.s, h: rep.h }); } catch (e) {}
+		}
+	}
+	// HOST: compare a client's report with our world; what differs goes to that client as whole rows.
+	function hashCheckHost(from, msg) {
+		const state = ST.state, p = ST.peers.get(from), w = ST.wsx;
+		if (!state || !p || p.proto !== PROTO_VER || !Array.isArray(msg.h) || msg.h.length > 512 || typeof msg.sq !== "number") return;
+		const now = performance.now();
+		if (now - (p.whT || 0) < 100) return;   // a client sends one every 200 ms; more is not a client we need to serve
+		p.whT = now;
+		const b = worldBuffers(state);
+		if (!b.map || !b.W) return;
+		const d = chunkDims(b.W, b.H), total = d.cx * d.cy;
+		const s0 = msg.s | 0;
+		if (s0 < 0 || s0 >= total) return;
+		const sim = state.shared && state.shared.sim;
+		const fl = sim && sim.chunkShouldUpdate, flN = sim && sim.chunkShouldUpdateNext;
+		const cellIds32 = b.sim ? new Uint32Array(b.sim.buffer, b.sim.byteOffset, b.W * b.H) : null;
+		let ile = 0;
+		const zle = [];
+		for (let k = 0; k < msg.h.length; k++) {
+			const hc = msg.h[k] >>> 0;
+			if (!hc) continue;
+			const idx = (s0 + k) % total;
+			// queued, sent after the state the client hashed, or already going out whole: nothing to compare yet
+			if (w.pending.has(idx) || (w.sentSq && w.sentSq[idx] > msg.sq) || (p.need && p.need.has(idx))) continue;
+			if ((fl && fl[idx]) || (flN && flN[idx])) continue;   // changing right now, the next scan queues it
+			if (p.hcMute && (p.hcMute.get(idx) || 0) > now) continue;
+			const x0 = (idx % d.cx) * CHUNK, y0 = Math.floor(idx / d.cx) * CHUNK;
+			const cw = Math.min(CHUNK, b.W - x0), ch = Math.min(CHUNK, b.H - y0);
+			if (chunkFogged(b.shadow, b.W, x0, y0, cw, ch)) continue;   // the mirror never sends these
+			ile++;
+			if (chunkCheckHash(b, cellIds32, x0, y0, cw, ch) === hc) continue;
+			zle.push(idx);
+			// a chunk that still differs after being resent three times is changed by the client itself: stop chasing it
+			if (!p.hcRep) p.hcRep = new Map();
+			const r = p.hcRep.get(idx);
+			if (r && now - r.t < 120000) { r.n++; r.t = now; } else p.hcRep.set(idx, { n: 1, t: now });
+			if (r && r.n >= 3) {
+				if (!p.hcMute) p.hcMute = new Map();
+				p.hcMute.set(idx, now + 300000); p.hcRep.delete(idx);
+				if (lim("hcMute", 10, 600000)) log("HASH-CHECK: chunk " + idx + " of " + (p.nick || from) + " still differs after 3 resends — not checking it for 5 min (changed locally on the client?)");
+			}
+		}
+		if (zle.length) needChunks(from, zle);
+		w.hcN = (w.hcN || 0) + ile; w.hcBad = (w.hcBad || 0) + zle.length;
+		p.hcN = (p.hcN || 0) + ile; p.hcBad = (p.hcBad || 0) + zle.length;
+		if (zle.length && lim("hcBad", 20, 60000)) log("HASH-CHECK: " + (p.nick || from) + " differs in " + zle.length + "/" + ile + " compared chunks (from " + s0 + ") — resending them to that peer only");
+	}
+	// PROTO 7: the mirror leaves a peer out while its renderer is reloading or while its save file goes out
+	// (a transfer silent for 2 minutes no longer counts, the main process would have finished or failed it)
+	const mirrorPaused = (pp, now) => !!pp.detached || (!!pp.wxBusy && now - (pp.wxT || 0) < 120000);
+	// Live-test readout: per-peer mirror state on the host, the check state on the client.
+	ST.syncInfo = () => {
+		const w = ST.wsx;
+		if (ST.net.role === "host") return { seq: w.seq, pending: w.pending.size, encoder: ST._encW ? "worker" : "main", baseline: w.rowH ? w.rowH.size : (w.rowHSize | 0), serMs: Math.round((w.serMs || 0) * 10) / 10, buildMs: Math.round((w.buildMs || 0) * 10) / 10, hc: (w.hcBad || 0) + "/" + (w.hcN || 0), peers: [...ST.peers].map(([id, p]) => ({ id, nick: p.nick, proto: p.proto, detached: !!p.detached, wxBusy: !!p.wxBusy, need: p.need ? p.need.size : 0, ackSq: p.ackSq, hcBad: p.hcBad || 0, hcN: p.hcN || 0, muted: p.hcMute ? p.hcMute.size : 0 })) };
+		return { role: ST.net.role, epoch: ST._epoch, hostEpoch: ST._hostEpoch, hostDetached: !!ST._hostDetached, wx: ST._wxRx || null, hostProto: ST._hostProto, lastAppliedSq: ST._lastAppliedSq, applyQ: (ST._applyQ || []).length, hcNext: ST._hcNext || 0, hcPending: ST._hcRep ? ST._hcRep.h.length : 0 };
+	};
 
 	// Mirror queue and congestion state are SESSION state, like _grabbedCells and _fireQ. They were the
 	// only part never reset. A host that stopped and hosted again started with the previous session's
@@ -1880,7 +1980,10 @@
 		if (ST.wsx.rowH) ST.wsx.rowH.clear();   // stale hashes would suppress sends in the new world
 		ST.wsx.carry = null;
 		if (ST.wsx.rowPrev) ST.wsx.rowPrev.clear();
-		ST.wsx.sweep = 0;
+		ST.wsx.sentSq = null;
+		for (const p of ST.peers.values()) { p.need = null; p.hcRep = null; p.hcMute = null; }
+		ST.wsx.encGen = (ST.wsx.encGen | 0) + 1;   // stage 3: a batch still in the encoder belongs to the old session
+		if (ST._encW) { ST.wsx.encReset = true; ST.wsx.encForget = null; }
 		ST.wsx.bpc = 0; ST.wsx.lastNear = 0; if (ST.wsx.sentAt) ST.wsx.sentAt.clear();    // re-measure chunk cost, the new world compresses differently
 		ST.wsx.seq = 0; ST.wsx.ackSeen = false; ST.wsx.lag = 0; ST.wsx.rate = 0.25; ST.wsx.boost = 1; ST.wsx.buildMs = 0; // 0.9.78: cautious start, the regulator will raise it itself
 		// 0.9.161: this statement was SWALLOWED by the comment above (glued onto its tail) — the old
@@ -1906,21 +2009,26 @@
 	async function maybeSendBatch(state) {
 		const w = ST.wsx;
 		const now = performance.now();
-		// ST-FIX (client gets stuck on "Receiving world"): while the SAVE transfer is in progress, the mirror STAYS SILENT.
-		// The client has nothing to update with it anyway until it assembles the world, and the mirror stream
-		// (in the log: a queue of 3359 chunks) clogged the link so badly that small control packets were lost:
-		// the client kept asking for "world-need tid 2", the host kept sending back "world-begin tid 4",
-		// and that response never reached him. The transfer never finished.
-		// NOTE: ST._wtx stays alive after the transfer ends (it isn't zeroed out), so the condition is
-		// ACTIVITY: the marker is refreshed on every sent save batch and on every world-need.
-		// It expires on its own after 2 s, so the mirror can't be paused permanently.
-		// ST-FIX: 2 s after handing the packets to the socket is too little — the save is still physically sitting in the buffer
-		// Steam. We hold the window until the client reports "resync" (i.e. has loaded the world), for at most 30 s.
-		if (ST._wtxPreparing || (ST._wtxHold && now < ST._wtxHold) || (ST._wtxActiveT && now - ST._wtxActiveT < 2000)) {
-			w.lastBatch = now;
-			if (now - (w.wtxHoldLogT || 0) > 5000) { w.wtxHoldLogT = now; log("mirror SUSPENDED while transferring save (queue " + w.pending.size + ")"); }
-			return;
+		// PROTO 7: the mirror is no longer silenced for everyone while a save goes out (it used to be, for up to
+		// 30 s, because the stream starved the transfer). Only the peer receiving its file is left out below,
+		// and the transfer itself is paced by the main process.
+		// PROTO 7: the mirror goes only to peers on our wire protocol. A peer we know nothing about yet (this
+		// renderer reloaded and rebuilt ST.peers) is asked again; a mismatch is shown when its mver arrives.
+		// Also left out: a peer whose renderer is reloading (epoch detached) and one receiving its save file.
+		const cele = [];
+		for (const [pid, pp] of ST.peers) {
+			if (pp.proto === PROTO_VER && !mirrorPaused(pp, now)) {
+				// back in the stream: what it is owed waits in its need set, but those chunks may have left the queue
+				// while it was out, and its ack is from before; neither may hold the others back
+				if (pp.mirrorOut) { pp.mirrorOut = false; if (pp.need) for (const i of pp.need) w.pending.add(i); pp.ackSq = w.seq; pp.qd = 0; }
+				cele.push([pid, pp]);
+			} else if (pp.proto === PROTO_VER) pp.mirrorOut = true;
+			else if (pp.proto === undefined && now - (pp.mverAskT || 0) > 3000) {
+				pp.mverAskT = now;
+				try { net.send({ t: "mver", v: VER, pv: PROTO_VER, gf: ST._gameFp || null }, pid); } catch (e) {}
+			}
 		}
+		if (!cele.length) return;
 		// 0.9.103: urgent changes (the effect of a player's action) don't wait the full 100 ms
 		// 0.9.104: 30 packets/s instead of 10 — the world moves smoothly on the client, and the tool's effect
 		// comes back on average 3x faster. Applying it costs 2 ms, so we can afford it.
@@ -1959,24 +2067,18 @@
 		if (w.busy || now - w.lastBatch < minGap) return;
 		const { map, wall, shadow, auth, sim, etype, W, H } = worldBuffers(state);
 		if (!map || !W) return;
-		const cellIds32 = sim ? new Uint32Array(sim.buffer, sim.byteOffset, W * H) : null; // for reading the element type per cell (v4)
-		// 0.9.267: word-wide views of the same memory, used ONLY for change detection (see fnvRow below).
-		// Built once per batch, not per chunk; a layer whose buffer is not 4-byte aligned simply stays null
-		// and that chunk falls back to the byte-at-a-time path.
-		const u32 = (a) => { try { return a && (a.byteOffset & 3) === 0 && (a.length & 3) === 0 ? new Uint32Array(a.buffer, a.byteOffset, a.length >>> 2) : null; } catch (e) { return null; } };
-		const map32 = (map && (map.byteOffset & 3) === 0 && (map.length & 3) === 0) ? new Uint32Array(map.buffer, map.byteOffset, map.length >>> 2) : null;
-		const wall32 = u32(wall), shadow32 = u32(shadow), auth32 = u32(auth);
 		const d = chunkDims(W, H);
 		const total = d.cx * d.cy;
-		// rolling sweep — self-healing of overlooked chunks (4 per batch)
-		for (let k = 0; k < 4; k++) { w.pending.add(w.sweep % total); w.sweep++; }
+		// PROTO 7: the rolling sweep (4 chunks per batch, ~75 s per pass, for everyone) is gone. Chunks whose change
+		// we never saw are found by the clients' hash reports (hashCheckHost) and resent to whoever differs.
+		if (!w.sentSq || w.sentSq.length !== total) w.sentSq = new Int32Array(total);   // chunk -> sq it last went out in
 		if (!w.pending.size) return;
 		// --- Congestion control: how far behind is the SLOWEST client? ---
 		// Clients ack the last APPLIED batch, so lag catches a saturated link and a client that cannot
 		// keep up applying. A client that never acks (older mod version) throttles nobody, fail open.
 		{
-			let minAck = null;
-			for (const p of ST.peers.values()) if (typeof p.ackSq === "number" && (minAck === null || p.ackSq < minAck)) minAck = p.ackSq;
+			let minAck = null;   // PROTO 7: over the peers in the stream only; one that is out cannot hold the others back
+			for (const [, p] of cele) if (typeof p.ackSq === "number" && (minAck === null || p.ackSq < minAck)) minAck = p.ackSq;
 			if (w.ackSeen && minAck !== null) {
 				w.lag = Math.max(0, w.seq - minAck);  // in batches, so lag 600 literally reads as 60 s behind
 				// AIMD with a 4..8 dead zone. The measurement carries ~1 batch of ack age plus RTT, so a
@@ -1985,7 +2087,7 @@
 				// 0.9.78: PING as a second overload signal. Packet backlog reacts with a delay,
 				// while rising RTT is visible immediately — at 3000 ms the connection is already clogged and packets are getting lost.
 				let pingMs = 0;
-				for (const pp of ST.peers.values()) if (pp.ping != null && pp.ping > pingMs) pingMs = pp.ping;
+				for (const [, pp] of cele) if (pp.ping != null && pp.ping > pingMs) pingMs = pp.ping;
 				// ST-FIX: BACKLOG IN MILLISECONDS. The 4/8/25 thresholds were calibrated for a steady rhythm of 10 packets/s
 				// ("lag 600 = 60 s"), but the rate is adaptive and drops to 16 ms, i.e. ~60 packets/s.
 				// At 60/s the granularity of acknowledgments alone (the client acknowledges 10x/s) plus RTT is already ~14 packets —
@@ -2036,21 +2138,9 @@
 				else { w.stalled = false; }
 			} else { w.lag = 0; w.stalled = false; }
 		}
-		// 0.9.78: packets without acknowledgment after 10 s we treat as LOST (typical for Steam P2P).
-		// Without this, their rows stay empty on the client FOREVER (the host considers them delivered) — this is
-		// the cause of the "holey world" over the internet while it works fine on LAN.
-		// 0.9.90: not during the initial sync (a huge queue) — there a missing ACK means "can't keep up", not "lost"
-		if (w.ackSeen && w.unacked && w.unacked.size && w.pending.size < 200) {
-			let lost = 0;
-			for (const [sq, rec] of [...w.unacked]) {
-				if (now - rec.t < 20000) continue;
-				if (w.ackAdvanceT && now - w.ackAdvanceT < 20000) continue; // the ACK is advancing => the client is just falling behind
-				w.unacked.delete(sq);
-				// 0.9.265: these bytes never reached the client, so they are NOT a valid base for a cell delta
-				for (const idx of rec.idx) { if (w.rowH) w.rowH.delete(idx); if (w.rowPrev) w.rowPrev.delete(idx); w.pending.add(idx); lost++; }
-			}
-			if (lost && now - (w.lostLogT || 0) > 3000) { w.lostLogT = now; log("LOSS: " + lost + " chunks unconfirmed — resending them (queue " + w.pending.size + ")"); }
-		}
+		// PROTO 7: the 20 s "unacknowledged = lost" guess is gone. Reliable transports do not lose packets; the
+		// holes came from clients dropping batches while loading, and the clients' hash reports now find exactly
+		// those chunks, per client, instead of resending everything unacknowledged to everyone.
 		// 0.9.264 IN-FLIGHT GATE (measured on the Steam session of 15.09, not guessed).
 		// In a busy area the host sat at the 256 KB raw floor, pushing ~280 KB/s, while the client reported an
 		// EMPTY apply queue (qd 0) and an ack age of 1.5-2.5 s. An empty queue together with old acks means the
@@ -2075,7 +2165,7 @@
 			// link the bandwidth-delay product alone is 60 KB, and an offline run of the controller against a
 			// fixed 48 KB floor delivered only 224 KB/s of a 300 KB/s link. Measured ping, not a constant.
 			let rttMs = 0;
-			for (const pp of ST.peers.values()) if (pp.ping != null && pp.ping > rttMs) rttMs = pp.ping;
+			for (const [, pp] of cele) if (pp.ping != null && pp.ping > rttMs) rttMs = pp.ping;
 			const TARGET_MS = Math.max(150, (rttMs || 60) * 2.5);   // how deep we are willing to keep the pipe
 			// the floor keeps at least one full packet in flight, so the gate can never deadlock the mirror
 			const cap = Math.max(48 * 1024, w.goodput * (TARGET_MS / 1000));
@@ -2202,7 +2292,7 @@
 			// 0.9.91: LAN/localhost is NOT a Steam relay — there the 24 KB/packet ceiling was our own brake.
 			// With a fast connection (low RTT, zero backlog) we allow more; with a slow one it stays cautious.
 			let linkPing = 0;
-			for (const pp of ST.peers.values()) if (pp.ping != null && pp.ping > linkPing) linkPing = pp.ping;
+			for (const [, pp] of cele) if (pp.ping != null && pp.ping > linkPing) linkPing = pp.ping;
 			// 0.9.92: NO FIXED CEILING — the multiplier grows as long as the client keeps up, the connection handles it
 			// and building the packet doesn't eat into the frame (buildMs measured below). Otherwise: sharply down.
 			// FRAME TIME BUDGET (0.9.94) — it, not the connection, is the real bottleneck.
@@ -2233,7 +2323,7 @@
 						// how many packets are waiting at the slowest client to be APPLIED — if it grows, we send less,
 			// because pouring in data faster than the client applies it only bloats its queue (0.9.111: 548 MB).
 			let worstQd = 0;
-			for (const pp of ST.peers.values()) if ((pp.qd | 0) > worstQd) worstQd = pp.qd | 0;
+			for (const [, pp] of cele) if ((pp.qd | 0) > worstQd) worstQd = pp.qd | 0;
 			const applyBrake = worstQd >= 12 ? 0.25 : worstQd >= 6 ? 0.5 : worstQd >= 3 ? 0.8 : 1;
 			w.qd = worstQd;
 			const budget = Math.min(HARD_CAP, Math.floor(4000 * (w.gap || 33) * w.rate * fast * applyBrake)); // 4 KB/ms = ~4 MB/s baseline // 8 KB x 30/s = the same as 24 KB x 10/s // 0.9.78: 24 KB/packet = ceiling ~240 KB/s (~1.9 Mbit/s) instead of ~960 KB/s.
@@ -2249,19 +2339,19 @@
 			// Does EVERY peer run this same build? Three separate decisions hang off it: the raw (uncompressed)
 			// stream, the packet format (v6 cell delta) and the binary wire. All three have to fall back together
 			// for anyone still on an older mod, so the check lives in one place.
-			let sameVerAll = ST.peers.size > 0;
-			for (const pp of ST.peers.values()) if (pp.modVer !== VER) sameVerAll = false;
+			let sameVerAll = cele.length > 0;   // PROTO 7: over the peers that receive the mirror
+			for (const [, pp] of cele) if (pp.modVer !== VER) sameVerAll = false;
 			// 0.9.274: three things hang off this flag, and when it is false the mirror silently falls back to
 			// whole rows and no raw stream — which is what happened in the local test of 16.09 even though both
 			// sides logged "mod version OK". A flag that expensive should say who is holding it down.
 			if (!sameVerAll && now - (w.verLogT || 0) > 20000) {
 				w.verLogT = now;
 				const kto = [];
-				for (const [pid, pp] of ST.peers) if (pp.modVer !== VER) kto.push((pp.nick || "?") + " [" + pid + "] ver=" + (pp.modVer || "unknown"));
+				for (const [pid, pp] of cele) if (pp.modVer !== VER) kto.push((pp.nick || "?") + " [" + pid + "] ver=" + (pp.modVer || "unknown"));
 				log("CELL DELTA OFF (peer version): " + (kto.join(", ") || "no peers") + " — I am " + VER);
 			}
 			let willSendRaw = sameVerAll && ST.net.transport === "ws";
-			if (willSendRaw) for (const pid of ST.peers.keys()) {
+			if (willSendRaw) for (const [pid] of cele) {
 				const ip = (String(pid).match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/) || [])[0];
 				if (!ip) { if (String(pid) !== "host") willSendRaw = false; continue; }
 				const [A, B] = ip.split(".").map(Number);
@@ -2395,197 +2485,43 @@
 			w.lanP = (w.lanP || 0) + prio.length; w.lanN = (w.lanN || 0) + near.length; w.lanF = (w.lanF || 0) + far.length;
 			// v4 serialization: [u16 cx][u16 cy][u8 cw][u8 ch] + per-cell: 4 maps + 1 wall + 1 shadow + 1 auth + 4 cellIds + 1 elemType = 12 B
 			const parts = [];
-			let size = 0;
-			let fogSkipped = 0;
+			// PROTO 7: a peer that still needs whole chunks (join, reload, hash check) gets them as full rows in its
+			// own packet; the delta everyone else gets is still computed once. (30: the needMask bits below.)
+			const needPeers = [];
+			for (const [, pp] of cele) if (pp.need && pp.need.size && needPeers.length < 30) needPeers.push(pp);
 			// CELL DELTA (v6). Measured on the LAN session of 15.09: of the 40 cells in a row that changed,
 			// on average 4.2-4.8 actually differ, and wall/shadow/authorization did not change ONCE in the whole
 			// session. Sending the whole row was ~87% waste in raw bytes and, after deflate, still 63-81%.
 			// A peer on an older mod cannot read v6, so for that peer everyone falls back to v5.
 			const deltaKom = sameVerAll;
-			if (deltaKom && !w.rowPrev) w.rowPrev = new Map();
 			// immediate fuse: after a really expensive packet we cut the raw budget in half
 			const rawBudgetEff = (w.buildMs || 0) > 30 ? Math.floor(rawBudget / 2) : rawBudget;
 			const buildT0 = performance.now(); // 0.9.92: we measure the cost of building the packet
 			// 0.9.265: the build budget follows the cycle instead of being a flat 10 ms — see the note next to w.gap
 			const budowaMs = Math.max(3, Math.min(10, (w.gap || 33) * 0.25));
-			let stoppedAt = -1;
-			for (let ti = 0; ti < take.length; ti++) {
-				if (size >= rawBudgetEff) { stoppedAt = ti; break; } // budget exhausted — the rest will go back to the queue
-				// 0.9.155: TIME budget. Hashing dirty-but-unchanged chunks doesn't produce bytes,
-				// so the byte budget never tripped, while the frame burned (measured: 80 ms at a factory).
-				if (ti > 0 && performance.now() - buildT0 > budowaMs) { stoppedAt = ti; break; }
-				const idx = take[ti];
-				const ccx = idx % d.cx, ccy = Math.floor(idx / d.cx);
-				const x0 = ccx * CHUNK, y0 = ccy * CHUNK;
-				const cw = Math.min(CHUNK, W - x0), ch = Math.min(CHUNK, H - y0);
-				if (cw <= 0 || ch <= 0) continue;
-				// FOG-SKIP (join optimization): a chunk that is COMPLETELY undiscovered (shadow=255 everywhere)
-				// is black on the client — we don't send it. After discovery the shadow changes → the chunk becomes dirty → it will be sent.
-				// (initial fill: out of 9216 chunks, only the discovered part of the map actually goes out — joining is 2-4x faster)
-				if (shadow) {
-					let fogged = true;
-					for (let r = 0; r < ch && fogged; r++) {
-						const src = (y0 + r) * W + x0;
-						for (let c = 0; c < cw; c++) if (shadow[src + c] !== 255) { fogged = false; break; }
-					}
-					if (fogged) { fogSkipped++; continue; }
+			// stage 3: which need peers want each selected chunk whole, as bits per position in take
+			const needMask = new Int32Array(take.length), needGen = needPeers.map((pp) => pp.needGen | 0);
+			if (needPeers.length) for (let ti = 0; ti < take.length; ti++) { let m = 0; for (let k = 0; k < needPeers.length; k++) if (needPeers[k].need.has(take[ti])) m |= 1 << k; needMask[ti] = m; }
+			const encGen = w.encGen | 0;
+			const serA = performance.now() - buildT0;   // render-thread time up to the encoder
+			const enc = await encodeMirror({ map, wall, shadow, auth, sim, etype, W, H }, { take, needMask, deltaKom, rawBudgetEff, budowaMs });
+			if ((w.encGen | 0) !== encGen) { w.busy = false; return; }                  // the session was reset meanwhile
+			if (!enc) { for (const i of take) w.pending.add(i); w.busy = false; return; }  // the Worker failed: next batch encodes here
+			const tB = performance.now();
+			const stoppedAt = enc.stoppedAt, fogSkipped = enc.fogSkipped;
+			const items = [];   // per chunk that goes out: { idx, m: shared delta part or null, f: full part or null, ff: peers that get f }
+			for (const it of enc.items) {
+				// owed whole and sent (or fogged): no longer owed, unless the peer was reset while we encoded
+				const nm = needMask[it.ti];
+				it.ff = [];
+				if (nm) for (let k = 0; k < needPeers.length; k++) {
+					if (!(nm & (1 << k)) || (needPeers[k].needGen | 0) !== needGen[k]) continue;
+					needPeers[k].need.delete(it.idx);
+					if (it.f) it.ff.push(needPeers[k]);
 				}
-				// ROW-DELTA v5: a hash per ROW (12*cw bytes across 6 layers); we send only changed rows.
-				// Horizontal movement (water in a channel, conveyors) = 1-3 rows instead of the full 40 → 2-10x less bandwidth.
-				// Memory: 9216 chunks × 40 × 4B ≈ 1.5 MB. Full re-send = rowH.clear() in enqueueFullWorld.
-				if (!w.rowH) w.rowH = new Map();
-				let rh = w.rowH.get(idx);
-				if (!rh || rh.length < ch) { rh = new Uint32Array(CHUNK); rh.fill(0); w.rowH.set(idx, rh); }
-				const etRows = new Uint8Array(cw * ch); // the element-type layer computed once (hash + write)
-				const et32 = ((cw * ch) & 3) === 0 ? new Uint32Array(etRows.buffer, 0, (cw * ch) >>> 2) : null;
-				if (cellIds32 && etype) {
-					for (let r = 0; r < ch; r++) for (let cc = 0; cc < cw; cc++) {
-						const cid = cellIds32[(y0 + r) * W + x0 + cc];
-						etRows[r * cw + cc] = (cid >= ELEMENTS_MIN && cid <= ELEMENTS_MAX) ? (etype[cid - ELEMENTS_MIN] || 0) & 0xff : 0;
-					}
-				}
-				// 0.9.267 (MEASURED, 0.9.266 diagnostics): the host was pinned at ~17 chunks per batch with
-				// "ser 4ms" = exactly its whole time budget, while the link sat at 150-200 KB/s and the queue was
-				// almost empty. So the mirror was not short of bandwidth, it was short of CPU — and all of that CPU
-				// went here, hashing 19200 bytes per chunk one byte at a time (40 rows x 480 B across 6 layers).
-				// Reading the same memory 4 bytes at a time cuts it to 120 steps per row instead of 480. Same
-				// detection, a quarter of the work. The old byte path stays for the (unlikely) unaligned case.
-				// It also stops allocating a Uint8Array view per ROW for the cellId layer — 40 throwaway objects
-				// per chunk, thousands per second, all of it garbage for the collector to sweep.
-				const rowAlign = ((W & 3) === 0) && ((x0 & 3) === 0) && ((cw & 3) === 0);
-				const cw4 = cw >>> 2;
-				// 0.9.276 split this hash into "structure" and "appearance" so that rows where only the RGB moved
-				// could travel on a slower clock. 0.9.277 TOOK IT BACK OUT, and the number is worth keeping:
-				// measured over every chunk, the bytes divide str85 / id9 / rgb5. Only five per cent of what we
-				// send is pure colour, and a row that has a colour change almost always has a structural change
-				// in it too, so the deferral never had anything to defer: the "cosm" counter stayed at zero for
-				// the whole session and the upload did not move. The idea was reasonable, the world just is not
-				// shaped that way. What churns is real material moving, not paint.
-				const fnvRow = (rowAlign && map32 && wall32 && cellIds32 && et32 && (!shadow || shadow32) && (!auth || auth32)) ? (r) => {
-					let h = 0x811c9dc5;
-					const c0 = (y0 + r) * W + x0;      // cell index; map32 and cellIds32 are 1 word per cell
-					const b0 = c0 >>> 2;               // byte layers: 4 cells per word
-					for (let i = 0; i < cw; i++) { h ^= map32[c0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
-					for (let i = 0; i < cw4; i++) { h ^= wall32[b0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
-					if (shadow32) for (let i = 0; i < cw4; i++) { h ^= shadow32[b0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
-					if (auth32) for (let i = 0; i < cw4; i++) { h ^= auth32[b0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
-					for (let i = 0; i < cw; i++) { h ^= cellIds32[c0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
-					const e0 = (r * cw) >>> 2;
-					for (let i = 0; i < cw4; i++) { h ^= et32[e0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
-					return h === 0 ? 1 : h; // 0 reserved = "never sent"
-				} : (r) => {
-					let h = 0x811c9dc5;
-					const m0 = ((y0 + r) * W + x0) * 4, s0 = (y0 + r) * W + x0;
-					for (let i = 0; i < cw * 4; i++) { h ^= map[m0 + i]; h = (h * 0x01000193) >>> 0; }
-					for (let i = 0; i < cw; i++) { h ^= wall[s0 + i]; h = (h * 0x01000193) >>> 0; }
-					if (shadow) for (let i = 0; i < cw; i++) { h ^= shadow[s0 + i]; h = (h * 0x01000193) >>> 0; }
-					if (auth) for (let i = 0; i < cw; i++) { h ^= auth[s0 + i]; h = (h * 0x01000193) >>> 0; }
-					if (sim) { const sb = new Uint8Array(sim.buffer, sim.byteOffset + s0 * 4, cw * 4); for (let i = 0; i < cw * 4; i++) { h ^= sb[i]; h = (h * 0x01000193) >>> 0; } }
-					for (let i = 0; i < cw; i++) { h ^= etRows[r * cw + i]; h = (h * 0x01000193) >>> 0; }
-					return h === 0 ? 1 : h; // 0 reserved = "never sent"
-				};
-				const mask = new Uint8Array(5); // 40 bits
-				const rows = [];
-				for (let r = 0; r < ch; r++) {
-					const h = fnvRow(r);
-					if (rh[r] !== h) { rh[r] = h; mask[r >> 3] |= 1 << (r & 7); rows.push(r); }
-				}
-				if (!rows.length) continue; // nothing changed in the chunk
-				if (deltaKom) {
-					// v6 layout per chunk: the same 11-byte header, then per marked row
-					//   [u8 kind] kind 1 = the whole row exactly as in v5 (12*cw bytes, layer-major)
-					//             kind 0 = [5 B cell mask][ per set cell: u8 layer mask + only the changed layers ]
-					//   layer mask bits: 1 colour(4B) 2 wall(1B) 4 shadow(1B) 8 auth(1B) 16 cellId(4B) 32 type(1B)
-					// A delta is only emitted for a row whose PREVIOUSLY SENT bytes we still remember; that memory
-					// is what the client is holding, so the delta always applies to the right base. Chunks we no
-					// longer remember simply get full rows, which is why falling out of the LRU is harmless.
-					const maxW = 1 + Math.max(cw * 12, 5 + cw * 13);
-					const buf = new Uint8Array(11 + rows.length * maxW);
-					const dv = new DataView(buf.buffer);
-					dv.setUint16(0, ccx, true); dv.setUint16(2, ccy, true);
-					buf[4] = cw; buf[5] = ch;
-					buf.set(mask, 6);
-					let o = 11;
-					let pr = w.rowPrev.get(idx);
-					if (!pr) {
-						// LRU over chunks: 512 * 40 rows * 480 B is about 10 MB at worst, and the hot set around
-						// the players is far smaller than that in practice.
-						if (w.rowPrev.size >= 512) { const k0 = w.rowPrev.keys().next().value; w.rowPrev.delete(k0); }
-						pr = new Map(); w.rowPrev.set(idx, pr);
-					} else { w.rowPrev.delete(idx); w.rowPrev.set(idx, pr); }
-					const cur = new Uint8Array(cw * 12);
-					const cm = new Uint8Array(5), lm = new Uint8Array(cw);
-					for (const r of rows) {
-						const m0 = ((y0 + r) * W + x0) * 4, s0 = (y0 + r) * W + x0;
-						cur.set(map.subarray(m0, m0 + cw * 4), 0);
-						cur.set(wall.subarray(s0, s0 + cw), cw * 4);
-						if (shadow) cur.set(shadow.subarray(s0, s0 + cw), cw * 5); else cur.fill(0, cw * 5, cw * 6);
-						if (auth) cur.set(auth.subarray(s0, s0 + cw), cw * 6); else cur.fill(0, cw * 6, cw * 7);
-						if (sim) cur.set(new Uint8Array(sim.buffer, sim.byteOffset + s0 * 4, cw * 4), cw * 7); else cur.fill(0, cw * 7, cw * 11);
-						cur.set(etRows.subarray(r * cw, r * cw + cw), cw * 11);
-						const old = pr.get(r);
-						let zapisane = false;
-						if (old && old.length === cur.length) {
-							cm.fill(0);
-							let ile = 0, tresc = 0;
-							for (let c = 0; c < cw; c++) {
-								let mm = 0;
-								for (let b = 0; b < 4; b++) if (old[c * 4 + b] !== cur[c * 4 + b]) { mm |= 1; break; }
-								if (old[cw * 4 + c] !== cur[cw * 4 + c]) mm |= 2;
-								if (old[cw * 5 + c] !== cur[cw * 5 + c]) mm |= 4;
-								if (old[cw * 6 + c] !== cur[cw * 6 + c]) mm |= 8;
-								for (let b = 0; b < 4; b++) if (old[cw * 7 + c * 4 + b] !== cur[cw * 7 + c * 4 + b]) { mm |= 16; break; }
-								if (old[cw * 11 + c] !== cur[cw * 11 + c]) mm |= 32;
-								lm[c] = mm;
-								if (mm) {
-									cm[c >> 3] |= 1 << (c & 7); ile++;
-									tresc += 1 + ((mm & 1) ? 4 : 0) + ((mm & 2) ? 1 : 0) + ((mm & 4) ? 1 : 0)
-										+ ((mm & 8) ? 1 : 0) + ((mm & 16) ? 4 : 0) + ((mm & 32) ? 1 : 0);
-								}
-								// 0.9.273 measured here which layers the bytes go to, per changed cell, and 0.9.287
-								// removed the measurement once it had answered: str 76 / id 19 / rgb 5, stable across
-								// sessions. That is what closed the "send appearance on a slower clock" idea (0.9.277)
-								// and it is what the encoding lab (0.9.285/286) was aimed at. Keeping the classifier
-								// would mean a byte compare and three branches for every changed cell, tens of
-								// thousands a second, to re-derive a number we already have.
-							}
-							if (5 + tresc < cw * 12) {
-								buf[o++] = 0;
-								buf.set(cm, o); o += 5;
-								if (ile) for (let c = 0; c < cw; c++) {
-									const mm = lm[c];
-									if (!mm) continue;
-									buf[o++] = mm;
-									if (mm & 1) { buf.set(cur.subarray(c * 4, c * 4 + 4), o); o += 4; }
-									if (mm & 2) buf[o++] = cur[cw * 4 + c];
-									if (mm & 4) buf[o++] = cur[cw * 5 + c];
-									if (mm & 8) buf[o++] = cur[cw * 6 + c];
-									if (mm & 16) { buf.set(cur.subarray(cw * 7 + c * 4, cw * 7 + c * 4 + 4), o); o += 4; }
-									if (mm & 32) buf[o++] = cur[cw * 11 + c];
-								}
-								zapisane = true;
-							}
-						}
-						if (!zapisane) { buf[o++] = 1; buf.set(cur, o); o += cw * 12; }
-						pr.set(r, cur.slice(0));
-					}
-					const wyc = buf.subarray(0, o);
-					parts.push(wyc); size += wyc.length;
-				} else {
-				const buf = new Uint8Array(11 + rows.length * cw * 12);
-				const dv = new DataView(buf.buffer);
-				dv.setUint16(0, ccx, true); dv.setUint16(2, ccy, true);
-				buf[4] = cw; buf[5] = ch;
-				buf.set(mask, 6);
-				let o = 11;
-				for (const r of rows) { const src = ((y0 + r) * W + x0) * 4; buf.set(map.subarray(src, src + cw * 4), o); o += cw * 4; }
-				for (const r of rows) { const src = (y0 + r) * W + x0; buf.set(wall.subarray(src, src + cw), o); o += cw; }
-				for (const r of rows) { const src = (y0 + r) * W + x0; if (shadow) buf.set(shadow.subarray(src, src + cw), o); o += cw; }
-				for (const r of rows) { const src = (y0 + r) * W + x0; if (auth) buf.set(auth.subarray(src, src + cw), o); o += cw; }
-				for (const r of rows) { const src = (y0 + r) * W + x0; if (sim) buf.set(new Uint8Array(sim.buffer, sim.byteOffset + src * 4, cw * 4), o); o += cw * 4; }
-				for (const r of rows) { buf.set(etRows.subarray(r * cw, r * cw + cw), o); o += cw; }
-				parts.push(buf); size += buf.length;
-				}
+				if (it.fog) continue;
+				if (it.m) parts.push(it.m);
+				items.push(it);
 			}
 			// 0.9.266 (BUG): sentAt used to be stamped on EVERY chunk we selected, including the tail the byte or
 			// time budget never got to. Those chunks went back into the queue already marked "just sent", so the
@@ -2598,46 +2534,79 @@
 				w.carry = take.slice(stoppedAt);   // 0.9.266: served first in the next batch, see above
 				for (let ti = stoppedAt; ti < take.length; ti++) w.pending.add(take[ti]); // 0.9.90: we don't lose the rest
 			}
-			if (!parts.length) { w.busy = false; return; }
-			const all = new Uint8Array(size);
-			let o = 0; for (const p of parts) { all.set(p, o); o += p.length; }
+			if (!items.length) { w.busy = false; return; }
+			// PROTO 7: who gets what. A peer that got whole chunks in this batch gets its own packet (the whole chunk
+			// where it had one, the shared delta everywhere else); everyone else shares one packet, as before.
+			// stage 3: the encoder may have taken a moment; a peer that left or paused since gets nothing now
+			// (it is reset when it comes back)
+			const tNowC = performance.now();
+			const celeNow = cele.filter(([pid, pp]) => ST.peers.get(pid) === pp && !mirrorPaused(pp, tNowC));
+			const pakiety = [], wlasne = new Set();
+			for (const [pid, pp] of celeNow) {
+				if (!needPeers.includes(pp) || !items.some((it) => it.f && it.ff.includes(pp))) continue;
+				wlasne.add(pid);
+				pakiety.push({ ids: [pid], parts: items.map((it) => (it.f && it.ff.includes(pp) ? it.f : it.m)).filter(Boolean) });
+			}
+			const wspolni = [];
+			for (const [pid] of celeNow) if (!wlasne.has(pid)) wspolni.push(pid);
+			// The shared packet goes out even when empty if somebody else got one: every peer then sees every sq,
+			// so the slowest-ack measurement never counts a batch a peer was not sent as its backlog.
+			if (wspolni.length && (parts.length || pakiety.length)) pakiety.unshift({ ids: wspolni, parts, shared: true });
 			// 0.9.95: fast connection + the same version for everyone => we send RAW (saving CPU
 			// on both sides: no packing on the host, no unpacking on the client).
 						// A peer on a local/private address => bandwidth is free => we don't pack (saving CPU
 			// on both sides). Peer identifiers look like "ws:::ffff:127.0.0.1:5xxxx" or "ws:192.168...".
-			let allLocal = ST.peers.size > 0 && ST.net.transport === "ws";
-			for (const pid of ST.peers.keys()) {
+			let allLocal = cele.length > 0 && ST.net.transport === "ws";
+			for (const [pid] of cele) {
 				const ip = (String(pid).match(/(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/) || [])[0];
 				if (!ip) { if (String(pid) !== "host") allLocal = false; continue; }   // "host" = we are the client
 				const [A, B] = ip.split(".").map(Number);
 				const priv = A === 127 || A === 10 || (A === 192 && B === 168) || (A === 172 && B >= 16 && B <= 31) || (A === 169 && B === 254);
 				if (!priv) allLocal = false;
 			}
-			const rawOk = willSendRaw && sameVerAll && allLocal && all.length < 8 * 1024 * 1024;
-			const __ser = performance.now() - buildT0; // time BLOCKING the frame (without waiting for compression)
+			const __ser = serA + (performance.now() - tB); // time BLOCKING the frame (without the encoder Worker and compression)
 			w.serMs = w.serMs ? w.serMs * 0.7 + __ser * 0.3 : __ser;
-			const packed = rawOk ? all : await deflate(all);
-			w.rawMode = rawOk;
-			w.seq++; // batch number the client echoes back in wcack
-			// 0.9.78: remember the chunks of this packet — the row hashes are "conditional" until the client's ACK.
+			w.seq++; // batch number the client echoes back in wcack; one number for all packets of this batch
+			for (const it of items) w.sentSq[it.idx] = w.seq;
+			const useBin = sameVerAll && (ST.net.transport === "ws" || ST.net.transport === "steam"); // 0.9.263: binary on Steam too (marker 0x00 in st-main.js)
+			const doWszystkich = wspolni.length === ST.peers.size;   // one broadcast instead of a send per peer
+			let maxB = 0, sumPacked = 0, sumRaw = 0, sumParts = 0, wyszlo = 0;
+			for (const pk of pakiety) {
+				let len = 0; for (const p of pk.parts) len += p.length;
+				const all = new Uint8Array(len);
+				let o = 0; for (const p of pk.parts) { all.set(p, o); o += p.length; }
+				const rawOk = !len || (willSendRaw && sameVerAll && allLocal && len < 8 * 1024 * 1024);
+				const packed = rawOk ? all : await deflate(all);
+				if (pk.shared || pakiety.length === 1) w.rawMode = rawOk;
+				// q = size of the host's queue (progress countdown on the client, 0.9.62) + sq = packet number (wcack, PR #8)
+				const hdr = { t: "wc", v: deltaKom ? 6 : 5, z: rawOk ? 0 : 1, sq: w.seq, wid: state.store.meta && state.store.meta.worldId, g: ST._worldGen || undefined, scene: state.store.scene && state.store.scene.active, W, H, n: pk.parts.length, q: w.pending.size };
+				if (pk.shared && doWszystkich) sendWorldPacket(hdr, packed, useBin);
+				else for (const pid of pk.ids) sendWorldPacket(Object.assign({}, hdr), packed, useBin, pid);
+				if (packed.length > maxB) maxB = packed.length;
+				sumPacked += packed.length; sumRaw += len; sumParts += pk.parts.length; wyszlo += packed.length * pk.ids.length;
+			}
+			// 0.9.78: remember the chunks of this batch — the row hashes are "conditional" until the client's ACK.
+			// bytes = the largest packet: every peer has its own link, the slowest of them is what we pace against
 			if (!w.unacked) w.unacked = new Map();
-			w.unacked.set(w.seq, { idx: take.slice(0), t: now, bytes: packed.length });   // 0.9.264: bytes -> goodput + in-flight gate
-			w.tok = (w.tok || 0) - packed.length;   // 0.9.269: pay for the packet out of the wire budget
-			// q = size of the host's queue (progress countdown on the client, 0.9.62) + sq = packet number (wcack, PR #8)
-			sendWorldPacket({ t: "wc", v: deltaKom ? 6 : 5, z: w.rawMode ? 0 : 1, sq: w.seq, wid: state.store.meta && state.store.meta.worldId, g: ST._worldGen || undefined, scene: state.store.scene && state.store.scene.active, W, H, n: parts.length, q: w.pending.size }, packed, sameVerAll && (ST.net.transport === "ws" || ST.net.transport === "steam")); // 0.9.263: binary on Steam too (marker 0x00 in st-main.js)
+			w.unacked.set(w.seq, { idx: take.slice(0), t: now, bytes: maxB });   // 0.9.264: bytes -> goodput + in-flight gate
+			w.tok = (w.tok || 0) - maxB;   // 0.9.269: pay for the packet out of the wire budget
 			// EMA of what a chunk really costs on the wire, drives the batch budget above. Cheap chunks
 			// (few changed rows) earn a bigger portion, expensive ones a smaller one, so the byte ceiling
 			// holds regardless of what the sim is doing.
 			// 0.9.265: the lab reads the v5 layer-major layout, so it only runs when that is what we are sending.
 			// Its job is done anyway: it is what measured the cell delta at 63-81% off the wire.
-			const bpcNow = packed.length / parts.length;
-			w.bpc = w.bpc ? w.bpc * 0.8 + bpcNow * 0.2 : bpcNow;
-			const ratioNow = packed.length / Math.max(1, all.length);
-			w.ratio = w.ratio ? w.ratio * 0.8 + ratioNow * 0.2 : ratioNow;
+			if (sumParts) {
+				const bpcNow = sumPacked / sumParts;
+				w.bpc = w.bpc ? w.bpc * 0.8 + bpcNow * 0.2 : bpcNow;
+			}
+			if (sumRaw) {
+				const ratioNow = sumPacked / sumRaw;
+				w.ratio = w.ratio ? w.ratio * 0.8 + ratioNow * 0.2 : ratioNow;
+			}
 			const buildMsNow = performance.now() - buildT0;
 			w.buildMs = w.buildMs ? w.buildMs * 0.7 + buildMsNow * 0.3 : buildMsNow; // brake: we don't eat into the host's frame // 0.9.90: how much actually remains after compression
 			// statystyki
-			w.applyBytes += packed.length; w.applyCount += parts.length;
+			w.applyBytes += wyszlo; w.applyCount += sumParts;
 			w.statN = (w.statN || 0) + 1;   // batches in this stat window, so the lane counts read per batch
 			w.fogSkipped = (w.fogSkipped || 0) + fogSkipped;
 			if (now - w.statT > 2000) {
@@ -2658,6 +2627,9 @@
 					+ ("  tok " + Math.round((w.tok || 0) / 1024) + "KB")
 					+ ((w.oknaN || w.promN) ? "  vp " + (w.oknaN || 0) + (w.promN ? "+r" + w.promN : "") : "")
 					+ ((w.skIf || w.skTok) ? "  skip if" + (w.skIf || 0) + "/tok" + (w.skTok || 0) : "")
+					// PROTO 7: whole chunks still owed to peers (join/reload/hash check), and the hash check's misses/compared
+					+ (() => { let nd = 0; for (const [, pp] of cele) nd += pp.need ? pp.need.size : 0; return nd ? "  need " + nd : ""; })()
+					+ (w.hcN ? "  hc " + (w.hcBad || 0) + "/" + w.hcN : "")
 					+ (() => {
 						const tally = ST._tx; if (!tally) return "";
 						const lista = Object.keys(tally).filter((k) => k !== "wc").map((k) => [k, tally[k]]).sort((a, b) => b[1] - a[1]).slice(0, 3);
@@ -2668,7 +2640,7 @@
 				setSyncInfo(info);
 				log("SYNC-HOST", info, w.fogSkipped ? "(fog-skip: " + w.fogSkipped + ")" : "");
 				w.applyBytes = 0; w.applyCount = 0; w.statT = now; w.fogSkipped = 0;
-				w.lanP = 0; w.lanN = 0; w.lanF = 0; w.cut = 0; w.naSum = 0; w.naN = 0; w.naMax = 0; w.naLate = 0; w.holdMs = 0; w.statN = 0; w.skIf = 0; w.skTok = 0;
+				w.lanP = 0; w.lanN = 0; w.lanF = 0; w.cut = 0; w.naSum = 0; w.naN = 0; w.naMax = 0; w.naLate = 0; w.holdMs = 0; w.statN = 0; w.skIf = 0; w.skTok = 0; w.hcN = 0; w.hcBad = 0;
 			}
 		} catch (e) { log("batch error:", e.message); }
 		w.busy = false;
@@ -2865,20 +2837,350 @@
 	// ===================================================================================================
 	// 0.9.111: sending the world packet. When the peer has the same mod and we're on WS — a binary frame goes out
 	// (without base64: -25% bytes, zero encoding on both sides). Otherwise the old way: base64 in JSON.
-	function sendWorldPacket(hdr, bytes, useBin) {
+	// toId: one peer (PROTO 7 per-peer packets); omitted = everyone
+	function sendWorldPacket(hdr, bytes, useBin, toId) {
 		if (useBin) {
 			try {
 				const h = new TextEncoder().encode(JSON.stringify(hdr));
 				const out = new Uint8Array(2 + h.length + bytes.length);
 				out[0] = (h.length >> 8) & 255; out[1] = h.length & 255;
 				out.set(h, 2); out.set(bytes, 2 + h.length);
-				net.send(out);
+				net.send(out, toId);
 				return;
 			} catch (e) { if (!ST._binErr) { ST._binErr = 1; log("binary send failed, falling back to base64:", e.message); } }
 		}
 		hdr.d = b64enc(bytes);
-		net.send(hdr);
+		net.send(hdr, toId);
 	}
+	// A whole chunk for a peer with no baseline for it: v6 = every row as kind 1, v5 = every row marked
+	// (layer-major). Same bytes the row and cell delta would write, so the client needs no new code.
+	function encodeChunkFull(b, ccx, ccy, cw, ch, etRows, v6) {
+		const { map, wall, shadow, auth, sim, W } = b;
+		const x0 = ccx * CHUNK, y0 = ccy * CHUNK;
+		const buf = new Uint8Array(11 + ch * (cw * 12 + (v6 ? 1 : 0)));
+		const dv = new DataView(buf.buffer);
+		dv.setUint16(0, ccx, true); dv.setUint16(2, ccy, true);
+		buf[4] = cw; buf[5] = ch;
+		for (let r = 0; r < ch; r++) buf[6 + (r >> 3)] |= 1 << (r & 7);
+		let o = 11;
+		if (v6) {
+			for (let r = 0; r < ch; r++) {
+				const m0 = ((y0 + r) * W + x0) * 4, s0 = (y0 + r) * W + x0;
+				buf[o++] = 1;
+				buf.set(map.subarray(m0, m0 + cw * 4), o);
+				buf.set(wall.subarray(s0, s0 + cw), o + cw * 4);
+				if (shadow) buf.set(shadow.subarray(s0, s0 + cw), o + cw * 5);
+				if (auth) buf.set(auth.subarray(s0, s0 + cw), o + cw * 6);
+				if (sim) buf.set(new Uint8Array(sim.buffer, sim.byteOffset + s0 * 4, cw * 4), o + cw * 7);
+				buf.set(etRows.subarray(r * cw, r * cw + cw), o + cw * 11);
+				o += cw * 12;
+			}
+			return buf;
+		}
+		for (let r = 0; r < ch; r++) { const src = ((y0 + r) * W + x0) * 4; buf.set(map.subarray(src, src + cw * 4), o); o += cw * 4; }
+		for (let r = 0; r < ch; r++) { const src = (y0 + r) * W + x0; buf.set(wall.subarray(src, src + cw), o); o += cw; }
+		for (let r = 0; r < ch; r++) { const src = (y0 + r) * W + x0; if (shadow) buf.set(shadow.subarray(src, src + cw), o); o += cw; }
+		for (let r = 0; r < ch; r++) { const src = (y0 + r) * W + x0; if (auth) buf.set(auth.subarray(src, src + cw), o); o += cw; }
+		for (let r = 0; r < ch; r++) { const src = (y0 + r) * W + x0; if (sim) buf.set(new Uint8Array(sim.buffer, sim.byteOffset + src * 4, cw * 4), o); o += cw * 4; }
+		for (let r = 0; r < ch; r++) { buf.set(etRows.subarray(r * cw, r * cw + cw), o); o += cw; }
+		return buf;
+	}
+	// Stage 3: the mirror's per-chunk work (row hashes against the shared baseline, the v6 cell delta or v5 rows,
+	// the whole chunk for need peers). The same code runs on the render thread and in the encoder Worker: it is shipped
+	// to the Worker as source text, so it may use only its arguments, CHUNK, ELEMENTS_MIN/MAX and encodeChunkFull.
+	// E = the baseline { rowH, rowPrev } (it lives where this runs), B = world buffers, job = what the batch selected.
+	function encodeMirrorBatch(E, B, job) {
+		const { map, wall, shadow, auth, sim, etype, W, H } = B;
+		const { take, needMask, deltaKom, rawBudgetEff, budowaMs } = job;
+		const t0 = performance.now();
+		const d = { cx: Math.ceil(W / CHUNK) };
+		const cellIds32 = sim ? new Uint32Array(sim.buffer, sim.byteOffset, W * H) : null; // for reading the element type per cell (v4)
+		// 0.9.267: word-wide views of the same memory, used ONLY for change detection (see fnvRow below).
+		// Built once per batch, not per chunk; a layer whose buffer is not 4-byte aligned simply stays null
+		// and that chunk falls back to the byte-at-a-time path.
+		const u32 = (a) => { try { return a && (a.byteOffset & 3) === 0 && (a.length & 3) === 0 ? new Uint32Array(a.buffer, a.byteOffset, a.length >>> 2) : null; } catch (e) { return null; } };
+		const map32 = (map && (map.byteOffset & 3) === 0 && (map.length & 3) === 0) ? new Uint32Array(map.buffer, map.byteOffset, map.length >>> 2) : null;
+		const wall32 = u32(wall), shadow32 = u32(shadow), auth32 = u32(auth);
+		if (!E.rowH) E.rowH = new Map();
+		if (deltaKom && !E.rowPrev) E.rowPrev = new Map();
+		const items = [];   // { ti, idx, m: shared delta part, f: whole chunk for need peers, fog: fogged and owed to someone }
+		let size = 0, fogSkipped = 0, stoppedAt = -1;
+		for (let ti = 0; ti < take.length; ti++) {
+			if (size >= rawBudgetEff) { stoppedAt = ti; break; } // budget exhausted — the rest will go back to the queue
+			// 0.9.155: TIME budget. Hashing dirty-but-unchanged chunks doesn't produce bytes,
+			// so the byte budget never tripped, while the frame burned (measured: 80 ms at a factory).
+			if (ti > 0 && performance.now() - t0 > budowaMs) { stoppedAt = ti; break; }
+			const idx = take[ti];
+			const ccx = idx % d.cx, ccy = Math.floor(idx / d.cx);
+			const x0 = ccx * CHUNK, y0 = ccy * CHUNK;
+			const cw = Math.min(CHUNK, W - x0), ch = Math.min(CHUNK, H - y0);
+			if (cw <= 0 || ch <= 0) continue;
+			const nm = needMask[ti] | 0;   // which need peers want it whole (bits), decided on the render thread
+			// FOG-SKIP (join optimization): a chunk that is COMPLETELY undiscovered (shadow=255 everywhere)
+			// is black on the client — we don't send it. After discovery the shadow changes → the chunk becomes dirty → it will be sent.
+			// (initial fill: out of 9216 chunks, only the discovered part of the map actually goes out — joining is 2-4x faster)
+			if (shadow) {
+				let fogged = true;
+				for (let r = 0; r < ch && fogged; r++) {
+					const src = (y0 + r) * W + x0;
+					for (let c = 0; c < cw; c++) if (shadow[src + c] !== 255) { fogged = false; break; }
+				}
+				if (fogged) { fogSkipped++; if (nm) items.push({ ti, idx, m: null, f: null, fog: 1 }); continue; }   // never sent to anyone: the first send after the fog lifts is whole rows for all
+			}
+			// ROW-DELTA v5: a hash per ROW (12*cw bytes across 6 layers); we send only changed rows.
+			// Horizontal movement (water in a channel, conveyors) = 1-3 rows instead of the full 40 → 2-10x less bandwidth.
+			// Memory: 9216 chunks × 40 × 4B ≈ 1.5 MB. Full re-send = rowH.clear() in enqueueFullWorld.
+			let rh = E.rowH.get(idx);
+			if (!rh || rh.length < ch) { rh = new Uint32Array(CHUNK); rh.fill(0); E.rowH.set(idx, rh); }
+			const etRows = new Uint8Array(cw * ch); // the element-type layer computed once (hash + write)
+			const et32 = ((cw * ch) & 3) === 0 ? new Uint32Array(etRows.buffer, 0, (cw * ch) >>> 2) : null;
+			if (cellIds32 && etype) {
+				for (let r = 0; r < ch; r++) for (let cc = 0; cc < cw; cc++) {
+					const cid = cellIds32[(y0 + r) * W + x0 + cc];
+					etRows[r * cw + cc] = (cid >= ELEMENTS_MIN && cid <= ELEMENTS_MAX) ? (etype[cid - ELEMENTS_MIN] || 0) & 0xff : 0;
+				}
+			}
+			// 0.9.267 (MEASURED, 0.9.266 diagnostics): the host was pinned at ~17 chunks per batch with
+			// "ser 4ms" = exactly its whole time budget, while the link sat at 150-200 KB/s and the queue was
+			// almost empty. So the mirror was not short of bandwidth, it was short of CPU — and all of that CPU
+			// went here, hashing 19200 bytes per chunk one byte at a time (40 rows x 480 B across 6 layers).
+			// Reading the same memory 4 bytes at a time cuts it to 120 steps per row instead of 480. Same
+			// detection, a quarter of the work. The old byte path stays for the (unlikely) unaligned case.
+			// It also stops allocating a Uint8Array view per ROW for the cellId layer — 40 throwaway objects
+			// per chunk, thousands per second, all of it garbage for the collector to sweep.
+			const rowAlign = ((W & 3) === 0) && ((x0 & 3) === 0) && ((cw & 3) === 0);
+			const cw4 = cw >>> 2;
+			// 0.9.276 split this hash into "structure" and "appearance" so that rows where only the RGB moved
+			// could travel on a slower clock. 0.9.277 TOOK IT BACK OUT, and the number is worth keeping:
+			// measured over every chunk, the bytes divide str85 / id9 / rgb5. Only five per cent of what we
+			// send is pure colour, and a row that has a colour change almost always has a structural change
+			// in it too, so the deferral never had anything to defer: the "cosm" counter stayed at zero for
+			// the whole session and the upload did not move. The idea was reasonable, the world just is not
+			// shaped that way. What churns is real material moving, not paint.
+			const fnvRow = (rowAlign && map32 && wall32 && cellIds32 && et32 && (!shadow || shadow32) && (!auth || auth32)) ? (r) => {
+				let h = 0x811c9dc5;
+				const c0 = (y0 + r) * W + x0;      // cell index; map32 and cellIds32 are 1 word per cell
+				const b0 = c0 >>> 2;               // byte layers: 4 cells per word
+				for (let i = 0; i < cw; i++) { h ^= map32[c0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
+				for (let i = 0; i < cw4; i++) { h ^= wall32[b0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
+				if (shadow32) for (let i = 0; i < cw4; i++) { h ^= shadow32[b0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
+				if (auth32) for (let i = 0; i < cw4; i++) { h ^= auth32[b0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
+				for (let i = 0; i < cw; i++) { h ^= cellIds32[c0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
+				const e0 = (r * cw) >>> 2;
+				for (let i = 0; i < cw4; i++) { h ^= et32[e0 + i]; h = Math.imul(h, 0x01000193) >>> 0; }
+				return h === 0 ? 1 : h; // 0 reserved = "never sent"
+			} : (r) => {
+				let h = 0x811c9dc5;
+				const m0 = ((y0 + r) * W + x0) * 4, s0 = (y0 + r) * W + x0;
+				for (let i = 0; i < cw * 4; i++) { h ^= map[m0 + i]; h = (h * 0x01000193) >>> 0; }
+				for (let i = 0; i < cw; i++) { h ^= wall[s0 + i]; h = (h * 0x01000193) >>> 0; }
+				if (shadow) for (let i = 0; i < cw; i++) { h ^= shadow[s0 + i]; h = (h * 0x01000193) >>> 0; }
+				if (auth) for (let i = 0; i < cw; i++) { h ^= auth[s0 + i]; h = (h * 0x01000193) >>> 0; }
+				if (sim) { const sb = new Uint8Array(sim.buffer, sim.byteOffset + s0 * 4, cw * 4); for (let i = 0; i < cw * 4; i++) { h ^= sb[i]; h = (h * 0x01000193) >>> 0; } }
+				for (let i = 0; i < cw; i++) { h ^= etRows[r * cw + i]; h = (h * 0x01000193) >>> 0; }
+				return h === 0 ? 1 : h; // 0 reserved = "never sent"
+			};
+			const mask = new Uint8Array(5); // 40 bits
+			const rows = [];
+			for (let r = 0; r < ch; r++) {
+				const h = fnvRow(r);
+				if (rh[r] !== h) { rh[r] = h; mask[r >> 3] |= 1 << (r & 7); rows.push(r); }
+			}
+			if (!rows.length && !nm) continue; // nothing changed in the chunk and nobody needs it whole
+			let mPart = null;
+			if (rows.length) {
+			if (deltaKom) {
+				// v6 layout per chunk: the same 11-byte header, then per marked row
+				//   [u8 kind] kind 1 = the whole row exactly as in v5 (12*cw bytes, layer-major)
+				//             kind 0 = [5 B cell mask][ per set cell: u8 layer mask + only the changed layers ]
+				//   layer mask bits: 1 colour(4B) 2 wall(1B) 4 shadow(1B) 8 auth(1B) 16 cellId(4B) 32 type(1B)
+				// A delta is only emitted for a row whose PREVIOUSLY SENT bytes we still remember; that memory
+				// is what the client is holding, so the delta always applies to the right base. Chunks we no
+				// longer remember simply get full rows, which is why falling out of the LRU is harmless.
+				const maxW = 1 + Math.max(cw * 12, 5 + cw * 13);
+				const buf = new Uint8Array(11 + rows.length * maxW);
+				const dv = new DataView(buf.buffer);
+				dv.setUint16(0, ccx, true); dv.setUint16(2, ccy, true);
+				buf[4] = cw; buf[5] = ch;
+				buf.set(mask, 6);
+				let o = 11;
+				let pr = E.rowPrev.get(idx);
+				if (!pr) {
+					// LRU over chunks: 512 * 40 rows * 480 B is about 10 MB at worst, and the hot set around
+					// the players is far smaller than that in practice.
+					if (E.rowPrev.size >= 512) { const k0 = E.rowPrev.keys().next().value; E.rowPrev.delete(k0); }
+					pr = new Map(); E.rowPrev.set(idx, pr);
+				} else { E.rowPrev.delete(idx); E.rowPrev.set(idx, pr); }
+				const cur = new Uint8Array(cw * 12);
+				const cm = new Uint8Array(5), lm = new Uint8Array(cw);
+				for (const r of rows) {
+					const m0 = ((y0 + r) * W + x0) * 4, s0 = (y0 + r) * W + x0;
+					cur.set(map.subarray(m0, m0 + cw * 4), 0);
+					cur.set(wall.subarray(s0, s0 + cw), cw * 4);
+					if (shadow) cur.set(shadow.subarray(s0, s0 + cw), cw * 5); else cur.fill(0, cw * 5, cw * 6);
+					if (auth) cur.set(auth.subarray(s0, s0 + cw), cw * 6); else cur.fill(0, cw * 6, cw * 7);
+					if (sim) cur.set(new Uint8Array(sim.buffer, sim.byteOffset + s0 * 4, cw * 4), cw * 7); else cur.fill(0, cw * 7, cw * 11);
+					cur.set(etRows.subarray(r * cw, r * cw + cw), cw * 11);
+					const old = pr.get(r);
+					let zapisane = false;
+					if (old && old.length === cur.length) {
+						cm.fill(0);
+						let ile = 0, tresc = 0;
+						for (let c = 0; c < cw; c++) {
+							let mm = 0;
+							for (let b = 0; b < 4; b++) if (old[c * 4 + b] !== cur[c * 4 + b]) { mm |= 1; break; }
+							if (old[cw * 4 + c] !== cur[cw * 4 + c]) mm |= 2;
+							if (old[cw * 5 + c] !== cur[cw * 5 + c]) mm |= 4;
+							if (old[cw * 6 + c] !== cur[cw * 6 + c]) mm |= 8;
+							for (let b = 0; b < 4; b++) if (old[cw * 7 + c * 4 + b] !== cur[cw * 7 + c * 4 + b]) { mm |= 16; break; }
+							// a new cell id needs its type too: the client's type table entry for that id may be stale (ids are
+							// recycled), and the type byte alone can look unchanged (sand replaced by sand under a new id)
+							if (old[cw * 11 + c] !== cur[cw * 11 + c] || (mm & 16)) mm |= 32;
+							lm[c] = mm;
+							if (mm) {
+								cm[c >> 3] |= 1 << (c & 7); ile++;
+								tresc += 1 + ((mm & 1) ? 4 : 0) + ((mm & 2) ? 1 : 0) + ((mm & 4) ? 1 : 0)
+									+ ((mm & 8) ? 1 : 0) + ((mm & 16) ? 4 : 0) + ((mm & 32) ? 1 : 0);
+							}
+							// 0.9.273 measured here which layers the bytes go to, per changed cell, and 0.9.287
+							// removed the measurement once it had answered: str 76 / id 19 / rgb 5, stable across
+							// sessions. That is what closed the "send appearance on a slower clock" idea (0.9.277)
+							// and it is what the encoding lab (0.9.285/286) was aimed at. Keeping the classifier
+							// would mean a byte compare and three branches for every changed cell, tens of
+							// thousands a second, to re-derive a number we already have.
+						}
+						if (5 + tresc < cw * 12) {
+							buf[o++] = 0;
+							buf.set(cm, o); o += 5;
+							if (ile) for (let c = 0; c < cw; c++) {
+								const mm = lm[c];
+								if (!mm) continue;
+								buf[o++] = mm;
+								if (mm & 1) { buf.set(cur.subarray(c * 4, c * 4 + 4), o); o += 4; }
+								if (mm & 2) buf[o++] = cur[cw * 4 + c];
+								if (mm & 4) buf[o++] = cur[cw * 5 + c];
+								if (mm & 8) buf[o++] = cur[cw * 6 + c];
+								if (mm & 16) { buf.set(cur.subarray(cw * 7 + c * 4, cw * 7 + c * 4 + 4), o); o += 4; }
+								if (mm & 32) buf[o++] = cur[cw * 11 + c];
+							}
+							zapisane = true;
+						}
+					}
+					if (!zapisane) { buf[o++] = 1; buf.set(cur, o); o += cw * 12; }
+					pr.set(r, cur.slice(0));
+				}
+				mPart = buf.subarray(0, o);
+			} else {
+			const buf = new Uint8Array(11 + rows.length * cw * 12);
+			const dv = new DataView(buf.buffer);
+			dv.setUint16(0, ccx, true); dv.setUint16(2, ccy, true);
+			buf[4] = cw; buf[5] = ch;
+			buf.set(mask, 6);
+			let o = 11;
+			for (const r of rows) { const src = ((y0 + r) * W + x0) * 4; buf.set(map.subarray(src, src + cw * 4), o); o += cw * 4; }
+			for (const r of rows) { const src = (y0 + r) * W + x0; buf.set(wall.subarray(src, src + cw), o); o += cw; }
+			for (const r of rows) { const src = (y0 + r) * W + x0; if (shadow) buf.set(shadow.subarray(src, src + cw), o); o += cw; }
+			for (const r of rows) { const src = (y0 + r) * W + x0; if (auth) buf.set(auth.subarray(src, src + cw), o); o += cw; }
+			for (const r of rows) { const src = (y0 + r) * W + x0; if (sim) buf.set(new Uint8Array(sim.buffer, sim.byteOffset + src * 4, cw * 4), o); o += cw * 4; }
+			for (const r of rows) { buf.set(etRows.subarray(r * cw, r * cw + cw), o); o += cw; }
+			mPart = buf;
+			}
+			}
+			const fPart = nm ? encodeChunkFull(B, ccx, ccy, cw, ch, etRows, deltaKom) : null;
+			if (mPart) size += mPart.length;
+			if (fPart) size += fPart.length;
+			items.push({ ti, idx, m: mPart, f: fPart });
+		}
+		return { items, stoppedAt, fogSkipped, size, ms: performance.now() - t0 };
+	}
+	// ===== Stage 3: the encoder Worker =====
+	// The Worker gets the source of the two functions above as a Blob (the game starts its own workers the same way)
+	// and the world as the SharedArrayBuffers the simulation already shares (no copies). It owns the baseline (row
+	// hashes, cell-delta memory); the render thread keeps selection, pacing, the per-peer state and the packets.
+	// If the Worker cannot start or fails, encoding moves to the render thread with a fresh baseline: the next send
+	// of each chunk is whole rows, which every client applies.
+	function encoderWorkerMain() {
+		let B = null;
+		const E = { rowH: new Map(), rowPrev: null };
+		self.onmessage = (e) => {
+			const j = e.data;
+			try {
+				if (j.bufs) B = j.bufs;
+				if (j.reset) { E.rowH.clear(); if (E.rowPrev) E.rowPrev.clear(); }
+				if (j.forget) for (const i of j.forget) E.rowH.delete(i);
+				const r = encodeMirrorBatch(E, B, j.job);
+				r.id = j.id; r.rowHSize = E.rowH.size;
+				const tr = new Set();
+				for (const it of r.items) { if (it.m) tr.add(it.m.buffer); if (it.f) tr.add(it.f.buffer); }
+				self.postMessage(r, [...tr]);
+			} catch (err) { self.postMessage({ id: j.id, error: String((err && err.stack) || err) }); }
+		};
+	}
+	const isShared = (a) => !a || (typeof SharedArrayBuffer !== "undefined" && a.buffer instanceof SharedArrayBuffer);
+	function encoderWorker() {
+		const w = ST.wsx;
+		if (w.encMode === "main") return null;
+		if (ST._encW) return ST._encW;
+		try {
+			if (typeof Worker === "undefined" || typeof SharedArrayBuffer === "undefined" || typeof Blob === "undefined") throw new Error("no Worker or SharedArrayBuffer here");
+			const src = "\"use strict\";\nconst CHUNK = " + CHUNK + ", ELEMENTS_MIN = " + ELEMENTS_MIN + ", ELEMENTS_MAX = " + ELEMENTS_MAX + ";\n"
+				+ encodeChunkFull.toString() + "\n" + encodeMirrorBatch.toString() + "\n(" + encoderWorkerMain.toString() + ")();\n";
+			const url = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
+			const wk = new Worker(url);
+			const E = ST._encW = { wk, url, n: 0, wait: new Map(), bufs: null };
+			wk.onmessage = (e) => { const r = e.data, cb = r && E.wait.get(r.id); if (cb) { E.wait.delete(r.id); cb(r); } };
+			wk.onerror = (e) => encoderFail("Worker error: " + ((e && e.message) || e));
+			w.encMode = "worker";
+			log("mirror encoder: Worker started (" + Math.round(src.length / 1024) + " KB of source)");
+			return E;
+		} catch (e) { encoderFail(e.message); return null; }
+	}
+	function encoderFail(why) {
+		const w = ST.wsx, E = ST._encW;
+		ST._encW = null;
+		if (E) {
+			try { E.wk.terminate(); URL.revokeObjectURL(E.url); } catch (e) {}
+			for (const cb of E.wait.values()) cb(null);
+			E.wait.clear();
+		}
+		if (w.encMode !== "main") log("mirror encoder: " + why + " — encoding on the render thread from now on (fresh baseline)");
+		w.encMode = "main";
+		w.rowH = null; w.rowPrev = null; w.encForget = null; w.encReset = false;   // the Worker's baseline went with it
+	}
+	// One batch's encoding, in the Worker when it runs, else right here. Resolves to null if the Worker failed mid-batch.
+	function encodeMirror(B, job) {
+		const w = ST.wsx;
+		if (encoderWorker() && ![B.map, B.wall, B.shadow, B.auth, B.sim, B.etype].every(isShared)) encoderFail("the world buffers are not shared memory");
+		const E = ST._encW;
+		if (!E) { w.rowHSize = 0; return encodeMirrorBatch(w, B, job); }   // the baseline lives in ST.wsx (rowH/rowPrev)
+		const id = ++E.n, msg = { id, job };
+		if (E.bufs !== B.map) { msg.bufs = B; E.bufs = B.map; }   // new typed arrays with every world load
+		if (w.encReset) { msg.reset = true; w.encReset = false; }
+		if (w.encForget) { msg.forget = w.encForget; w.encForget = null; }
+		return new Promise((resolve) => {
+			const timer = setTimeout(() => { if (E.wait.delete(id)) { encoderFail("no answer in 5 s"); resolve(null); } }, 5000);
+			E.wait.set(id, (r) => {
+				clearTimeout(timer);
+				if (r && r.error) { encoderFail("it threw: " + String(r.error).split("\n")[0]); r = null; }
+				if (r) w.rowHSize = r.rowHSize;
+				resolve(r);
+			});
+			try { E.wk.postMessage(msg); }
+			catch (e) { E.wait.delete(id); clearTimeout(timer); encoderFail("postMessage failed: " + e.message); resolve(null); }
+		});
+	}
+	// "resend these rows whole" (host-side changes the dirty flags may not show): wherever the baseline lives
+	function mirrorForget(i) {
+		const w = ST.wsx;
+		if (ST._encW) (w.encForget || (w.encForget = [])).push(i);
+		else if (w.rowH) w.rowH.delete(i);
+	}
+	// live tests: SandTogether.setMirrorEncoder("main" | "worker"); either way the baseline starts fresh
+	ST.setMirrorEncoder = (mode) => {
+		if (mode === "main") encoderFail("switched by hand");
+		else { ST.wsx.encMode = undefined; ST.wsx.rowH = null; ST.wsx.rowPrev = null; ST.wsx.encReset = true; }
+		return mode;
+	};
 	async function applyWorldBatch(msg) {
 		if (ST.net.role !== "client" || !ST.state) return;
 		const state = ST.state;
@@ -2890,15 +3192,18 @@
 		const menuTest = false;
 		// CLIENT IN THE MENU (fix tony: "the main menu turns into red blocks"): the host's mirror MUST NOT
 		// paint over the menu scene — world data was landing in the menu scene's buffers as red tiles.
-		if (myScene === 1) return;
+		// PROTO 7: a batch dropped here is acked like an applied one. It is never coming back: unacked, it stalled the
+		// host's mirror for every peer, and acked, the hash check knows its chunks may be compared (and resent).
+		const dropped = () => { if (typeof msg.sq === "number") ST._lastAppliedSq = msg.sq; };
+		if (myScene === 1) return dropped();
 		// WORLD LOADING IN PROGRESS (fix TCentraL "big map freeze"): writing to the world buffers
 		// WHILE FH.game.load IS RUNNING = a race with the engine loading the save (freeze/corruption).
 		// We drop it — AUTO-RESYNC after the mirror starts will send the full world anyway.
-		if (ST._loadingWorld) return;
+		if (ST._loadingWorld) return dropped();
 		if (msg.wid && myWid && msg.wid !== myWid && !menuTest) {
 			// Trust: the engine assigns the loaded world a DIFFERENT local worldId than the one the host uses in "wc", even though it's
 			// EXACTLY the same save (fix "REJECT world" → mirror rejected → reconcile was deleting the client's structures).
-			// We trust when: (a) already trusted, (b) the window right after auto-load, OR (c) we received the world FROM this host (world-begin)
+			// We trust when: (a) already trusted, (b) the window right after auto-load, OR (c) we received the world FROM this host (a transfer)
 			// and we're BOTH in the game (scene≠1) — meaning the client actually loaded the host's save (auto or manually).
 			const bothInWorld = msg.scene !== 1 && myScene !== 1;
 			// PAIRED TRUST (fix tony: "loading a different world adds it as red blocks"):
@@ -2935,6 +3240,12 @@
 		}
 		// v5 = row delta (a mask of changed rows per chunk), v6 = the same plus a cell delta inside the row
 		if (msg.v !== 5 && msg.v !== 6) { setStatus(t("ver_mismatch"), "#f66"); return; }
+		// a host on another wire protocol keeps its baselines differently: applying its mirror would half work
+		// (holes nobody heals). Until its mver arrives we wait, after that a mismatch stays visible in the status.
+		if (ST._hostProto !== PROTO_VER) {
+			if (ST._hostProto !== undefined && lim("protoDrop", 3, 60000)) { setStatus(t("proto_mismatch", "host", ST._hostProto, PROTO_VER), "#f66"); log("world batch dropped: host protocol v" + ST._hostProto + ", mine v" + PROTO_VER); }
+			return;
+		}
 		if (ST.wsx.mismatchLogged) { ST.wsx.mismatchLogged = false; log("World MATCH — mirror starting"); }
 		ST.wsx.mismatchWarned = false;
 		setClientPaused(true);
@@ -3479,6 +3790,9 @@
 	// of the enum for the pipe. We take it from there instead of the hardcoded 23; the old path (first pipe in the world)
 	// remains as a fallback, because it only works when pipes are already on the map.
 	function isPipeType(state, t) {
+		// 0.6.0: the game's own segment test covers every pipe network (water, gas, modded)
+		const API = ST._pipeApi;
+		if (state && API && typeof API.isSegment === "function") { try { return !!API.isSegment(state, t); } catch (e) { swallow("isPipeType", e); } }
 		try {
 			// isPipe/isPipeType run in loops over all structures, so when there is no answer
 			// we retry the query at most once per second, not on every block
@@ -3633,6 +3947,7 @@
 		const d = (q && q.data) || {};
 		return {
 			x: q.x, y: q.y,
+			type: q.type,     // 0.6.0 restoreSnapshots defaults a missing type to the water pipe (gas pipes!)
 			data: {
 				pipeConnectionMask: d.pipeConnectionMask || 0,
 				pipeBridgeConnectionMask: d.pipeBridgeConnectionMask || 0,
@@ -3715,7 +4030,7 @@
 				P.restoreSnapshots = function (state, snaps) {
 					if (isClientSync() && ST.wsx.paused && !ST._applyingNet) {
 						try {
-							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, data: q.data }));
+							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, type: q.type, data: q.data }));   // type: gas pipes (0.6.0)
 							if (lista.length) { net.send({ t: "act", k: "pipeRestore", s: lista }); stampAct("placeN", lista.length); }
 							if (lim("pipeRestTx", 200, 600000)) log("CLIENT pipe undo -> host: restore " + lista.length);
 						} catch (e) { swallow("pipe undo", e); }
@@ -3855,6 +4170,8 @@
 				} catch (e) { swallow("drag probe", e); }
 			} catch (e) { swallow("pipe drag history", e); }
 			const m = { t: "act", k: "pipeRun", s: { x: start.x, y: start.y }, e: { x: end.x, y: end.y } };
+			const ty = positions && positions[0] && positions[0].structureType;   // 0.6.0: gas pipes
+			if (ty != null) m.ty = ty;
 			if (ST._placeQ) { (ST._pipeRunQ || (ST._pipeRunQ = [])).push(m); }   // there are pipes in the queue — wait for them
 			else net.send(m);                                                    // the drag itself over existing pipes
 			if (lim("pipeRunTx", 30)) log("CLIENT pipe drag -> host: (" + start.x + "," + start.y + ") -> ("
@@ -3940,7 +4257,7 @@
 	// each other could get glued together) and the closing of two-cell gaps.
 	// We don't transmit the route: cZ walks a straight line from start to end in grid steps anyway
 	// (function V in the game's code), so the host only needs two points and replays it without loss.
-	function pipeRunHost(state, poczatek, koniec) {
+	function pipeRunHost(state, poczatek, koniec, typ) {
 		// EVERY exit says why. The 0.9.250 regression survived the entire test precisely because these
 		// exits were silent: the log showed the client's send and nothing on the host's side.
 		const nie = (powod) => { if (lim("pdRunNie:" + powod, 5)) log("HOST: pipe drag skipped — " + powod); return 0; };
@@ -3960,6 +4277,13 @@
 		const naTrasie = [];
 		for (const punkt of trasa) { const q = pipeAt(state, punkt.x, punkt.y); if (q) naTrasie.push(q); }
 		if (!naTrasie.length) return nie("na trasie nie ma ani jednej rury (" + (kroki + 1) + " punktow) — paczka rur jeszcze nie doszla?");
+		// 0.6.0: the route planner takes the pipe type from the points and assumes the water pipe otherwise,
+		// which blocks gas pipe endpoints. Type from the client, else from the pipe at the start of the route.
+		if (typ == null || (typeof API.isSegment === "function" && !isPipeType(state, typ))) {
+			const q0 = pipeAt(state, poczatek.x, poczatek.y);
+			typ = q0 ? q0.type : undefined;
+		}
+		if (typ != null) for (const punkt of trasa) punkt.structureType = typ;
 		let wynik = null, role = "";
 		try {
 			API.path(state, trasa, poczatek, koniec);              // point roles according to the HOST'S WORLD
@@ -4929,7 +5253,7 @@
 				// must go through _entDrop (sprite+light), because swapping the reference does NOT clean up the renderer.
 				try {
 					if (ST._entDrop && ST.FH && ST.FH.entities && ST.FH.entities.getAll) {
-						const oldList = ST.FH.entities.getAll(state) || [];
+						const oldList = (ST.FH.entities.getAll(state) || []).slice(); // copy: _entDrop splices the live list
 						let newIds = null;
 						for (const k2 in (msg.st || {})) { const v2 = msg.st[k2]; if (v2 && Array.isArray(v2.list)) { newIds = new Set(v2.list.map((c5) => c5 && c5.id)); break; } }
 						if (newIds) for (const c6 of oldList) { if (c6 && c6.id >= 0 && !newIds.has(c6.id)) { if (ST._entCollectFx) { try { ST._entCollectFx(state, c6); } catch (e2) {} } try { ST._entDrop(c6); } catch (e2) {} } }
@@ -4942,7 +5266,7 @@
 				// we clear lightIndex (light+sprite will be assigned to them by _entInit from the fast bus).
 				try {
 					const EN9 = ST.FH && ST.FH.entities;
-					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []) : [];
+					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []).slice() : []; // copy: _entDrop splices the live list
 					const oldBy9 = new Map(oldL9.map((c9) => [c9 && c9.id, c9]));
 					for (const k9 in (msg.st || {})) {
 						const v9 = msg.st[k9];
@@ -6489,7 +6813,7 @@
 				// client pipe drag — we replay it with the game's functions AFTER the placeN batch
 				// has placed the pipes themselves (the channel is ordered, so they're already here)
 				ST._applyingNet = true;
-				try { pipeRunHost(state, msg.s, msg.e); } finally { ST._applyingNet = false; }
+				try { pipeRunHost(state, msg.s, msg.e, msg.ty); } finally { ST._applyingNet = false; }
 			} else if (msg.k === "pd") {
 				// client pipe connections: we apply them locally, and our own watcher broadcasts them further
 				ST._applyingNet = true;
@@ -6652,8 +6976,9 @@
 						state.store.conservatory.tickets += Math.pow(2, types);
 					}
 					try { ST.FH.events.emit(state, "entity:collected", { typeId: msg.ty }); } catch (e) { swallow("act:" + msg.k, e); }
-					// remove the entity from the host's map (no official remove — emulated: splice from the LIVE getAll list
-					// + hide the sprite via getSprite + turn off the light). Without this the critter hung around until the 2nd collection.
+					// remove the entity from the host's map via _entDrop (full removal incl. the 0.6.0 id cache and pet overlay);
+					// fallback emulation: splice from the LIVE getAll list + hide the sprite + turn off the light.
+					// Without this the critter hung around until the 2nd collection.
 					try {
 						const EN = ST.FH.entities;
 						if (msg.eid != null && EN && EN.getAll) {
@@ -6661,9 +6986,13 @@
 							const idxE = listE.findIndex((en) => en && en.id === msg.eid);
 							if (idxE >= 0) {
 								const en = listE[idxE];
-								try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
-								try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
-								listE.splice(idxE, 1);
+								let dropped = false;
+								if (ST._entDrop) { try { ST._entDrop(en); dropped = true; } catch (e) { swallow("act:" + msg.k, e); } }
+								if (!dropped) {
+									try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
+									try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
+									const i2 = listE.indexOf(en); if (i2 >= 0) listE.splice(i2, 1);
+								}
 							}
 						}
 					} catch (e) { swallow("act:" + msg.k, e); }
@@ -7221,7 +7550,7 @@
 		chatIn.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); chatSend(); } });
 		chatIn.addEventListener("keyup", (e) => e.stopPropagation());
 		hud.querySelector("#st-stop").onclick = () => { setClientPaused(false); net.stop(); };
-		hud.querySelector("#st-send-world").onclick = sendWorld;
+		hud.querySelector("#st-send-world").onclick = () => sendWorld(undefined, true);   // the button always saves anew
 		hud.querySelector("#st-resync").onclick = () => net.send({ t: "resync" });
 		// Joining via Lobby ID from the clipboard (bypasses Steam invites — contributed by dotNine)
 		hud.querySelector("#st-join-id").onclick = async () => {
@@ -7286,31 +7615,34 @@
 	// ------------------------------------------------------------------
 	// Save transfer (shared starting map)
 	// ------------------------------------------------------------------
-	async function sendWorld() {
+	// PROTO 7: toId = one peer (join, world-req), none = everyone; fresh = never reuse a recent file.
+	// The file goes out from the main process.
+	async function sendWorld(toId, fresh) {
 		// ST-FIX (game 0.5.6, restart loop): transfer preparation is ASYNCHRONOUS
 		// (FH.game.save + up to 10s waiting until the file appears on disk). Without this flag, parallel
 		// calls (world-req + resync + hello within a few seconds) kept incrementing tid, while the client
 		// stayed on the old one — hence the flood of "world-need for old transfer". The check MUST be
 		// OUTSIDE the try/finally, otherwise a rejected call would clear the flag of the transfer in progress.
-		if (ST._wtxPreparing) { log("sendWorld SKIPPED — transfer already preparing"); return; }
+		// PROTO 7: a request for another peer while we prepare is remembered and gets the same file afterwards
+		if (ST._wtxPreparing) { (ST._wtxWant || (ST._wtxWant = new Set())).add(toId || "*"); log("sendWorld: already preparing — " + (toId || "everyone") + " gets the same file"); return; }
 		try {
 			if (ST.net.role === "idle") { setStatus(t("connect_first"), "#f66"); return; }
 			// HOST IN MENU (report from TCentraL: Steam-join before the host loaded the map → the client loaded
 			// a speculative "last save" over and over): we only send the world once the host is ACTUALLY in it —
 			// auto-send will fire on its own when entering. The client gets world-wait instead of burning through the world-req limit.
-			// DO NOT start a new transfer while the previous one is still pumping — interleaving packets of two
-			// transfers = corrupted save on the client (fix derErste67)
-			if (ST._wtx && ST._wtx.queue && ST._wtx.queue.length) {
-				log("sendWorld SKIPPED — previous transfer in progress (" + ST._wtx.queue.length + " packets in the queue)");
-				return;
-			}
+			// (Two transfers can no longer interleave: every part carries the file's hash.)
 			const hostScene = ST.state && ST.state.store && ST.state.store.scene && ST.state.store.scene.active;
 			if (hostScene === 1) {
 				setStatus(t("host_enter_world_first"), "#fd5");
 				log("sendWorld paused — host in menu; sending world-wait");
-				try { net.send({ t: "world-wait" }); } catch (e) {}
+				try { net.send({ t: "world-wait" }, toId); } catch (e) {}
 				return;
 			}
+			if (!net.offerWorld) { log("sendWorld: the network bridge has no offerWorld — reinstall the mod"); return; }
+			// A file of this world session from the last 2 minutes goes out again without a new save: no 10 s export,
+			// and a client that already holds part of it (reconnect, game restart) only gets what it lacks.
+			const again = fresh ? null : await net.offerWorld(null, { gen: ST._worldGen || null, reuseMs: 120000 }, toId);
+			if (again && again.ok) { log("sendWorld: recent file " + String(again.hash).slice(0, 12) + " offered again to " + (toId || "everyone")); return; }
 			ST._wtxPreparing = true; // ST-FIX: this is where the asynchronous transfer preparation begins
 			const saves = await window.electron.getSaveFiles();
 			if (!saves || !saves.length) { setStatus(t("no_saves"), "#f66"); return; }
@@ -7344,62 +7676,13 @@
 			log("sendWorld: export", save.name || save.id, "w", Math.round(performance.now() - t0), "ms");
 			const bytes = new Uint8Array(res.data.data || res.data);
 			if (tmpId && save.id === tmpId) { try { window.electron.deleteSave(tmpId); } catch (e) {} } // tidiness: the transfer save doesn't clutter Load Game
-			const b64 = b64enc(bytes);
-			const CH = 49152; // 48 KB/packet — safely under the Steam P2P limits
-			const total = Math.ceil(b64.length / CH);
-			const parts = new Array(total);
-			for (let i = 0; i < total; i++) parts[i] = b64.substr(i * CH, CH);
-			// send queue spread out over time (not a blast) + remembered for retry.
-			// tid = transfer identifier (fix derErste67 "yellow half of the world"): packets of TWO transfers
-			// interleaved in one reception → the client stitched together a save from two versions of the world (the host's
-			// autosave between sends!) and loaded a CORRUPTED world. Now the client only accepts packets
-			// of the current tid, and the host doesn't start a new transfer while the previous one is in progress (guard above).
-			ST._wtxSeq = (ST._wtxSeq || 0) + 1;
-			ST._wtx = { tid: ST._wtxSeq, name: save.name || save.id, parts, total, queue: [], sent: 0, sizeKB: Math.round(bytes.length / 1024) };
-			for (let i = 0; i < total; i++) ST._wtx.queue.push(i);
-			ST._wtxActiveT = performance.now();
-			ST._wtxHold = performance.now() + 30000; // mirror silence window; it will be lifted by "resync" from the client
-			net.send({ t: "world-begin", tid: ST._wtx.tid, name: ST._wtx.name, size: bytes.length, chunks: total, gen: ST._worldGen || null });
-			setStatus(t("world_sent", ST._wtx.sizeKB, total), "#5f5");
-			pumpWtx();
+			const r = await net.offerWorld(bytes, { name: save.name || save.id, gen: ST._worldGen || null }, toId);
+			if (!r || !r.ok) { setStatus(t("export_err", (r && r.error) || "?"), "#f66"); return; }
+			setStatus(t("world_sent", Math.round(bytes.length / 1024), r.parts), "#5f5");
+			const want = ST._wtxWant; ST._wtxWant = null;
+			if (want) for (const w2 of want) { try { await net.offerWorld(null, { gen: ST._worldGen || null, reuseMs: 120000 }, w2 === "*" ? undefined : w2); } catch (e) {} }
 		} catch (e) { setStatus(t("export_err", e.message), "#f66"); log("sendWorld error:", e); }
 		finally { ST._wtxPreparing = false; } // ST-FIX
-	}
-
-	// sends chunks in small batches, with pauses — Steam P2P doesn't drop packets when the buffer isn't clogged
-	function pumpWtx() {
-		const w = ST._wtx;
-		if (!w) return;
-		if (ST._wtxTimer) return; // already pumping
-		const step = () => {
-			if (!ST._wtx) { ST._wtxTimer = null; return; }
-			const w = ST._wtx;
-			let n = 0;
-			// ST-FIX (CAUSE of the endless "Receiving world"): 4 packets every 25 ms is ~160 packets/s.
-			// With 19 packets of ~36 KB each, the entire save (675 KB) was being pushed into the Steam socket in ~120 ms,
-			// i.e. at a speed of ~5.7 MB/s — dozens of times faster than this link can carry
-			// (measured mirror maximum: ~150 KB/s). The Steam buffer swelled, packets reached the client
-			// tens of seconds late or were lost, the client would ask for the save AGAIN after 15s, the host would make a NEW
-			// export with a new tid and wiped out the client's progress. Five exports in 45s, zero completed.
-			// Now ONE packet per tick every 150 ms = ~240 KB/s: the whole save goes through in ~3s without clogging.
-			while (w.queue.length && n < 1) {
-				const i = w.queue.shift();
-				net.send({ t: "world-chunk", tid: w.tid, i, data: w.parts[i] });
-				w.sent++; n++;
-			}
-			if (n) ST._wtxActiveT = performance.now(); // ST-FIX: the mirror stays silent while the save is in flight
-			if (w.queue.length) { ST._wtxTimer = setTimeout(step, 150); }
-			else {
-				net.send({ t: "world-end", tid: w.tid }); ST._wtxTimer = null;
-				// 0.9.185 (CAUSE of the 30s dead mirror): _wtxHold only lifted "resync" from the client,
-				// but the client only sends it after auto-load. When auto-load is skipped ("mirror works /
-				// already auto-loaded in this session"), resync NEVER arrives and the mirror stays silent for a full 30s —
-				// in the log the transfer finished at 15:42:12, yet "mirror SUSPENDED (queue 9006)" kept coming until 15:42:36.
-				// After world-end we only leave a short grace period for the client's import; resync will lift it earlier anyway.
-				if (ST._wtxHold && ST._wtxHold > performance.now() + 8000) ST._wtxHold = performance.now() + 8000;
-			}
-		};
-		ST._wtxTimer = setTimeout(step, 0);
 	}
 
 	// ------------------------------------------------------------------
@@ -8981,7 +9264,8 @@
 							if (q3[5] && ST._drawBridge) {
 								try {
 									ctx.save(); ctx.globalAlpha = 0.75;
-									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx });
+									// segmentStructureType: 0.6.0 needs it for bridges not built yet (otherwise draws nothing)
+									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx, segmentStructureType: q3[2] });
 									ctx.restore(); drawn = true;
 								} catch (e) { ST._drawBridge = null; try { ctx.restore(); } catch (e2) {} }
 							}
@@ -10053,6 +10337,7 @@
 				ST._lastAckT = now;
 				try { net.send({ t: "wcack", sq: ST._lastAppliedSq, qd: (ST._applyQ || []).length }); } catch (e) {} // qd = how many packets are waiting on my side to be applied
 			}
+			hashCheckTick(state, now);   // PROTO 7: background check of the mirror against the host
 			sendMyProjectilesIfDue(state);
 			sendResourceDeltaIfDue(state); // send the host the client's resource deltas (dotNine)
 			// flush the fire/ice batches every ~60 ms
@@ -10065,18 +10350,18 @@
 			// Hint: connected, but the host hasn't sent the world yet (no packets to discard = the player sees "nothing")
 			if (!ST.wsx.everApplied && !ST.wsx.mismatchLogged && ST.peers.size > 0 && now - (ST._waitHintT || 0) > 3000) {
 				ST._waitHintT = now;
-				if (!ST._worldRx) setStatus(t("waiting_world"), "#fd5"); // don't overwrite "Receiving world x/y"
+				if (!ST._wxRx) setStatus(t("waiting_world"), "#fd5"); // don't overwrite "Receiving world x/y"
 			}
-			// SELF-HEALING (fix for TCentraL's reconnect on a large map): no world-begin despite being connected
+			// SELF-HEALING (fix for TCentraL's reconnect on a large map): no transfer despite being connected
 			// (the host's auto-send didn't work / was lost) → the client asks for a save every 15 s, MAX 4 times per session,
 			// and NEVER after successfully receiving the world (_worldRxDone) — otherwise a loop of transfers/reloads (0.9.58!).
 			// ...and ONLY while we're sitting in the MENU (0.9.73). A save request WHILE IN THE WORLD = another auto-load =
 			// a PAGE RELOAD = a loop every ~10-15 s (ZeroHazard, J.Slayer, Akriz).
-			if (!ST._worldRxDone && !ST._gotHostWorld && !ST._worldRx && !ST.wsx.everApplied && ST.peers.size > 0 &&
+			if (!ST._worldRxDone && !ST._gotHostWorld && !ST._wxRx && !ST.wsx.everApplied && ST.peers.size > 0 &&
 				state.store.scene && state.store.scene.active === 1 &&
 				(ST._worldReqN || 0) < 4 && now - (ST._worldReqT || 0) > 15000) {
 				ST._worldReqT = now; ST._worldReqN = (ST._worldReqN || 0) + 1;
-				try { net.send({ t: "world-req" }); log("world-req " + ST._worldReqN + "/4: did not get world-begin — requesting save from host"); } catch (e) {}
+				try { net.send({ t: "world-req" }); log("world-req " + ST._worldReqN + "/4: no transfer started — requesting save from host"); } catch (e) {}
 			}
 			// MIRROR-KICK (0.9.73 — CAUSE of "client can't dig / digs only locally", reproduced end-to-end):
 			// auto-load ends with a RELOAD OF THE RENDERER PAGE. The mod comes up from scratch (everApplied=false,

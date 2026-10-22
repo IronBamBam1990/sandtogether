@@ -25,7 +25,7 @@ const log = (...a) => {
 };
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
-const PROTO_VER = 5;
+const PROTO_VER = 6; // 6: mirror with per-peer baselines and hash check (renderer PROTO_VER 7)
 
 // ---------------------------------------------------------------------------
 // State
@@ -359,6 +359,7 @@ function handleIncoming(peerId, text, steamSid) {
     emitEvent('peer-hello', { id: peerId, nick: peer.nick });
     if (obj.ver != null && obj.ver !== PROTO_VER) emitEvent('version-mismatch', { id: peerId, theirs: obj.ver, ours: PROTO_VER });
   }
+  if (sessionIncoming(peerId, obj, null)) return;   // epochs and the world transfer stay in main (SESSION below)
   emitMsg(peerId, obj);
   // host relays player positions/hellos to the other clients (3+ player support)
   if (S.role === 'host' && (obj.t === 'pos' || obj.t === 'hello' || obj.t === 'chat' || obj.t === 'myproj' || obj.t === 'snd') && S.peers.size > 1) {
@@ -375,6 +376,7 @@ function handleIncomingBin(peerId, buf) {
     const hl = buf.readUInt16BE(0);
     if (buf.length < 2 + hl) return;
     const obj = JSON.parse(buf.subarray(2, 2 + hl).toString("utf8"));
+    if (sessionIncoming(peerId, obj, buf.subarray(2 + hl))) return;
     sendRenderer("st:msg", { from: peerId, msg: obj, bin: buf.subarray(2 + hl) });
   } catch (e) { log("bin frame error:", e.message); }
 }
@@ -420,6 +422,7 @@ function netSend(obj, toId) {
 }
 
 function stopNetworking(reason) {
+  wxStop();
   if (S.wsServer) { try { S.wsServer.close(); } catch (e) {} S.wsServer = null; }
   if (S.wsClient) { try { S.wsClient.end(); } catch (e) {} S.wsClient = null; }
   if (S.lobby) { try { S.lobby.leave(); } catch (e) {} S.lobby = null; }
@@ -695,6 +698,288 @@ function gameFingerprint() {
   return _gameFpCache;
 }
 
+// ============================================================================
+// SESSION (PROTO_VER 6): what must not die with the renderer, which reloads on every world load.
+//  - Renderer epochs. Every attach of our renderer is a new epoch, its reload or crash is a detach, and peers
+//    hear both ({t:'epoch'}). A host then pauses the mirror to that one peer and resets only that peer when it
+//    comes back, instead of streaming into a reloading page and stalling everyone on its missing acks.
+//  - Peer facts the renderer learns once (protocol and release from mver) are kept here, so a host renderer
+//    reload does not forget them.
+//  - The world (save) transfer. Content addressed (sha256), sent in parts, received straight to disk with a
+//    bitmap, resumable by missing ranges. A reload on either side does not touch it, and after a reconnect or a
+//    game restart the same file resumes where it stopped. The renderer only exports the save and imports the
+//    received file.
+// ============================================================================
+S.epoch = 0;          // our renderer's attach counter
+S.attached = false;
+S.wcHooked = null;    // the webContents whose reload we watch
+const epochMsg = () => ({ t: 'epoch', e: S.epoch, a: S.attached ? 1 : 0 });
+function rendererDetached(why) {
+  if (!S.attached) return;
+  S.attached = false;
+  log('renderer detached (' + why + '), epoch ' + S.epoch);
+  netSend(epochMsg());
+}
+function rendererAttached(wc) {
+  if (wc && S.wcHooked !== wc) {
+    S.wcHooked = wc;
+    try { wc.on('did-start-loading', () => rendererDetached('reload')); wc.on('render-process-gone', () => rendererDetached('crash')); } catch (e) {}
+  }
+  S.epoch++; S.attached = true;
+  log('renderer attached, epoch ' + S.epoch);
+  netSend(epochMsg());
+  wxRendererBack();
+  return { epoch: S.epoch, wx: wxRxInfo() };
+}
+// Messages main notes or consumes on their way in; true = consumed (never reaches the renderer).
+function sessionIncoming(peerId, obj, bin) {
+  const peer = S.peers.get(peerId);
+  if (!peer || !obj || typeof obj.t !== 'string') return false;
+  if (obj.t === 'hello' && obj.ver != null) { sendToPeer(peer, epochMsg()); return false; }   // a (re)connected peer learns our state
+  if (obj.t === 'mver') { if (typeof obj.pv === 'number') peer.pv = obj.pv; if (typeof obj.v === 'string') peer.ver = obj.v; return false; }
+  if (obj.t === 'epoch') {
+    peer.ep = obj.e | 0; peer.att = !!obj.a;
+    emitEvent('peer-epoch', { id: peerId, epoch: peer.ep, attached: peer.att });
+    return true;
+  }
+  if (obj.t.startsWith('wx-')) { try { wxIncoming(peerId, peer, obj, bin); } catch (e) { log('wx error:', e.message); } return true; }
+  return false;
+}
+
+// --- world transfer ---------------------------------------------------------
+const WX_PART = 48 * 1024;              // under the Steam P2P packet limits, binary (no base64)
+const WX_MAX = 512 * 1024 * 1024;       // a save larger than this is not a save
+const WX_STEAM_MS = 150;                // Steam: one part per 150 ms (~320 KB/s), the pace the renderer pump had
+const WX_WS_MS = 40, WX_WS_BURST = 4;   // TCP: faster, held back by the socket's own backlog below
+S.wx = { files: new Map(), out: new Map(), rx: null, done: new Set() };
+const wxHex = (h) => typeof h === 'string' && /^[0-9a-f]{64}$/.test(h);
+function wxDir() {
+  const d = path.join(require('electron').app.getPath('userData'), 'sandtogether-wx');
+  fs.mkdirSync(d, { recursive: true });
+  return d;
+}
+function wxBin(hdr, data) {
+  const h = Buffer.from(JSON.stringify(hdr), 'utf8');
+  const out = Buffer.allocUnsafe(2 + h.length + data.length);
+  out.writeUInt16BE(h.length, 0); h.copy(out, 2); data.copy(out, 2 + h.length);
+  return out;
+}
+// part indices -> [[from, to), ...]
+function wxRanges(isMissing, total, cap) {
+  const out = [];
+  for (let i = 0; i < total && out.length < cap; i++) {
+    if (!isMissing(i)) continue;
+    let j = i + 1; while (j < total && isMissing(j)) j++;
+    out.push([i, j]); i = j;
+  }
+  return out;
+}
+
+// HOST: the renderer hands over an exported save, or (bytes null) asks to reuse the newest one of the same
+// world session (meta.gen) if it is recent, which also lets an interrupted transfer resume.
+function wxOffer(bytes, meta, toId) {
+  let f = null;
+  if (bytes && bytes.length) {
+    const buf = Buffer.from(bytes.buffer ? Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength) : bytes);
+    if (buf.length > WX_MAX) return { ok: false, error: 'save too large' };
+    const h = crypto.createHash('sha256').update(buf).digest('hex');
+    f = S.wx.files.get(h) || { h, buf, name: String(meta.name || 'world'), gen: meta.gen || null, t: Date.now() };
+    S.wx.files.delete(h); S.wx.files.set(h, f);
+    while (S.wx.files.size > 2) S.wx.files.delete(S.wx.files.keys().next().value);
+  } else {
+    for (const g of S.wx.files.values()) if (g.gen === (meta.gen || null) && Date.now() - g.t < (meta.reuseMs || 120000)) f = g;
+    if (!f) return { ok: false, reason: 'no recent file' };
+  }
+  const ids = toId ? [toId] : [...S.peers.keys()];
+  let n = 0;
+  for (const pid of ids) if (S.peers.has(pid)) { wxStartOut(pid, f); n++; }
+  log('WX offer ' + f.h.slice(0, 12) + ' (' + Math.round(f.buf.length / 1024) + ' KB, ' + (bytes ? 'new' : 'reused') + ') to ' + n + ' peer(s)');
+  return { ok: true, hash: f.h, size: f.buf.length, parts: Math.ceil(f.buf.length / WX_PART), peers: n };
+}
+function wxStartOut(pid, f) {
+  const old = S.wx.out.get(pid);
+  if (old && old.timer) clearTimeout(old.timer);
+  const total = Math.ceil(f.buf.length / WX_PART);
+  // the same file again keeps its progress: the client answers with what it still lacks
+  const o = old && old.f.h === f.h ? Object.assign(old, { timer: null, queue: [] }) : { f, total, queue: [], timer: null, sent: 0, progT: 0 };
+  S.wx.out.set(pid, o);
+  sendToPeer(S.peers.get(pid), { t: 'wx-offer', h: f.h, n: f.name, g: f.gen, sz: f.buf.length, ps: WX_PART });
+  emitEvent('wx-start', { id: pid, hash: f.h, total });
+}
+function wxQueue(pid, ranges) {
+  const o = S.wx.out.get(pid);
+  if (!o || !Array.isArray(ranges)) return;
+  const inQ = new Set(o.queue);
+  for (const r of ranges.slice(0, 4096)) {
+    if (!Array.isArray(r)) continue;
+    const a = Math.max(0, r[0] | 0), b = Math.min(o.total, r[1] | 0);
+    for (let i = a; i < b; i++) if (!inQ.has(i)) { inQ.add(i); o.queue.push(i); }
+  }
+  wxPump(pid);
+}
+function wxPump(pid) {
+  const o = S.wx.out.get(pid);
+  if (!o || o.timer || !o.queue.length) return;
+  const step = () => {
+    o.timer = null;
+    const p = S.peers.get(pid);
+    if (S.wx.out.get(pid) !== o) return;          // a newer offer took over
+    if (!p) { S.wx.out.delete(pid); return; }      // peer gone: a reconnect re-offers, the client resumes
+    const ws = p.kind === 'ws';
+    for (let k = 0; k < (ws ? WX_WS_BURST : 1) && o.queue.length; k++) {
+      if (ws && p.sock && p.sock.writableLength > 1024 * 1024) break;   // the socket's backlog paces TCP
+      const i = o.queue.shift();
+      sendToPeer(p, wxBin({ t: 'wx-part', h: o.f.h, i }, o.f.buf.subarray(i * WX_PART, Math.min(o.f.buf.length, (i + 1) * WX_PART))));
+      o.sent++;
+    }
+    const now = Date.now();
+    if (now - o.progT > 500 || !o.queue.length) { o.progT = now; emitEvent('wx-progress', { id: pid, sent: o.sent, total: o.total, left: o.queue.length }); }
+    if (o.queue.length) o.timer = setTimeout(step, ws ? WX_WS_MS : WX_STEAM_MS);
+  };
+  o.timer = setTimeout(step, 0);
+}
+
+// CLIENT: receiving straight to disk: <userData>/sandtogether-wx/<sha256>.part + .json (bitmap), .sav when verified.
+function wxRxPaths(h) { const d = wxDir(); return { part: path.join(d, h + '.part'), meta: path.join(d, h + '.json'), sav: path.join(d, h + '.sav') }; }
+function wxRxOpen(h, sz, ps, name, gen) {
+  const P = wxRxPaths(h), total = Math.ceil(sz / ps);
+  // one transfer at a time: an older unfinished file is replaced (its parts would never be asked for again)
+  if (S.wx.rx && S.wx.rx.h !== h) wxRxClose(true);
+  try { for (const fn of fs.readdirSync(wxDir())) if (!fn.startsWith(h)) fs.unlinkSync(path.join(wxDir(), fn)); } catch (e) {}
+  const rx = { h, sz, ps, total, name, gen, bits: new Uint8Array(total), got: 0, fd: null, ready: false, imported: false, from: null, lastT: Date.now(), saveT: 0, progT: 0, bad: 0 };
+  if (fs.existsSync(P.sav)) { rx.ready = true; rx.got = total; rx.bits.fill(1); return rx; }
+  try {
+    const m = JSON.parse(fs.readFileSync(P.meta, 'utf8'));
+    if (m.sz === sz && m.ps === ps && fs.existsSync(P.part)) {
+      const b = Buffer.from(m.bits, 'base64');
+      for (let i = 0; i < total; i++) if (b[i >> 3] & (1 << (i & 7))) { rx.bits[i] = 1; rx.got++; }
+      log('WX resume ' + h.slice(0, 12) + ': ' + rx.got + '/' + total + ' parts already on disk');
+    }
+  } catch (e) { /* nothing to resume */ }
+  rx.fd = fs.openSync(P.part, rx.got ? 'r+' : 'w+');
+  if (!rx.got) fs.ftruncateSync(rx.fd, sz);
+  return rx;
+}
+function wxRxSaveBits(rx) {
+  try {
+    const b = Buffer.alloc((rx.total + 7) >> 3);
+    for (let i = 0; i < rx.total; i++) if (rx.bits[i]) b[i >> 3] |= 1 << (i & 7);
+    fs.writeFileSync(wxRxPaths(rx.h).meta, JSON.stringify({ sz: rx.sz, ps: rx.ps, bits: b.toString('base64'), name: rx.name, gen: rx.gen }));
+    rx.saveT = Date.now();
+  } catch (e) { log('WX: bitmap not saved:', e.message); }
+}
+function wxRxClose(keepFiles) {
+  const rx = S.wx.rx;
+  if (!rx) return;
+  if (rx.fd != null) { try { if (keepFiles) wxRxSaveBits(rx); fs.closeSync(rx.fd); } catch (e) {} rx.fd = null; }
+  S.wx.rx = null;
+}
+const wxMissing = (rx) => wxRanges((i) => !rx.bits[i], rx.total, 256);
+function wxRxComplete(rx) {
+  const P = wxRxPaths(rx.h);
+  try { fs.closeSync(rx.fd); } catch (e) {}
+  rx.fd = null;
+  const h = crypto.createHash('sha256').update(fs.readFileSync(P.part)).digest('hex');
+  if (h !== rx.h) {
+    // a part on disk is wrong (should not happen): start over, twice at most
+    rx.bad++;
+    log('WX: hash mismatch after ' + rx.total + ' parts (' + rx.bad + ')' + (rx.bad > 2 ? ' — giving up' : ' — starting over'));
+    try { fs.unlinkSync(P.part); fs.unlinkSync(P.meta); } catch (e) {}
+    if (rx.bad > 2) { emitEvent('wx-fail', { hash: rx.h, error: 'hash mismatch' }); S.wx.rx = null; return; }
+    rx.bits.fill(0); rx.got = 0;
+    rx.fd = fs.openSync(P.part, 'w+'); fs.ftruncateSync(rx.fd, rx.sz);
+    const p = S.peers.get(rx.from); if (p) sendToPeer(p, { t: 'wx-need', h: rx.h, miss: [[0, rx.total]] });
+    return;
+  }
+  fs.renameSync(P.part, P.sav);
+  try { fs.unlinkSync(P.meta); } catch (e) {}
+  rx.ready = true;
+  log('WX complete ' + rx.h.slice(0, 12) + ' (' + Math.round(rx.sz / 1024) + ' KB), verified');
+  const p = S.peers.get(rx.from); if (p) sendToPeer(p, { t: 'wx-done', h: rx.h });
+  emitEvent('world-ready', { hash: rx.h, name: rx.name, gen: rx.gen, size: rx.sz });
+}
+function wxIncoming(peerId, peer, obj, bin) {
+  const t = obj.t;
+  if (S.role === 'host') {
+    // only answers about a file we are sending to this peer
+    const o = S.wx.out.get(peerId);
+    if (!o || obj.h !== o.f.h) return;
+    if (t === 'wx-have' || t === 'wx-need') wxQueue(peerId, obj.miss);
+    else if (t === 'wx-done') {
+      if (o.timer) clearTimeout(o.timer);
+      S.wx.out.delete(peerId);
+      log('WX ' + peerId + ' has ' + o.f.h.slice(0, 12) + ' (' + o.sent + ' parts sent)');
+      emitEvent('wx-done', { id: peerId, hash: o.f.h });
+    }
+    return;
+  }
+  if (S.role !== 'client') return;
+  if (t === 'wx-offer') {
+    const sz = obj.sz, ps = obj.ps;
+    if (!wxHex(obj.h) || !Number.isInteger(sz) || sz <= 0 || sz > WX_MAX || !Number.isInteger(ps) || ps < 1024 || ps > 1024 * 1024) return;
+    if (S.wx.done.has(obj.h)) { sendToPeer(peer, { t: 'wx-done', h: obj.h }); return; }   // imported in this session already
+    let rx = S.wx.rx;
+    if (!rx || rx.h !== obj.h) rx = S.wx.rx = wxRxOpen(obj.h, sz, ps, String(obj.n || 'world').slice(0, 200), typeof obj.g === 'string' ? obj.g.slice(0, 64) : null);
+    rx.from = peerId; rx.lastT = Date.now();
+    if (rx.ready) { sendToPeer(peer, { t: 'wx-done', h: rx.h }); if (!rx.imported) emitEvent('world-ready', { hash: rx.h, name: rx.name, gen: rx.gen, size: rx.sz }); return; }
+    sendToPeer(peer, { t: 'wx-have', h: rx.h, miss: wxMissing(rx) });
+    emitEvent('wx-progress', { got: rx.got, total: rx.total });
+    wxWatch();
+  } else if (t === 'wx-part') {
+    const rx = S.wx.rx;
+    if (!rx || rx.ready || obj.h !== rx.h || !bin) return;
+    const i = obj.i;
+    if (!Number.isInteger(i) || i < 0 || i >= rx.total || rx.bits[i]) return;
+    if (bin.length !== Math.min(rx.ps, rx.sz - i * rx.ps)) return;
+    fs.writeSync(rx.fd, bin, 0, bin.length, i * rx.ps);
+    rx.bits[i] = 1; rx.got++; rx.lastT = Date.now();
+    if (rx.got === rx.total) { wxRxComplete(rx); return; }
+    if (rx.lastT - rx.saveT > 1000) wxRxSaveBits(rx);   // progress survives a crash or a game restart
+    if (rx.lastT - rx.progT > 500) { rx.progT = rx.lastT; emitEvent('wx-progress', { got: rx.got, total: rx.total }); }
+  }
+}
+// CLIENT: a stalled transfer asks for what is missing (the host may have lost its queue, e.g. a reconnect)
+function wxWatch() {
+  if (S.wx.watch) return;
+  S.wx.watch = setInterval(() => {
+    const rx = S.wx.rx;
+    if (!rx || rx.ready || S.role !== 'client') { clearInterval(S.wx.watch); S.wx.watch = null; return; }
+    if (Date.now() - rx.lastT < 2500) return;
+    const p = S.peers.get(rx.from);
+    if (!p) return;
+    rx.lastT = Date.now();
+    sendToPeer(p, { t: 'wx-need', h: rx.h, miss: wxMissing(rx) });
+  }, 1000);
+}
+function wxRxInfo() {
+  const rx = S.wx.rx;
+  return rx ? { hash: rx.h, got: rx.got, total: rx.total, ready: rx.ready, imported: rx.imported, name: rx.name } : null;
+}
+// our renderer came back: a verified file it never imported is announced again
+function wxRendererBack() {
+  const rx = S.wx.rx;
+  if (rx && rx.ready && !rx.imported) emitEvent('world-ready', { hash: rx.h, name: rx.name, gen: rx.gen, size: rx.sz });
+}
+function wxTake(h) {
+  const rx = S.wx.rx;
+  if (!rx || rx.h !== h || !rx.ready) return null;
+  try { return new Uint8Array(fs.readFileSync(wxRxPaths(h).sav)); } catch (e) { return null; }
+}
+function wxImported(h) {
+  const rx = S.wx.rx;
+  if (!rx || rx.h !== h) return false;
+  rx.imported = true; S.wx.done.add(h); S.wx.rx = null;
+  try { fs.unlinkSync(wxRxPaths(h).sav); } catch (e) {}
+  return true;
+}
+// Stop: senders stop, a partial download keeps its bitmap on disk for a later resume
+function wxStop() {
+  for (const o of S.wx.out.values()) if (o.timer) clearTimeout(o.timer);
+  S.wx.out.clear();
+  wxRxClose(true);
+  if (S.wx.watch) { clearInterval(S.wx.watch); S.wx.watch = null; }
+}
+
 // ---------------------------------------------------------------------------
 // Init + IPC
 // ---------------------------------------------------------------------------
@@ -745,10 +1030,15 @@ function init(opts) {
   });
   ipcMain.handle('st:stop', async () => { upnpClosePort(); stopNetworking(); return { ok: true }; });
   ipcMain.on('st:send', (ev, payload, toId) => netSend(payload, toId));
+  // SESSION: renderer attach (a new epoch) and the world transfer
+  ipcMain.handle('st:attach', async (ev) => rendererAttached(ev.sender));
+  ipcMain.handle('st:wx-offer', async (ev, bytes, meta, toId) => { try { return wxOffer(bytes, meta || {}, toId); } catch (e) { return { ok: false, error: e.message }; } });
+  ipcMain.handle('st:wx-take', async (ev, h) => wxTake(h));
+  ipcMain.handle('st:wx-imported', async (ev, h) => wxImported(h));
   ipcMain.handle('st:status', async () => ({
     role: S.role, transport: S.transport, myNick: S.myNick, myId: S.myId,
     lobbyId: S.lobby ? String(S.lobby.id) : null,
-    peers: [...S.peers.values()].map((p) => ({ id: p.id, kind: p.kind, nick: p.nick })),
+    peers: [...S.peers.values()].map((p) => ({ id: p.id, kind: p.kind, nick: p.nick, pv: p.pv, ver: p.ver, ep: p.ep, att: p.att })),
     gameFp: gameFingerprint(),
   }));
   // Autotest mode: --st-autotest=host | --st-autotest=join (two-instance tests without clicking)
