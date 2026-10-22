@@ -729,6 +729,46 @@
 			const q = ST._placeQ; ST._placeQ = null; placeFlush(q);
 		}
 	}
+	// Client paste (copied structures carry originalPos; moves are left alone). Two parts of the game's paste only run
+	// where the build succeeds, so never on the client: linking the pasted pipes (pipe module fe + X3) and remapping the
+	// copied signal wires (structures:pasted). The client sends both after its place batch and the host does them.
+	const PIPE_LINK_FIELDS = ["pipeConnectionMask", "pipeBridgeConnectionMask", "pipeBridgeAxis"];
+	function notePaste(state, structureType, x, y, m, copied) {
+		try {
+			if (!copied || !copied.originalPos) return;
+			const cd = state.session && state.session.action && state.session.action.customData;
+			if (cd && cd.mode === 3) return;                                          // Moving
+			if (!ST._paste) {
+				let links = null;
+				try { if (cd && Array.isArray(cd.signalLinks) && cd.signalLinks.length) links = JSON.parse(JSON.stringify(cd.signalLinks)); } catch (e) { swallow("paste links", e); }
+				ST._paste = { pipes: [], at: [], links };
+				queueMicrotask(flushPaste);                                             // the paste loop is synchronous
+			}
+			const o = copied.originalPos;
+			if (ST._paste.links) ST._paste.at.push({ ox: o.x, oy: o.y, x, y });
+			if (!ST._pipeApi || typeof ST._pipeApi.pastePlan !== "function" || !isPipeType(state, structureType)) return;
+			const src = copied.data || {}, d = {};
+			for (const f of PIPE_LINK_FIELDS) if (src[f] !== undefined) d[f] = src[f];
+			if (m.data) { m.data = Object.assign({}, m.data); for (const f of PIPE_LINK_FIELDS) delete m.data[f]; }
+			ST._paste.pipes.push({ x, y, ty: structureType, d, ox: o.x, oy: o.y });
+		} catch (e) { swallow("paste", e); }
+	}
+	function flushPaste() {
+		const p = ST._paste; ST._paste = null;
+		if (!p) return;
+		ST._undoSeal("paste");                                                        // one paste = one history entry
+		const out = [];
+		if (p.pipes.length) {
+			try { ST._undoPush({ type: "pipeBuild", positions: p.pipes.map((q) => ({ x: q.x, y: q.y })), previous: [], timestamp: Date.now() }); } catch (e) { swallow("paste pipe history", e); }
+			out.push({ t: "act", k: "pipePaste", l: p.pipes });
+		}
+		if (p.links && p.at.length) out.push({ t: "act", k: "sigPaste", at: p.at, links: p.links });
+		for (const m of out) {
+			if (ST._placeQ) (ST._pipeRunQ || (ST._pipeRunQ = [])).push(m);           // after the place batch, like a drag
+			else net.send(m);
+		}
+		if (out.length && lim("pasteTx", 30)) log("CLIENT paste -> host: " + p.pipes.length + " pipes to link, " + (p.links ? p.links.length : 0) + " signal links");
+	}
 	ST._sprayFlag = () => { ST._sprayCtx = 1; queueMicrotask(() => { ST._sprayCtx = 0; }); };
 	// HOST HEARTBEAT (fix G4): when the host pauses (menu), frame:update does NOT fire → the whole sync freezes
 	// without a word. setInterval is a JS timer — it works despite the sim's pause. The client gets a hb and knows what's happening.
@@ -3479,6 +3519,9 @@
 	// of the enum for the pipe. We take it from there instead of the hardcoded 23; the old path (first pipe in the world)
 	// remains as a fallback, because it only works when pipes are already on the map.
 	function isPipeType(state, t) {
+		// 0.6.0: the game's own segment test covers every pipe network (water, gas, modded)
+		const API = ST._pipeApi;
+		if (state && API && typeof API.isSegment === "function") { try { return !!API.isSegment(state, t); } catch (e) { swallow("isPipeType", e); } }
 		try {
 			// isPipe/isPipeType run in loops over all structures, so when there is no answer
 			// we retry the query at most once per second, not on every block
@@ -3633,6 +3676,7 @@
 		const d = (q && q.data) || {};
 		return {
 			x: q.x, y: q.y,
+			type: q.type,     // 0.6.0 restoreSnapshots defaults a missing type to the water pipe (gas pipes!)
 			data: {
 				pipeConnectionMask: d.pipeConnectionMask || 0,
 				pipeBridgeConnectionMask: d.pipeBridgeConnectionMask || 0,
@@ -3715,7 +3759,7 @@
 				P.restoreSnapshots = function (state, snaps) {
 					if (isClientSync() && ST.wsx.paused && !ST._applyingNet) {
 						try {
-							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, data: q.data }));
+							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, type: q.type, data: q.data }));   // type: gas pipes (0.6.0)
 							if (lista.length) { net.send({ t: "act", k: "pipeRestore", s: lista }); stampAct("placeN", lista.length); }
 							if (lim("pipeRestTx", 200, 600000)) log("CLIENT pipe undo -> host: restore " + lista.length);
 						} catch (e) { swallow("pipe undo", e); }
@@ -3855,6 +3899,8 @@
 				} catch (e) { swallow("drag probe", e); }
 			} catch (e) { swallow("pipe drag history", e); }
 			const m = { t: "act", k: "pipeRun", s: { x: start.x, y: start.y }, e: { x: end.x, y: end.y } };
+			const ty = positions && positions[0] && positions[0].structureType;   // 0.6.0: gas pipes
+			if (ty != null) m.ty = ty;
 			if (ST._placeQ) { (ST._pipeRunQ || (ST._pipeRunQ = [])).push(m); }   // there are pipes in the queue — wait for them
 			else net.send(m);                                                    // the drag itself over existing pipes
 			if (lim("pipeRunTx", 30)) log("CLIENT pipe drag -> host: (" + start.x + "," + start.y + ") -> ("
@@ -3940,7 +3986,7 @@
 	// each other could get glued together) and the closing of two-cell gaps.
 	// We don't transmit the route: cZ walks a straight line from start to end in grid steps anyway
 	// (function V in the game's code), so the host only needs two points and replays it without loss.
-	function pipeRunHost(state, poczatek, koniec) {
+	function pipeRunHost(state, poczatek, koniec, typ) {
 		// EVERY exit says why. The 0.9.250 regression survived the entire test precisely because these
 		// exits were silent: the log showed the client's send and nothing on the host's side.
 		const nie = (powod) => { if (lim("pdRunNie:" + powod, 5)) log("HOST: pipe drag skipped — " + powod); return 0; };
@@ -3960,6 +4006,13 @@
 		const naTrasie = [];
 		for (const punkt of trasa) { const q = pipeAt(state, punkt.x, punkt.y); if (q) naTrasie.push(q); }
 		if (!naTrasie.length) return nie("na trasie nie ma ani jednej rury (" + (kroki + 1) + " punktow) — paczka rur jeszcze nie doszla?");
+		// 0.6.0: the route planner takes the pipe type from the points and assumes the water pipe otherwise,
+		// which blocks gas pipe endpoints. Type from the client, else from the pipe at the start of the route.
+		if (typ == null || (typeof API.isSegment === "function" && !isPipeType(state, typ))) {
+			const q0 = pipeAt(state, poczatek.x, poczatek.y);
+			typ = q0 ? q0.type : undefined;
+		}
+		if (typ != null) for (const punkt of trasa) punkt.structureType = typ;
 		let wynik = null, role = "";
 		try {
 			API.path(state, trasa, poczatek, koniec);              // point roles according to the HOST'S WORLD
@@ -3980,6 +4033,49 @@
 		if (lim("pdRun", 200, 600000)) log("HOST: client pipe drag replayed by game — " + paczka.length
 			+ " pipes on route, change: " + (wynik && wynik.changed ? "yes" : "no") + " | role: " + role);
 		return paczka.length;
+	}
+	// Client pipe paste: the game's paste plan (fe) from the copied masks at their original positions,
+	// applied by index to the pipes now standing at the target positions (X3), as in the host's own paste.
+	function pipePasteHost(state, lista) {
+		const nie = (powod) => { if (lim("pipePasteNie:" + powod, 5)) log("HOST: pipe paste not linked — " + powod); return 0; };
+		const API = ST._pipeApi;
+		if (!API || typeof API.pastePlan !== "function" || typeof API.pasteLink !== "function") return nie("_pipeApi without pastePlan (reinstall the mod)");
+		if (!Array.isArray(lista) || !lista.length || lista.length > 20000) return nie("bad list");
+		const kopie = [], postawione = [];
+		for (const p of lista) {
+			if (!p || ![p.x, p.y, p.ox, p.oy].every(Number.isFinite) || !isPipeType(state, p.ty)) continue;
+			const d = p.d || {}, os = d.pipeBridgeAxis === "horizontal" || d.pipeBridgeAxis === "vertical" ? d.pipeBridgeAxis : undefined;
+			kopie.push({ x: p.ox, y: p.oy, type: p.ty, data: { pipeConnectionMask: d.pipeConnectionMask | 0, pipeBridgeConnectionMask: d.pipeBridgeConnectionMask | 0, pipeBridgeAxis: os } });
+			postawione.push(pipeAt(state, p.x, p.y) || undefined);
+		}
+		if (!kopie.length) return nie("no pipes in the list");
+		let zmiana = false;
+		try {
+			zmiana = !!API.pasteLink(state, API.pastePlan(kopie), postawione, 0, kopie.length);
+			if (typeof API.relink === "function") API.relink(state);
+		} catch (e) { swallow("pipe paste", e); return nie("game function threw: " + ((e && e.message) || e)); }
+		const paczka = [];
+		for (const q of postawione) if (q) paczka.push({ x: q.x | 0, y: q.y | 0, s: pipeDataSig(q) });
+		for (let i = 0; i < paczka.length; i += 400) txNote("st", 300 * 40), net.send({ t: "st", k: "pd", list: paczka.slice(i, i + 400) });
+		if (lim("pipePasteRx", 100, 600000)) log("HOST: client pipe paste linked — " + paczka.length + "/" + kopie.length + " pipes standing, change: " + (zmiana ? "yes" : "no"));
+		return paczka.length;
+	}
+	function sigPasteHost(state, msg) {
+		const SG = ST.FH.signals;
+		if (!SG || typeof SG.link !== "function" || !Array.isArray(msg.at) || !Array.isArray(msg.links)) return 0;
+		if (msg.at.length > 20000 || msg.links.length > 20000) return 0;
+		const nowe = new Map();
+		for (const p of msg.at) if (p && [p.x, p.y, p.ox, p.oy].every(Number.isFinite)) nowe.set(p.ox + "," + p.oy, { x: p.x, y: p.y });
+		const ch = [];
+		for (const l of msg.links) {
+			const a = l && l.from && nowe.get(l.from.x + "," + l.from.y), b = l && l.to && nowe.get(l.to.x + "," + l.to.y);
+			if (!a || !b) continue;
+			try { SG.link(state, a, b); if (typeof SG.set === "function") SG.set(state, a, b, !!l.on); ch.push({ action: "link", from: a, to: b }); } catch (e) { swallow("sigPaste", e); }
+		}
+		// same path as a client's own wiring ("sig"), so the change reaches everyone the same way
+		if (ch.length) { try { ST.FH.events.emit(state, "signals:userChanged", { changes: ch }); } catch (e) { swallow("sigPaste", e); } }
+		if (lim("sigPasteRx", 50, 600000)) log("HOST: client paste signal links — " + ch.length + "/" + msg.links.length);
+		return ch.length;
 	}
 	// ====================================================================
 	function hasPipeAt(state, x, y) {
@@ -4929,7 +5025,7 @@
 				// must go through _entDrop (sprite+light), because swapping the reference does NOT clean up the renderer.
 				try {
 					if (ST._entDrop && ST.FH && ST.FH.entities && ST.FH.entities.getAll) {
-						const oldList = ST.FH.entities.getAll(state) || [];
+						const oldList = (ST.FH.entities.getAll(state) || []).slice(); // copy: _entDrop splices the live list
 						let newIds = null;
 						for (const k2 in (msg.st || {})) { const v2 = msg.st[k2]; if (v2 && Array.isArray(v2.list)) { newIds = new Set(v2.list.map((c5) => c5 && c5.id)); break; } }
 						if (newIds) for (const c6 of oldList) { if (c6 && c6.id >= 0 && !newIds.has(c6.id)) { if (ST._entCollectFx) { try { ST._entCollectFx(state, c6); } catch (e2) {} } try { ST._entDrop(c6); } catch (e2) {} } }
@@ -4942,7 +5038,7 @@
 				// we clear lightIndex (light+sprite will be assigned to them by _entInit from the fast bus).
 				try {
 					const EN9 = ST.FH && ST.FH.entities;
-					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []) : [];
+					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []).slice() : []; // copy: _entDrop splices the live list
 					const oldBy9 = new Map(oldL9.map((c9) => [c9 && c9.id, c9]));
 					for (const k9 in (msg.st || {})) {
 						const v9 = msg.st[k9];
@@ -6156,6 +6252,9 @@
 				if (cs && cs.filter != null) { m.fl = JSON.parse(JSON.stringify(cs.filter)); m.flc = 1; } // flc: the filter from the copied structure (not from defaultFilter)
 				else if (state.store.options && state.store.options.defaultFilter != null) m.fl = JSON.parse(JSON.stringify(state.store.options.defaultFilter));
 			} catch (e) {}
+			// paste: pipe links and signal wires follow after the place batch (pipe masks used to travel as plain
+			// data, which left pasted pipes unlinked or one-sided)
+			notePaste(state, structureType, x, y, m, copied);
 			// ST-FIX (throughput): we do NOT send them individually. Dragging a foundation is hundreds
 			// of placements; each as a separate packet was clogging the link and the host (in the log: 300 packets in 2 s,
 			// and just as many broadcasts back). We collect them and send them as one "placeN" packet.
@@ -6489,7 +6588,15 @@
 				// client pipe drag — we replay it with the game's functions AFTER the placeN batch
 				// has placed the pipes themselves (the channel is ordered, so they're already here)
 				ST._applyingNet = true;
-				try { pipeRunHost(state, msg.s, msg.e); } finally { ST._applyingNet = false; }
+				try { pipeRunHost(state, msg.s, msg.e, msg.ty); } finally { ST._applyingNet = false; }
+			} else if (msg.k === "pipePaste") {
+				// client paste of pipes: placed bare by the placeN batch just before, linked here like the game's paste
+				ST._applyingNet = true;
+				try { pipePasteHost(state, msg.l); } finally { ST._applyingNet = false; }
+			} else if (msg.k === "sigPaste") {
+				// client paste: the copied signal wires, remapped from the original to the pasted positions (as the game's structures:pasted)
+				ST._applyingNet = true;
+				try { sigPasteHost(state, msg); } finally { ST._applyingNet = false; }
 			} else if (msg.k === "pd") {
 				// client pipe connections: we apply them locally, and our own watcher broadcasts them further
 				ST._applyingNet = true;
@@ -6652,8 +6759,9 @@
 						state.store.conservatory.tickets += Math.pow(2, types);
 					}
 					try { ST.FH.events.emit(state, "entity:collected", { typeId: msg.ty }); } catch (e) { swallow("act:" + msg.k, e); }
-					// remove the entity from the host's map (no official remove — emulated: splice from the LIVE getAll list
-					// + hide the sprite via getSprite + turn off the light). Without this the critter hung around until the 2nd collection.
+					// remove the entity from the host's map via _entDrop (full removal incl. the 0.6.0 id cache and pet overlay);
+					// fallback emulation: splice from the LIVE getAll list + hide the sprite + turn off the light.
+					// Without this the critter hung around until the 2nd collection.
 					try {
 						const EN = ST.FH.entities;
 						if (msg.eid != null && EN && EN.getAll) {
@@ -6661,9 +6769,13 @@
 							const idxE = listE.findIndex((en) => en && en.id === msg.eid);
 							if (idxE >= 0) {
 								const en = listE[idxE];
-								try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
-								try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
-								listE.splice(idxE, 1);
+								let dropped = false;
+								if (ST._entDrop) { try { ST._entDrop(en); dropped = true; } catch (e) { swallow("act:" + msg.k, e); } }
+								if (!dropped) {
+									try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
+									try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
+									const i2 = listE.indexOf(en); if (i2 >= 0) listE.splice(i2, 1);
+								}
 							}
 						}
 					} catch (e) { swallow("act:" + msg.k, e); }
@@ -8437,16 +8549,10 @@
 				const mv = ST._mvPend; ST._mvPend = null; ST._mvPendT = 0;
 				const tryb = ST._mvMode; ST._mvMode = undefined;
 				if (tryb === 2) {   // Copying — the originals STAY in place
-					try { net.send({ t: "act", k: "paste", list: mv.to, links: null }); stampAct("placeN", mv.to.length); } catch (e) { swallow("watchClientMove", e); }
-					try { for (const q of mv.to) noteLocalDirty(q.x | 0, q.y | 0); } catch (e) { swallow("watchClientMove", e); }
-					// undo history: copying is a PLACEMENT, so Ctrl+Z should only remove the copy
-					try {
-						if (ST._undoPush) {
-							ST._undoPush({ type: "build", positions: mv.to.map((q) => ({ x: q.x, y: q.y })), timestamp: Date.now(), __st: 1 });
-							ST._undoSeal("kopiowanie");
-						}
-					} catch (e) { swallow("watchClientMove", e); }
-					log("CLIENT copy -> host: " + mv.to.length + " structures (originals remain)");
+					// Every paste already went to the host piece by piece through the build hook (_place), with its
+					// history entry. Leaving copy mode is not a paste: sending the preview here duplicated the paste
+					// and its undo entry, or built an extra copy at the cursor.
+					if (lim("copyEnd", 10, 60000)) log("CLIENT copy mode ended (" + mv.to.length + " structures in clipboard)");
 					return;
 				}
 				ST._mvSentT = performance.now();
@@ -8981,7 +9087,8 @@
 							if (q3[5] && ST._drawBridge) {
 								try {
 									ctx.save(); ctx.globalAlpha = 0.75;
-									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx });
+									// segmentStructureType: 0.6.0 needs it for bridges not built yet (otherwise draws nothing)
+									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx, segmentStructureType: q3[2] });
 									ctx.restore(); drawn = true;
 								} catch (e) { ST._drawBridge = null; try { ctx.restore(); } catch (e2) {} }
 							}
