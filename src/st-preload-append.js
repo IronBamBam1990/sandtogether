@@ -6,7 +6,7 @@ contextBridge.exposeInMainWorld('sandtogetherNet', {
   invite: () => ipcRenderer.invoke('st:invite'),
   hostWs: (port) => ipcRenderer.invoke('st:host-ws', port),
   hostDirect: (port) => ipcRenderer.invoke('st:host-direct', port),
-  joinWs: (host, port) => ipcRenderer.invoke('st:join-ws', host, port),
+  joinWs: (host, port, code) => ipcRenderer.invoke('st:join-ws', host, port, code),
   stop: () => ipcRenderer.invoke('st:stop'),
   status: () => ipcRenderer.invoke('st:status'),
   send: (payload, toId) => ipcRenderer.send('st:send', payload, toId),

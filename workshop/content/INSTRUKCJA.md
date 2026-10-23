@@ -47,7 +47,7 @@ tę samą wersję.
 2. Po "World imported!": **Load Game** → wczytaj otrzymany świat.
 3. Gracie w jednym wspólnym świecie (panel pokazuje "lustro hosta").
 
-**LAN:** Host LAN / Dołącz LAN (wpisz `ip` lub `ip:port`, domyślnie 27777).
+**LAN / direct:** Host LAN albo Host (Internet — direct) pokazuje adres `ip:port/kod` z przyciskiem kopiowania. Kod zmienia się przy każdym starcie hostowania; dołączający wkleja cały adres w Dołącz po adresie.
 **Czat:** pole wiadomości w panelu, Enter wysyła.
 **Panel:** klik w nagłówek lub Ctrl+Shift+H chowa/pokazuje. **Resync** wymusza pełne odświeżenie świata.
 

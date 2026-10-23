@@ -26,6 +26,9 @@ const log = (...a) => {
 
 const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const PROTO_VER = 5;
+const MAX_HEADER = 8192;              // WS handshake bytes
+const MAX_FRAME = 32 * 1024 * 1024;   // largest legit frame is the 8 MB raw LAN world batch
+const CODE_CHARS = 'abcdefghjkmnpqrstuvwxyz23456789';
 
 // ---------------------------------------------------------------------------
 // State
@@ -76,7 +79,9 @@ function wsEncodeFrame(payload, mask) {
 // Frame stream parser; onText(str), returns the feed(chunk) function
 function wsFrameParser(sock, onText, onBinary) {
   let buf = Buffer.alloc(0);
+  let dead = false;
   return (chunk) => {
+    if (dead) return;
     buf = Buffer.concat([buf, chunk]);
     while (true) {
       if (buf.length < 2) return;
@@ -87,6 +92,13 @@ function wsFrameParser(sock, onText, onBinary) {
       let off = 2;
       if (len === 126) { if (buf.length < 4) return; len = buf.readUInt16BE(2); off = 4; }
       else if (len === 127) { if (buf.length < 10) return; len = Number(buf.readBigUInt64BE(2)); off = 10; }
+      // a forged length must not make us buffer without limit; control frames are at most 125 B (RFC 6455)
+      if (len > MAX_FRAME || (opcode >= 8 && len > 125)) {
+        log('ws: frame of ' + len + ' B (opcode ' + opcode + ') over the limit — closing');
+        dead = true; buf = Buffer.alloc(0);
+        try { sock.destroy(); } catch (e) {}
+        return;
+      }
       const maskKey = masked ? buf.subarray(off, off + 4) : null;
       if (masked) off += 4;
       if (buf.length < off + len) return;
@@ -103,9 +115,42 @@ function wsFrameParser(sock, onText, onBinary) {
   };
 }
 
-function startWsServer(port) {
+// Session code for LAN/direct hosting: joiners present it as ?k= in the upgrade request,
+// the host UI shows it as part of the join address (ip:port/code).
+function makeJoinCode() {
+  const b = crypto.randomBytes(6);
+  let s = '';
+  for (let i = 0; i < 6; i++) s += CODE_CHARS[b[i] % CODE_CHARS.length];
+  return s;
+}
+function codeMatches(given) {
+  if (typeof given !== 'string' || !S.joinCode) return false;
+  const a = Buffer.from(given.toLowerCase()), b = Buffer.from(S.joinCode);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+// 5 wrong codes per address within a minute block that address for a minute
+const authFails = new Map();
+function authBlocked(ip) {
+  const f = authFails.get(ip);
+  if (!f) return false;
+  if (Date.now() - f.t > 60000) { authFails.delete(ip); return false; }
+  return f.n >= 5;
+}
+function noteAuthFail(ip) {
+  const now = Date.now(), f = authFails.get(ip);
+  if (authFails.size > 1000) for (const [k, v] of authFails) if (now - v.t > 60000) authFails.delete(k);
+  if (!f || now - f.t > 60000) authFails.set(ip, { n: 1, t: now });
+  else f.n++;
+}
+const joinInfo = () => ({ port: S.wsPort, code: S.joinCode, lanIp: localIPv4(), lanIps: localIPv4s() });
+
+function startWsServer(port, opts) {
   stopNetworking('restart');
   S.role = 'host'; S.transport = 'ws';
+  S.wsPort = port;
+  S.joinCode = makeJoinCode();
+  S.allowNoCode = !!(opts && opts.autotest);   // --st-autotest joins without a code
+  log('ws: session code set (shown in the host panel)');
   S.wsServer = net.createServer((sock) => {
     // Nagle holds small writes until the ACK of the previous segment — and we write each
     // message with a separate write(), including player positions 30x/s. At an RTT of 80 ms this lets through ~12 small packets/s, and player
@@ -114,14 +159,34 @@ function startWsServer(port) {
     let upgraded = false;
     let headerBuf = Buffer.alloc(0);
     const peerId = 'ws:' + sock.remoteAddress + ':' + sock.remotePort;
+    const ip = String(sock.remoteAddress);
+    if (authBlocked(ip)) { try { sock.destroy(); } catch (e) {} return; }
+    const hsTimer = setTimeout(() => { if (!upgraded) { try { sock.destroy(); } catch (e) {} } }, 10000);
+    let rejected = false;
+    const reject = (status) => { rejected = true; headerBuf = null; try { sock.end('HTTP/1.1 ' + status + '\r\n\r\n'); } catch (e) {} };
     sock.on('data', (chunk) => {
-      if (upgraded) return;
+      if (upgraded || rejected) return;
       headerBuf = Buffer.concat([headerBuf, chunk]);
       const idx = headerBuf.indexOf('\r\n\r\n');
-      if (idx === -1) return;
+      if (idx === -1 || idx > MAX_HEADER) {
+        if (headerBuf.length > MAX_HEADER) reject('431 Request Header Fields Too Large');
+        return;
+      }
       const head = headerBuf.toString('utf8', 0, idx);
       const m = /Sec-WebSocket-Key:\s*(.+)\r\n/i.exec(head + '\r\n');
-      if (!m || !/upgrade/i.test(head)) { sock.end('HTTP/1.1 400 Bad Request\r\n\r\n'); return; }
+      if (!m || !/upgrade/i.test(head)) { reject('400 Bad Request'); return; }
+      // browsers always send Origin, our client never does: no web page gets to talk to the host
+      if (/\r\nOrigin\s*:/i.test(head)) { log('ws: rejected ' + ip + ' (browser Origin header)'); reject('403 Forbidden'); return; }
+      const target = (/^GET\s+(\S+)/i.exec(head) || [])[1] || '';
+      const k = (/[?&]k=([^&#]*)/.exec(target) || [])[1];
+      let code = null; try { code = k !== undefined ? decodeURIComponent(k) : null; } catch (e) {}
+      if (!codeMatches(code) && !S.allowNoCode) {
+        noteAuthFail(ip);
+        log('ws: rejected ' + ip + ' (' + (code ? 'wrong' : 'missing') + ' session code)');
+        reject('403 Forbidden');
+        return;
+      }
+      clearTimeout(hsTimer);
       const accept = crypto.createHash('sha1').update(m[1].trim() + WS_GUID).digest('base64');
       sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ' + accept + '\r\n\r\n');
       upgraded = true;
@@ -136,21 +201,22 @@ function startWsServer(port) {
       // mver, and after 5s the host saw a false "OLD mod" alarm (Steam does this in refreshLobbyMembers)
       sendToPeer(peer, { t: 'hello', nick: S.myNick, ver: PROTO_VER });
     });
-    sock.on('close', () => { if (S.peers.delete(peerId)) emitEvent('peer-disconnected', { id: peerId }); });
+    sock.on('close', () => { clearTimeout(hsTimer); if (S.peers.delete(peerId)) emitEvent('peer-disconnected', { id: peerId }); });
     sock.on('error', () => {});
   });
   S.wsServer.on('error', (e) => emitEvent('error', { where: 'ws-server', message: e.message }));
   S.wsServer.listen(port, () => emitEvent('hosting', { transport: 'ws', port }));
 }
 
-function joinWs(host, port, _retry) {
+function joinWs(host, port, code, _retry) {
   stopNetworking('restart');
   S.role = 'client'; S.transport = 'ws';
   const retryCount = _retry || 0;
   const key = crypto.randomBytes(16).toString('base64');
   const sock = net.connect(port, host, () => {
     try { sock.setNoDelay(true); } catch (e) {}   // patrz komentarz w startWsServer
-    sock.write('GET / HTTP/1.1\r\nHost: ' + host + ':' + port + '\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ' + key + '\r\nSec-WebSocket-Version: 13\r\n\r\n');
+    const target = '/' + (code ? '?k=' + encodeURIComponent(code) : '');
+    sock.write('GET ' + target + ' HTTP/1.1\r\nHost: ' + host + ':' + port + '\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ' + key + '\r\nSec-WebSocket-Version: 13\r\n\r\n');
   });
   S.wsClient = sock;
   let upgraded = false;
@@ -159,8 +225,15 @@ function joinWs(host, port, _retry) {
     if (upgraded) return;
     headerBuf = Buffer.concat([headerBuf, chunk]);
     const idx = headerBuf.indexOf('\r\n\r\n');
-    if (idx === -1) return;
-    if (!/ 101 /.test(headerBuf.toString('utf8', 0, idx))) { emitEvent('error', { where: 'ws-join', message: 'handshake failed' }); sock.end(); return; }
+    if (idx === -1) { if (headerBuf.length > MAX_HEADER) sock.destroy(); return; }
+    const status = headerBuf.toString('utf8', 0, idx);
+    if (/^HTTP\/1\.1 403 /.test(status)) {
+      // wrong or missing session code: retrying cannot help
+      stopNetworking();
+      emitEvent('error', { where: 'ws-join', message: 'host refused the session code — paste the full address including /code' });
+      return;
+    }
+    if (!/ 101 /.test(status)) { emitEvent('error', { where: 'ws-join', message: 'handshake failed' }); sock.end(); return; }
     upgraded = true;
     S.peers.set('host', { id: 'host', kind: 'ws', sock, nick: 'Host' });
     const feed = wsFrameParser(sock, (text) => handleIncoming('host', text), (bin) => handleIncomingBin('host', bin));
@@ -171,8 +244,8 @@ function joinWs(host, port, _retry) {
     netSend({ t: 'hello', nick: S.myNick, ver: PROTO_VER });
   });
   sock.on('close', () => {
-    S.peers.delete('host');
-    emitEvent('peer-disconnected', { id: 'host' });
+    // only a host we were connected to can "leave"; a refused or failed attempt already reported its error
+    if (S.peers.delete('host')) emitEvent('peer-disconnected', { id: 'host' });
     // AUTO-RECONNECT (LAN): we revive a dropped connection every 3s. The attempt counter is carried via the _retry parameter
     // (it survives across sockets!). A successful handshake = stable connection → a future drop again gets 5 attempts.
     // A user Stop / another connection in the meantime interrupts it (role/transport/peers check).
@@ -183,7 +256,7 @@ function joinWs(host, port, _retry) {
         if (S.role !== 'client' || S.transport !== 'ws' || S.peers.size > 0) return;
         log('WS reconnect attempt', next, '/5 →', host + ':' + port);
         emitEvent('reconnecting', { transport: 'ws', attempt: next });
-        try { joinWs(host, port, next); } catch (e) {}
+        try { joinWs(host, port, code, next); } catch (e) {}
       }, 3000);
     }
   });
@@ -204,11 +277,12 @@ function ensureP2pPoll() {
         const pkt = n.readP2PPacket(size);
         if (!pkt) break;
         const sid = String(pkt.steamId && (pkt.steamId.steamId64 !== undefined ? pkt.steamId.steamId64 : pkt.steamId));
+        if (!steamPeerAdmit(sid)) continue;
         // 0.9.263: a leading 0x00 marks a binary frame (see sendToPeer). Text is always JSON,
         // so it can never start with that byte.
         if (pkt.data.length > 1 && pkt.data[0] === 0x00) { handleIncomingBin('steam:' + sid, pkt.data.subarray(1)); continue; }
         const text = pkt.data.toString('utf8');
-        handleIncoming('steam:' + sid, text, sid);
+        handleIncoming('steam:' + sid, text);
       }
     } catch (e) { /* don't kill the loop */ }
   }, 15);
@@ -223,6 +297,31 @@ function pickField(o, ...keys) {
   return undefined;
 }
 
+// Steam trust boundary: the host talks only to members of its lobby, a client only to its host.
+function steamIsMember(sid) {
+  try { for (const m of S.lobby.getMembers()) if (String(m.steamId64 !== undefined ? m.steamId64 : m) === sid) return true; } catch (e) {}
+  return false;
+}
+function steamAllowed(sid) {
+  if (S.peers.has('steam:' + sid)) return true;
+  return S.role === 'host' && !!S.lobby && steamIsMember(sid);
+}
+const steamRejectLog = new Map();
+function noteSteamReject(sid, what) {
+  const now = Date.now();
+  if (now - (steamRejectLog.get(sid) || 0) < 60000) return;
+  steamRejectLog.set(sid, now);
+  log('steam: ignored ' + what + ' from ' + sid + ' (not in our lobby / not our host)');
+}
+// a member's first packet can beat LobbyChatUpdate: register it here
+function steamPeerAdmit(sid) {
+  if (S.peers.has('steam:' + sid)) return true;
+  if (!steamAllowed(sid)) { noteSteamReject(sid, 'packet'); return false; }
+  S.peers.set('steam:' + sid, { id: 'steam:' + sid, kind: 'steam', steamId64: sid, nick: '?' });
+  emitEvent('peer-connected', { id: 'steam:' + sid });
+  return true;
+}
+
 function registerSteamCallbacks() {
   const cb = S.steam.callback;
   const CB = cb.SteamCallback;
@@ -231,6 +330,8 @@ function registerSteamCallbacks() {
       const sid = pickField(data, 'remote', 'steam_id_remote', 'remoteSteamId', 'remote_steam_id');
       const sidVal = sid !== undefined ? sid : data;
       const sid64 = typeof sidVal === 'object' && sidVal !== null && sidVal.steamId64 !== undefined ? sidVal.steamId64 : sidVal;
+      // ignoring is safe: Steam repeats the request, and the host's hello to a new member opens the session anyway
+      if (!steamAllowed(String(sid64))) { noteSteamReject(String(sid64), 'P2P session request'); return; }
       S.steam.networking.acceptP2PSession(BigInt(sid64));
       log('P2P session accepted:', String(sid64));
     } catch (e) { log('P2PSessionRequest error:', e.message, JSON.stringify(data)); }
@@ -345,16 +446,14 @@ async function joinSteamLobby(lobbyIdStr) {
 // ---------------------------------------------------------------------------
 // Shared routing
 // ---------------------------------------------------------------------------
-function handleIncoming(peerId, text, steamSid) {
+function handleIncoming(peerId, text) {
   let obj;
   try { obj = JSON.parse(text); } catch (e) { return; }
-  // auto-registration of a steam peer that isn't in the map yet (e.g. hello before LobbyChatUpdate)
-  if (steamSid && !S.peers.has(peerId)) {
-    S.peers.set(peerId, { id: peerId, kind: 'steam', steamId64: steamSid, nick: '?' });
-    emitEvent('peer-connected', { id: peerId });
-  }
+  if (!obj || typeof obj !== 'object') return;
   const peer = S.peers.get(peerId);
-  if (peer && obj.t === 'hello') {
+  if (!peer) return;   // Steam senders are admitted in the poll loop, WS peers at the upgrade
+  if (obj.t === 'relay' && S.role !== 'client') return;   // only the host relays
+  if (obj.t === 'hello') {
     peer.nick = obj.nick || '?';
     emitEvent('peer-hello', { id: peerId, nick: peer.nick });
     if (obj.ver != null && obj.ver !== PROTO_VER) emitEvent('version-mismatch', { id: peerId, theirs: obj.ver, ours: PROTO_VER });
@@ -371,7 +470,7 @@ function handleIncoming(peerId, text, steamSid) {
 // as a regular message, with the data as a Uint8Array alongside it — without any text conversion along the way.
 function handleIncomingBin(peerId, buf) {
   try {
-    if (!buf || buf.length < 2) return;
+    if (!buf || buf.length < 2 || !S.peers.has(peerId)) return;
     const hl = buf.readUInt16BE(0);
     if (buf.length < 2 + hl) return;
     const obj = JSON.parse(buf.subarray(2, 2 + hl).toString("utf8"));
@@ -426,8 +525,11 @@ function stopNetworking(reason) {
   // clear "Join Game" from Steam so it doesn't remain stale
   if (S.steam) { try { S.steam.localplayer.setRichPresence('connect', ''); } catch (e) {} }
   if (S.p2pPoll) { clearInterval(S.p2pPoll); S.p2pPoll = null; }
+  // server.close() keeps accepted sockets open: drop them too, or they linger as unknown senders
+  for (const p of S.peers.values()) if (p.kind === 'ws' && p.sock) { try { p.sock.destroy(); } catch (e) {} }
   S.peers.clear();
   S.role = 'idle'; S.transport = null;
+  S.joinCode = null; S.allowNoCode = false; S.direct = null;
   if (reason !== 'restart') emitEvent('stopped', {});
 }
 
@@ -441,6 +543,26 @@ function safeJson(o) { try { return JSON.parse(JSON.stringify(o, (k, v) => typeo
 // Workshop is NOT rolled back (numeric comparison, updates only upwards).
 // ============================================================================
 const WORKSHOP_ITEM = '3784750764';
+// Release signing (tools/sign-release.js). Empty = off. Once set, an update installs only if
+// src/release.json is signed by this Ed25519 key (base64 SPKI DER) and lists the sha256 of every file.
+const RELEASE_PUBKEY = '';
+const RELEASE_FILES = ['sandtogether.js', 'st-main.js', 'st-preload-append.js', 'patches.json'];
+function verifyRelease(srcDir, files, ver) {
+  try {
+    const manifest = fs.readFileSync(path.join(srcDir, 'release.json'));
+    const sig = Buffer.from(fs.readFileSync(path.join(srcDir, 'release.sig'), 'utf8').trim(), 'base64');
+    const key = crypto.createPublicKey({ key: Buffer.from(RELEASE_PUBKEY, 'base64'), format: 'der', type: 'spki' });
+    if (!crypto.verify(null, manifest, key, sig)) return 'bad signature';
+    const m = JSON.parse(manifest.toString('utf8'));
+    const mv = /^(\d+)\.(\d+)\.(\d+)/.exec(m && typeof m.ver === 'string' ? m.ver : '');
+    if (!mv || mv.slice(1, 4).map(Number).join('.') !== ver.join('.')) return 'manifest is for another version';
+    for (const f of RELEASE_FILES) {
+      if (!files[f]) return 'missing ' + f;
+      if (!m.files || m.files[f] !== crypto.createHash('sha256').update(files[f]).digest('hex')) return 'hash mismatch: ' + f;
+    }
+    return null;
+  } catch (e) { return 'no valid manifest (' + e.message + ')'; }
+}
 function parseVer(file) {
   try {
     const m = /const VER = "(\d+)\.(\d+)\.(\d+)/.exec(fs.readFileSync(file, 'utf8').slice(0, 4000));
@@ -483,6 +605,7 @@ function applyBundlePatches(bundlePath, patches) {
 // SSDP over UDP (router discovery) + SOAP over HTTP (port mapping).
 // ============================================================================
 const dgram = require("dgram");
+const UPNP_LEASE = 3600; // s
 const http = require("http");
 const urlMod = require("url");
 
@@ -497,6 +620,18 @@ function localIPv4() {
   // preferuj adresy prywatne (192.168/10./172.16-31)
   const priv = cands.filter((ip) => /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip));
   return priv[0] || cands[0] || null;
+}
+// every address a joiner might use (LAN, Tailscale/VPN, ...), private ones first; host-only virtual adapters skipped
+function localIPv4s() {
+  const ifs = os.networkInterfaces();
+  const all = [];
+  for (const name of Object.keys(ifs)) for (const a of ifs[name] || []) {
+    if ((a.family !== "IPv4" && a.family !== 4) || a.internal || /^169\.254\./.test(a.address)) continue;
+    all.push({ ip: a.address, name: String(name).slice(0, 24), virt: /^(vEthernet|VirtualBox|VMware)|docker|^br-|virbr|^veth|wsl/i.test(name) });
+  }
+  const real = all.filter((a) => !a.virt);
+  const rank = (ip) => /^(192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) ? 0 : /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip) ? 1 : 2;
+  return (real.length ? real : all).sort((a, b) => rank(a.ip) - rank(b.ip)).map((a) => ({ ip: a.ip, name: a.name }));
 }
 
 // 1) SSDP: znajdz bramke internetowa (router) w sieci lokalnej
@@ -588,13 +723,28 @@ async function upnpOpenPort(port) {
     if (!svc) { out.error = "brak uslugi WANIPConnection w routerze"; return out; }
     const lan = localIPv4();
     if (!lan) { out.error = "nie znam wlasnego adresu LAN"; return out; }
-    const body = "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + port + "</NewExternalPort>" +
+    const body = (lease) => "<NewRemoteHost></NewRemoteHost><NewExternalPort>" + port + "</NewExternalPort>" +
       "<NewProtocol>TCP</NewProtocol><NewInternalPort>" + port + "</NewInternalPort>" +
       "<NewInternalClient>" + lan + "</NewInternalClient><NewEnabled>1</NewEnabled>" +
-      "<NewPortMappingDescription>SandTogether</NewPortMappingDescription><NewLeaseDuration>0</NewLeaseDuration>";
-    const add = await soap(svc.controlUrl, svc.serviceType, "AddPortMapping", body, 5000);
+      "<NewPortMappingDescription>SandTogether</NewPortMappingDescription><NewLeaseDuration>" + lease + "</NewLeaseDuration>";
+    // finite lease, renewed while hosting: after a crash the router closes the port by itself
+    let lease = UPNP_LEASE;
+    let add = await soap(svc.controlUrl, svc.serviceType, "AddPortMapping", body(lease), 5000);
+    if (add && add.status === 500 && /<errorCode>\s*725\s*</.test(add.body || "")) {   // OnlyPermanentLeasesSupported
+      lease = 0;
+      add = await soap(svc.controlUrl, svc.serviceType, "AddPortMapping", body(0), 5000);
+    }
     if (!add || add.status !== 200) { out.error = "router odmowil mapowania portu" + (add ? " (HTTP " + add.status + ")" : ""); }
-    else { out.upnp = true; S.upnp = { ctrl: svc.controlUrl, type: svc.serviceType, port: port }; }
+    else {
+      out.upnp = true;
+      if (S.upnpRenew) clearInterval(S.upnpRenew);
+      S.upnp = { ctrl: svc.controlUrl, type: svc.serviceType, port: port };
+      S.upnpRenew = lease ? setInterval(() => {
+        if (!S.upnp) return;
+        if (!S.wsServer) { upnpClosePort(); return; }   // no longer hosting direct
+        soap(svc.controlUrl, svc.serviceType, "AddPortMapping", body(lease), 5000).catch(() => {});
+      }, (lease / 3) * 1000) : null;
+    }
     const parseIp = (body) => { const mm = /<(?:[A-Za-z0-9]+:)?NewExternalIPAddress>\s*([^<\s]*)\s*<\/(?:[A-Za-z0-9]+:)?NewExternalIPAddress>/i.exec(body || ""); return mm && mm[1] ? mm[1].trim() : null; };
     for (let attempt = 0; attempt < 2 && !out.publicIp; attempt++) {
       if (attempt) await new Promise((r2) => setTimeout(r2, 1500));
@@ -622,6 +772,7 @@ function publicIpFallback() {
   });
 }
 async function upnpClosePort() {
+  if (S.upnpRenew) { clearInterval(S.upnpRenew); S.upnpRenew = null; }
   const u = S.upnp; if (!u) return;
   S.upnp = null;
   try {
@@ -650,15 +801,22 @@ function autoUpdateFromWorkshop() {
     if (!wv || !lv) return;
     const cmp = (wv[0] - lv[0]) || (wv[1] - lv[1]) || (wv[2] - lv[2]);
     if (cmp <= 0) return; // local >= Workshop → nothing to do (among others, the mod author)
+    // read once, verify, then install exactly these bytes
+    const files = {};
+    for (const f of RELEASE_FILES) { try { files[f] = fs.readFileSync(path.join(ws, 'src', f)); } catch (e) {} }
+    if (RELEASE_PUBKEY) {
+      const bad = verifyRelease(path.join(ws, 'src'), files, wv);
+      if (bad) { log('AUTO-UPDATE: Workshop ' + wv.join('.') + ' REFUSED — release signature check failed: ' + bad); return; }
+    }
     log('AUTO-UPDATE: Workshop ma ' + wv.join('.') + ', locally ' + lv.join('.') + ' — updating...');
-    fs.copyFileSync(wsMod, localMod);
-    try { fs.copyFileSync(path.join(ws, 'src', 'st-main.js'), path.join(appDir, 'st-main.js')); } catch (e) {}
+    fs.writeFileSync(localMod, files['sandtogether.js']);
+    try { if (files['st-main.js']) fs.writeFileSync(path.join(appDir, 'st-main.js'), files['st-main.js']); } catch (e) {}
     try {
       const pl = path.join(appDir, 'preload.js');
       let ps = fs.readFileSync(pl, 'utf8');
       // 0.9.142: we REPLACE the IPC bridge between markers (like patch.js). Just checking "sandtogetherNet exists" left
       // the old bridge without hostDirect → "net.hostDirect is not a function" for players with an install from before 0.9.79.
-      const fresh = fs.readFileSync(path.join(ws, 'src', 'st-preload-append.js'), 'utf8');
+      const fresh = files['st-preload-append.js'].toString('utf8');
       const B0 = '// --- SandTogether by Kamil Padula: network bridge (appended by patch.js) ---', B1 = '// --- /SandTogether ---';
       const i0 = ps.indexOf(B0), i1 = ps.indexOf(B1);
       const want = fresh.slice(fresh.indexOf(B0)).trim();
@@ -667,7 +825,7 @@ function autoUpdateFromWorkshop() {
       } else if (ps.indexOf('sandtogetherNet') < 0) { fs.writeFileSync(pl, ps + '\n' + fresh); log('AUTO-UPDATE: preload.js — mostek IPC dodany'); }
       else log('AUTO-UPDATE: preload.js has bridge without markers — run patch.js manually');
     } catch (e) {}
-    const patches = JSON.parse(fs.readFileSync(path.join(ws, 'src', 'patches.json'), 'utf8'));
+    const patches = JSON.parse(files['patches.json'].toString('utf8'));
     const res = applyBundlePatches(path.join(appDir, 'dist', 'js', 'bundle.js'), patches);
     log('AUTO-UPDATE: files copied, bundle patches: +' + res.appliedN + (res.criticalFail ? ' (WARNING: critical anchor mismatch — game build newer than mod!)' : ''));
     // restart, so the new files (bundle/renderer/main) actually get loaded
@@ -732,17 +890,29 @@ function init(opts) {
   ipcMain.handle('st:host-steam', async () => { try { return { ok: true, ...(await hostSteam()) }; } catch (e) { return { ok: false, error: e.message }; } });
   ipcMain.handle('st:join-steam', async (ev, lobbyId) => { try { return { ok: true, ...(await joinSteamLobby(lobbyId)) }; } catch (e) { return { ok: false, error: e.message }; } });
   ipcMain.handle('st:invite', async () => { try { if (!S.lobby) return { ok: false, error: 'brak lobby' }; S.lobby.openInviteDialog(); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; } });
-  ipcMain.handle('st:host-ws', async (ev, port) => { try { startWsServer(port || 27777); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; } });
-  ipcMain.handle('st:join-ws', async (ev, host, port) => { try { joinWs(host, port || 27777); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; } });
+  ipcMain.handle('st:host-ws', async (ev, port) => { try { startWsServer(port || 27777); return { ok: true, ...joinInfo() }; } catch (e) { return { ok: false, error: e.message }; } });
+  ipcMain.handle('st:join-ws', async (ev, host, port, code) => { try { joinWs(host, port || 27777, typeof code === 'string' ? code : null); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; } });
   ipcMain.handle('st:host-direct', async (ev, port) => {
     try {
       const p = port || 27777;
       startWsServer(p);
+      const srv = S.wsServer;
       const r = await upnpOpenPort(p);
       log("HOST DIRECT: port " + p + (r.upnp ? " opened via UPnP" : " WITHOUT UPnP (" + r.error + ")") + ", publiczny IP: " + (r.publicIp || "?"));
-      return { ok: true, upnp: r.upnp, publicIp: r.publicIp, port: p, error: r.error };
+      if (S.wsServer === srv) S.direct = { publicIp: r.publicIp || null };
+      return { ok: true, upnp: r.upnp, publicIp: r.publicIp, port: p, error: r.error, code: S.joinCode, lanIp: localIPv4() };
     } catch (e) { return { ok: false, error: e.message }; }
   });
+  // remove the router mapping before the game exits (the lease covers crashes)
+  let upnpQuitDone = false;
+  try {
+    app.on('before-quit', (e) => {
+      if (!S.upnp || upnpQuitDone) return;
+      upnpQuitDone = true;
+      e.preventDefault();
+      Promise.race([upnpClosePort(), new Promise((r) => setTimeout(r, 1500))]).then(() => app.quit());
+    });
+  } catch (e) {}
   ipcMain.handle('st:stop', async () => { upnpClosePort(); stopNetworking(); return { ok: true }; });
   ipcMain.on('st:send', (ev, payload, toId) => netSend(payload, toId));
   ipcMain.handle('st:status', async () => ({
@@ -750,6 +920,8 @@ function init(opts) {
     lobbyId: S.lobby ? String(S.lobby.id) : null,
     peers: [...S.peers.values()].map((p) => ({ id: p.id, kind: p.kind, nick: p.nick })),
     gameFp: gameFingerprint(),
+    // lets a reloaded host renderer show the join address again
+    join: S.role === 'host' && S.transport === 'ws' && S.joinCode ? { ...joinInfo(), direct: !!S.direct, publicIp: S.direct ? S.direct.publicIp : null } : null,
   }));
   // Autotest mode: --st-autotest=host | --st-autotest=join (two-instance tests without clicking)
   const autotest = process.argv.find((a) => a.startsWith('--st-autotest='));
@@ -758,8 +930,8 @@ function init(opts) {
     log('AUTOTEST:', mode, '(starting in 10s)');
     setTimeout(() => {
       try {
-        if (mode === 'host') startWsServer(27777);
-        else if (mode === 'join') joinWs('127.0.0.1', 27777);
+        if (mode === 'host') startWsServer(27777, { autotest: true });
+        else if (mode === 'join') joinWs('127.0.0.1', 27777, null);
       } catch (e) { log('autotest error:', e.message); }
     }, 10000);
   }

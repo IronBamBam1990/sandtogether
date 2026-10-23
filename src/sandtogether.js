@@ -77,7 +77,7 @@
 			lb_title: "MULTIPLAYER", lb_sub: "SandTogether co-op — up to 4 players",
 			lb_host_steam_d: "Play over the internet — invite friends from your Steam friend list",
 			lb_host_lan_d: "Local network or VPN (Tailscale, Radmin...)",
-			lb_join_lan_d: "Paste the address your friend gave you — works for an internet host, a LAN or a VPN",
+			lb_join_lan_d: "Paste the address your friend gave you (ip:port/code) — works for an internet host, a LAN or a VPN",
 			lb_join_id_d: "Join with a Lobby ID copied to the clipboard",
 			lb_close: "✕", lb_disconnect: "Disconnect", lb_players: "Players", lb_you: "you",
 			lb_id: "Lobby ID", lb_copy: "copy", lb_copied: "copied!", lb_invite: "Invite a friend",
@@ -91,7 +91,7 @@
 			direct_no_upnp: "Port not opened automatically — forward TCP {0} on your router, then share the address",
 			bridge_old: "Mod bridge outdated — restart the game (auto-update) or re-run the installer / patch.js",
 			direct_addr: "Your address", direct_show: "show", direct_hide: "hide", direct_copied: "Address copied!",
-			direct_hidden_hint: "hidden on purpose — safe to stream",
+			direct_hidden_hint: "hidden on purpose — safe to stream", lan_addr_ph: "ip:port/code",
 			lb_steps: "1) Invite friends   2) Hit PLAY — they will join your map automatically",
 			badge_offline: "○ OFFLINE — not connected",
 			badge_host: (tr) => "● HOSTING (" + tr + ")",
@@ -143,7 +143,7 @@
 			lb_title: "MULTIPLAYER", lb_sub: "SandTogether co-op — do 4 graczy",
 			lb_host_steam_d: "Graj przez internet — zaproś znajomych z listy Steam",
 			lb_host_lan_d: "Sieć lokalna albo VPN (Tailscale, Radmin...)",
-			lb_join_lan_d: "Wklej adres, który dostałeś od kolegi — działa dla hosta z internetu, LAN i VPN",
+			lb_join_lan_d: "Wklej adres, który dostałeś od kolegi (ip:port/kod) — działa dla hosta z internetu, LAN i VPN",
 			lb_join_id_d: "Dołącz po Lobby ID skopiowanym do schowka",
 			lb_close: "✕", lb_disconnect: "Rozłącz", lb_players: "Gracze", lb_you: "ty",
 			lb_id: "Lobby ID", lb_copy: "kopiuj", lb_copied: "skopiowane!", lb_invite: "Zaproś znajomego",
@@ -157,7 +157,7 @@
 			direct_no_upnp: "Port nie otworzył się sam — przekieruj TCP {0} na routerze, potem podaj adres",
 			bridge_old: "Mostek moda nieaktualny — zrestartuj grę (auto-update) albo uruchom ponownie instalator / patch.js",
 			direct_addr: "Twój adres", direct_show: "pokaż", direct_hide: "ukryj", direct_copied: "Adres skopiowany!",
-			direct_hidden_hint: "celowo ukryty — bezpieczne na streamie",
+			direct_hidden_hint: "celowo ukryty — bezpieczne na streamie", lan_addr_ph: "ip:port/kod",
 			lb_steps: "1) Zaproś znajomych   2) Wciśnij GRAJ — dołączą na Twoją mapę automatycznie",
 			badge_offline: "○ OFFLINE — nie połączono",
 			badge_host: (tr) => "● HOSTUJESZ (" + tr + ")",
@@ -209,7 +209,7 @@
 			lb_title: "多人游戏", lb_sub: "SandTogether 合作模式——最多4名玩家",
 			lb_host_steam_d: "通过互联网游玩——从Steam好友列表邀请朋友",
 			lb_host_lan_d: "局域网或VPN(Tailscale、Radmin等)",
-			lb_join_lan_d: "粘贴好友给你的地址 — 互联网房主、局域网和 VPN 均可",
+			lb_join_lan_d: "粘贴好友给你的地址 (ip:port/code) — 互联网房主、局域网和 VPN 均可",
 			lb_join_id_d: "使用复制到剪贴板的房间ID加入",
 			lb_close: "✕", lb_disconnect: "断开连接", lb_players: "玩家", lb_you: "你",
 			lb_id: "房间ID", lb_copy: "复制", lb_copied: "已复制!", lb_invite: "邀请朋友",
@@ -223,7 +223,7 @@
 			direct_no_upnp: "端口未自动开放 — 请在路由器上转发 TCP {0},然后分享地址",
 			bridge_old: "模组桥接已过期 — 请重启游戏(自动更新)或重新运行安装程序 / patch.js",
 			direct_addr: "你的地址", direct_show: "显示", direct_hide: "隐藏", direct_copied: "地址已复制!",
-			direct_hidden_hint: "已刻意隐藏 — 直播安全",
+			direct_hidden_hint: "已刻意隐藏 — 直播安全", lan_addr_ph: "ip:端口/代码",
 			lb_steps: "1) 邀请朋友   2) 点击开始游戏——他们会自动加入你的地图",
 			badge_offline: "○ 离线——未连接",
 			badge_host: (tr) => "● 正在创建房间(" + tr + ")",
@@ -939,6 +939,23 @@
 		} catch (e) {}
 	};
 
+	// LAN/direct hosting: the join address carries the host's session code, "ip:port/code"
+	function rememberJoin(r) {
+		if (!r) return;
+		ST._joinCode = r.code || null; ST._lanAddr = r.lanIp || null; ST._directPort = r.port || 27777;
+		ST._lanAddrs = Array.isArray(r.lanIps) && r.lanIps.length ? r.lanIps : (r.lanIp ? [{ ip: r.lanIp }] : []);
+	}
+	const joinAddr = (ip) => (ip || "?") + ":" + (ST._directPort || 27777) + (ST._joinCode ? "/" + ST._joinCode : "");
+	// all of this PC's join addresses (LAN, Tailscale, ...) for the status line
+	const lanAddrsText = () => (ST._lanAddrs && ST._lanAddrs.length ? ST._lanAddrs.map((a) => joinAddr(a.ip)).join(" | ") : joinAddr(ST._lanAddr));
+	// "ip", "ip:port" or "ip:port/code"
+	function splitJoinAddr(text) {
+		let h = String(text || "").trim(), port = null, code = null;
+		const sl = h.indexOf("/"); if (sl >= 0) { code = h.slice(sl + 1).trim() || null; h = h.slice(0, sl); }
+		const c = h.indexOf(":"); if (c >= 0) { port = h.slice(c + 1).trim() || null; h = h.slice(0, c); }
+		return { h: h.trim(), port, code };
+	}
+
 	const isClientSync = () => ST.net.role === "client" && ST.state;
 	const isHostSync = () => ST.net.role === "host" && ST.state && ST.peers.size > 0;
 
@@ -947,7 +964,8 @@
 			log("net event:", ev.kind, JSON.stringify(ev).slice(0, 150));
 			if (ev.kind === "hosting") {
 				ST.net.role = "host"; ST.net.transport = ev.transport;
-				setStatus(ev.transport === "steam" ? t("hosting_steam") : (ST._directMode ? t("direct_ready") : t("hosting_lan", ev.port)));
+				if (ev.transport === "steam") { ST._joinCode = null; ST._lanAddr = null; ST._directAddr = null; }
+				setStatus(ev.transport === "steam" ? t("hosting_steam") : (ST._directMode ? t("direct_ready") : t("hosting_lan", ev.port) + (ST._joinCode ? " — " + lanAddrsText() : "")));
 				ST.net.lobbyId = ev.lobbyId || null; ST._autoSentWid = null; // reset auto-send; remember lobbyId
 				resetWorldQueue(); // new host session starts clean, peer-connected re-queues the full world
 					updateLobbyIdDisplay();
@@ -961,7 +979,7 @@
 				// Transport label on the client: public address = "Internet", private/VPN = "LAN". Previously it always
 				// came out as "LAN" and players thought the mod was switching them somewhere (Shadow City Empire, 24.08.2026).
 				ST._directMode = ev.transport === "ws" && !isLocalAddr(ev.host);
-				ST._directAddr = null; autoLoadClear(); // new client session = fresh auto-load guard (0.9.72)
+				ST._directAddr = null; ST._lanAddr = null; ST._joinCode = null; autoLoadClear(); // new client session = fresh auto-load guard (0.9.72)
 				ST._gotHostWorld = false; // CRITICAL: world trust does NOT carry over between sessions (different host = different world; without a reset the mirror would overwrite the wrong world)
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = []; if (ST._projSent) ST._projSent.clear(); // state from the previous session = different coordinates/world
 				// own nick (localStorage) broadcast via the existing hello protocol — no changes to the IPC bridge
@@ -1040,7 +1058,7 @@
 				// straight back, and without this the return looks exactly like a stranger arriving.
 				if (!ST._ostatnioZnikl) ST._ostatnioZnikl = new Map();
 				ST._ostatnioZnikl.set(ev.id, performance.now());
-				ST._greeted.delete(ev.id); ST.peers.delete(ev.id); removePeerPuppet(ev.id);
+				ST._greeted.delete(ev.id); ST.peers.delete(ev.id); removePeerPuppet(ev.id); if (ST._rxBucket) ST._rxBucket.delete(ev.id);
 				setStatus(t("player_left", ST.peers.size + 1), "#fa5");
 				// THE CLIENT STAYS PAUSED — a silent unpause created a forked world (the player "kept playing"
 				// locally without knowing everything would be lost on the next join). Want to play solo → Stop.
@@ -1048,6 +1066,7 @@
 				if (ST.state) profileSave(ST.state); // przed resetem roli (isClientSync jeszcze true)
 				autoLoadClear();
 				ST._greeted.clear(); ST.net.role = "idle"; ST.peers.clear(); removeAllPeerPuppets(); setStatus(t("offline"), "#aaa"); showInviteButton(false); ST.net.lobbyId = null; updateLobbyIdDisplay(); updatePingDisplay();
+				ST._joinCode = null; ST._lanAddr = null; ST._directAddr = null;
 				ST._fireQ = []; ST._cryoQ = []; ST._grabbedCells.clear(); ST._placedCells.clear(); ST._volcQ = []; ST._caulkQ = []; ST._caulkRmQ = []; ST._shakeQ = [];
 				ST._gotHostWorld = false;
 				ST._lastAppliedSq = null; // drop the ack so it cannot throttle the next session
@@ -1076,6 +1095,7 @@
 			try { ST._nickCustom = localStorage.getItem("st_nick") || null; } catch (e) { ST._nickCustom = null; }
 			ST._myNick = ST._nickCustom || s.myNick || null; // own nick > Steam nick > default (feedback from TCentraL: LAN = "Player" permanently)
 			ST._gameFp = s.gameFp || null; // game build fingerprint (guard against different builds between players)
+			if (s.join) { rememberJoin(s.join); if (s.join.direct) { ST._directMode = true; ST._directAddr = s.join.publicIp || null; } }
 			for (const p of s.peers) { const old = ST.peers.get(p.id); ST.peers.set(p.id, Object.assign({ x: 0, y: 0, tx: 0, ty: 0 }, old || {}, { nick: p.nick, lastSeen: performance.now() })); } // 0.9.82: keep the modVer/ping of a peer we already know
 			// 0.9.76 HANDSHAKE: the renderer came up (game start OR a reload after loading a world).
 			// The connection lives in the main process, so the host does NOT know we lost the entire session state —
@@ -1123,8 +1143,14 @@
 			net.send({ t: "diag", m: String(txt).slice(0, 300) });
 		} catch (e) {}
 	}
+	// what the host's main process relays between clients (st-main.js handleIncoming)
+	const RELAYED = { pos: 1, hello: 1, chat: 1, myproj: 1, snd: 1 };
 	function handleMsg(from, msg) {
-		if (msg.t === "relay") { handleMsg(msg.from, msg.msg); return; }
+		if (msg.t === "relay") {
+			// only the host relays, and only these types: a client cannot pose as another player
+			if (ST.net.role === "client" && typeof msg.from === "string" && msg.msg && RELAYED[msg.msg.t] === 1) handleMsg(msg.from, msg.msg);
+			return;
+		}
 		// ST-FIX: peer ALIVE marker on any message (pong goes out every 1 s regardless of frames).
 		// lastSeen only updates on "pos", which goes still when the player is sitting in the menu — not fit for a timeout.
 		try { const _pk = ST.peers.get(from); if (_pk) _pk.lastNet = performance.now(); } catch (e) {}
@@ -1442,7 +1468,7 @@
 				}
 			}
 		} else if (msg.t === "act") {
-			if (ST.net.role === "host") replayAction(msg, from);
+			if (ST.net.role === "host" && clientMsgAllowed(from, msg.t)) replayAction(msg, from);
 		} else if (msg.t === "st") {
 			if (ST.net.role === "client") applyNetStructs(msg);
 		} else if (msg.t === "snap") {
@@ -1471,7 +1497,7 @@
 				log("tech-nak from host:", msg.id, "— reverting local flag");
 			}
 		} else if (msg.t === "resDelta") {
-			if (ST.net.role === "host") applyResourceDelta(msg);
+			if (ST.net.role === "host" && clientMsgAllowed(from, msg.t)) applyResourceDelta(msg);
 		} else if (msg.t === "ent") {
 			if (ST.net.role === "client") {
 				applyEntities(msg);
@@ -3479,6 +3505,9 @@
 	// of the enum for the pipe. We take it from there instead of the hardcoded 23; the old path (first pipe in the world)
 	// remains as a fallback, because it only works when pipes are already on the map.
 	function isPipeType(state, t) {
+		// 0.6.0: the game's own segment test covers every pipe network (water, gas, modded)
+		const API = ST._pipeApi;
+		if (state && API && typeof API.isSegment === "function") { try { return !!API.isSegment(state, t); } catch (e) { swallow("isPipeType", e); } }
 		try {
 			// isPipe/isPipeType run in loops over all structures, so when there is no answer
 			// we retry the query at most once per second, not on every block
@@ -3633,6 +3662,7 @@
 		const d = (q && q.data) || {};
 		return {
 			x: q.x, y: q.y,
+			type: q.type,     // 0.6.0 restoreSnapshots defaults a missing type to the water pipe (gas pipes!)
 			data: {
 				pipeConnectionMask: d.pipeConnectionMask || 0,
 				pipeBridgeConnectionMask: d.pipeBridgeConnectionMask || 0,
@@ -3715,7 +3745,7 @@
 				P.restoreSnapshots = function (state, snaps) {
 					if (isClientSync() && ST.wsx.paused && !ST._applyingNet) {
 						try {
-							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, data: q.data }));
+							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, type: q.type, data: q.data }));   // type: gas pipes (0.6.0)
 							if (lista.length) { net.send({ t: "act", k: "pipeRestore", s: lista }); stampAct("placeN", lista.length); }
 							if (lim("pipeRestTx", 200, 600000)) log("CLIENT pipe undo -> host: restore " + lista.length);
 						} catch (e) { swallow("pipe undo", e); }
@@ -3855,6 +3885,8 @@
 				} catch (e) { swallow("drag probe", e); }
 			} catch (e) { swallow("pipe drag history", e); }
 			const m = { t: "act", k: "pipeRun", s: { x: start.x, y: start.y }, e: { x: end.x, y: end.y } };
+			const ty = positions && positions[0] && positions[0].structureType;   // 0.6.0: gas pipes
+			if (ty != null) m.ty = ty;
 			if (ST._placeQ) { (ST._pipeRunQ || (ST._pipeRunQ = [])).push(m); }   // there are pipes in the queue — wait for them
 			else net.send(m);                                                    // the drag itself over existing pipes
 			if (lim("pipeRunTx", 30)) log("CLIENT pipe drag -> host: (" + start.x + "," + start.y + ") -> ("
@@ -3940,7 +3972,7 @@
 	// each other could get glued together) and the closing of two-cell gaps.
 	// We don't transmit the route: cZ walks a straight line from start to end in grid steps anyway
 	// (function V in the game's code), so the host only needs two points and replays it without loss.
-	function pipeRunHost(state, poczatek, koniec) {
+	function pipeRunHost(state, poczatek, koniec, typ) {
 		// EVERY exit says why. The 0.9.250 regression survived the entire test precisely because these
 		// exits were silent: the log showed the client's send and nothing on the host's side.
 		const nie = (powod) => { if (lim("pdRunNie:" + powod, 5)) log("HOST: pipe drag skipped — " + powod); return 0; };
@@ -3960,6 +3992,13 @@
 		const naTrasie = [];
 		for (const punkt of trasa) { const q = pipeAt(state, punkt.x, punkt.y); if (q) naTrasie.push(q); }
 		if (!naTrasie.length) return nie("na trasie nie ma ani jednej rury (" + (kroki + 1) + " punktow) — paczka rur jeszcze nie doszla?");
+		// 0.6.0: the route planner takes the pipe type from the points and assumes the water pipe otherwise,
+		// which blocks gas pipe endpoints. Type from the client, else from the pipe at the start of the route.
+		if (typ == null || (typeof API.isSegment === "function" && !isPipeType(state, typ))) {
+			const q0 = pipeAt(state, poczatek.x, poczatek.y);
+			typ = q0 ? q0.type : undefined;
+		}
+		if (typ != null) for (const punkt of trasa) punkt.structureType = typ;
 		let wynik = null, role = "";
 		try {
 			API.path(state, trasa, poczatek, koniec);              // point roles according to the HOST'S WORLD
@@ -4929,7 +4968,7 @@
 				// must go through _entDrop (sprite+light), because swapping the reference does NOT clean up the renderer.
 				try {
 					if (ST._entDrop && ST.FH && ST.FH.entities && ST.FH.entities.getAll) {
-						const oldList = ST.FH.entities.getAll(state) || [];
+						const oldList = (ST.FH.entities.getAll(state) || []).slice(); // copy: _entDrop splices the live list
 						let newIds = null;
 						for (const k2 in (msg.st || {})) { const v2 = msg.st[k2]; if (v2 && Array.isArray(v2.list)) { newIds = new Set(v2.list.map((c5) => c5 && c5.id)); break; } }
 						if (newIds) for (const c6 of oldList) { if (c6 && c6.id >= 0 && !newIds.has(c6.id)) { if (ST._entCollectFx) { try { ST._entCollectFx(state, c6); } catch (e2) {} } try { ST._entDrop(c6); } catch (e2) {} } }
@@ -4942,7 +4981,7 @@
 				// we clear lightIndex (light+sprite will be assigned to them by _entInit from the fast bus).
 				try {
 					const EN9 = ST.FH && ST.FH.entities;
-					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []) : [];
+					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []).slice() : []; // copy: _entDrop splices the live list
 					const oldBy9 = new Map(oldL9.map((c9) => [c9 && c9.id, c9]));
 					for (const k9 in (msg.st || {})) {
 						const v9 = msg.st[k9];
@@ -5140,8 +5179,17 @@
 	}
 	function applyResourceDelta(msg) {
 		const state = ST.state;
-		if (!state || !msg.r) return;
-		try { const res = state.store.resources || (state.store.resources = {}); for (const k of Object.keys(msg.r)) res[k] = (res[k] || 0) + msg.r[k]; } catch (e) {}
+		if (!state || !msg.r || typeof msg.r !== "object") return;
+		try {
+			const res = state.store.resources || (state.store.resources = {});
+			for (const k of Object.keys(msg.r)) {
+				// only counters the host already has (gold, fluxite, energy...), only gains, at most max(1e6, balance) per report
+				const v = msg.r[k];
+				if (!Object.prototype.hasOwnProperty.call(res, k) || typeof res[k] !== "number") continue;
+				if (typeof v !== "number" || !Number.isFinite(v) || v <= 0) continue;
+				res[k] += Math.min(v, Math.max(1e6, Math.abs(res[k])));
+			}
+		} catch (e) {}
 	}
 
 	// 0.9.238 (REPORT: "a projectile on the other player's side is a yellow pixel, without light"): the whole time
@@ -6403,11 +6451,52 @@
 		return built;
 	}
 
+	// HOST: per-client token bucket for act/resDelta. Generous (normal play stays far below it); excess is dropped and logged.
+	const CLIENT_MSG_RATE = 600, CLIENT_MSG_BURST = 2000;
+	function clientMsgAllowed(from, kind) {
+		const now = performance.now();
+		if (!ST._rxBucket) ST._rxBucket = new Map();
+		let b = ST._rxBucket.get(from);
+		if (!b) { b = { tok: CLIENT_MSG_BURST, t: now }; ST._rxBucket.set(from, b); }
+		b.tok = Math.min(CLIENT_MSG_BURST, b.tok + (now - b.t) * CLIENT_MSG_RATE / 1000); b.t = now;
+		if (b.tok >= 1) { b.tok -= 1; return true; }
+		if (lim("rxRate:" + from, 3, 60000)) log("HOST: dropping " + kind + " from " + from + " — over " + CLIENT_MSG_RATE + " msgs/s");
+		return false;
+	}
+	// HOST: a client dig must stay within the game's own excavation limits (Sandkit validator: square side 1..129,
+	// power and drill damage clamped to 1000) and the known options. forceRemoveAll is never used by a player tool.
+	function digMsgOk(state, msg) {
+		const fin = (v) => typeof v === "number" && Number.isFinite(v);
+		if (!fin(msg.x) || !fin(msg.y)) return false;
+		try { const { W, H } = worldBuffers(state); if (W && (msg.x < -256 || msg.y < -256 || msg.x > W + 256 || msg.y > H + 256)) return false; } catch (e) {}
+		const m = msg.m;
+		if (!Array.isArray(m) || m.length < 1 || m.length > 129) return false;
+		for (const row of m) if (!Array.isArray(row) || row.length > 129) return false;
+		if (msg.d !== undefined && msg.d !== null) { if (!fin(msg.d) || msg.d < 0) return false; if (msg.d > 1000) msg.d = 1000; }
+		if (msg.v !== undefined && msg.v !== null) {
+			if (typeof msg.v !== "object" || !fin(msg.v.x) || !fin(msg.v.y)) return false;
+			msg.v = { x: Math.max(-1e4, Math.min(1e4, msg.v.x)), y: Math.max(-1e4, Math.min(1e4, msg.v.y)) };
+		}
+		if (msg.en !== undefined && msg.en !== null && (!fin(msg.en) || msg.en < 0)) return false;
+		if (msg.o !== undefined && msg.o !== null) {
+			if (typeof msg.o !== "object") return false;
+			const o = {};
+			for (const k of DIG_OPT_KEYS) {
+				const v = msg.o[k];
+				if (k === "forceRemoveAll" || v === undefined) continue;
+				if (k === "drillTierDamage") { if (fin(v) && v >= 0) o[k] = Math.min(1000, v); }
+				else if (v === true) o[k] = true;
+			}
+			msg.o = o;
+		}
+		return true;
+	}
 	function replayAction(msg, fromId) {
 		const state = ST.state;
 		if (!state) return;
 		try {
 			if (msg.k === "dig") {
+				if (!digMsgOk(state, msg)) { if (lim("digBadN", 5, 60000)) log("HOST: client dig rejected — out of the game's limits (from " + fromId + ")"); return; }
 				const ex = findApi("excavate", ["excavation", "patterns"]); // the ns name differs between builds (current=excavation, 0.5.3=patterns)
 				if (msg.en > 0) {
 					// 0.9.142: power is authoritative on the host (client's laser/drill) — no power = no excavation
@@ -6489,7 +6578,7 @@
 				// client pipe drag — we replay it with the game's functions AFTER the placeN batch
 				// has placed the pipes themselves (the channel is ordered, so they're already here)
 				ST._applyingNet = true;
-				try { pipeRunHost(state, msg.s, msg.e); } finally { ST._applyingNet = false; }
+				try { pipeRunHost(state, msg.s, msg.e, msg.ty); } finally { ST._applyingNet = false; }
 			} else if (msg.k === "pd") {
 				// client pipe connections: we apply them locally, and our own watcher broadcasts them further
 				ST._applyingNet = true;
@@ -6652,8 +6741,9 @@
 						state.store.conservatory.tickets += Math.pow(2, types);
 					}
 					try { ST.FH.events.emit(state, "entity:collected", { typeId: msg.ty }); } catch (e) { swallow("act:" + msg.k, e); }
-					// remove the entity from the host's map (no official remove — emulated: splice from the LIVE getAll list
-					// + hide the sprite via getSprite + turn off the light). Without this the critter hung around until the 2nd collection.
+					// remove the entity from the host's map via _entDrop (full removal incl. the 0.6.0 id cache and pet overlay);
+					// fallback emulation: splice from the LIVE getAll list + hide the sprite + turn off the light.
+					// Without this the critter hung around until the 2nd collection.
 					try {
 						const EN = ST.FH.entities;
 						if (msg.eid != null && EN && EN.getAll) {
@@ -6661,9 +6751,13 @@
 							const idxE = listE.findIndex((en) => en && en.id === msg.eid);
 							if (idxE >= 0) {
 								const en = listE[idxE];
-								try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
-								try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
-								listE.splice(idxE, 1);
+								let dropped = false;
+								if (ST._entDrop) { try { ST._entDrop(en); dropped = true; } catch (e) { swallow("act:" + msg.k, e); } }
+								if (!dropped) {
+									try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
+									try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
+									const i2 = listE.indexOf(en); if (i2 >= 0) listE.splice(i2, 1);
+								}
 							}
 						}
 					} catch (e) { swallow("act:" + msg.k, e); }
@@ -7140,12 +7234,10 @@
 			'<button id="st-join-id">' + t("btn_join_id") + "</button>" +
 			// A row with an IP field for Join LAN — Electron/Chromium does NOT support window.prompt(),
 			// so the address is entered here, in the panel (not via a browser dialog).
-			// separate IP and PORT fields (QoL — TCentraL)
+			// one field for the host's full address "ip:port/code" (the port is optional, 27777 by default)
 			'<div id="st-lan-row" style="display:none;margin-top:4px">' +
-			'<input id="st-lan-addr" placeholder="IP" value="127.0.0.1" spellcheck="false" ' +
-			'style="width:104px;background:#111;color:#ddd;border:1px solid #555;border-radius:3px;font:11px monospace;padding:2px 4px">' +
-			'<input id="st-lan-port" placeholder="port" value="27777" spellcheck="false" maxlength="5" ' +
-			'style="width:44px;margin-left:2px;background:#111;color:#ddd;border:1px solid #555;border-radius:3px;font:11px monospace;padding:2px 4px"> ' +
+			'<input id="st-lan-addr" placeholder="' + t("lan_addr_ph") + '" value="" spellcheck="false" ' +
+			'style="width:150px;background:#111;color:#ddd;border:1px solid #555;border-radius:3px;font:11px monospace;padding:2px 4px"> ' +
 			'<button id="st-lan-go">' + t("btn_connect") + "</button>" +
 			"</div>" +
 			// team chat (the host relays between clients)
@@ -7178,27 +7270,28 @@
 		}, 3000);
 		hud.querySelector("#st-host").onclick = async () => { setStatus(t("creating_lobby")); const r = await net.hostSteam(); if (!r.ok) setStatus(t("error", r.error), "#f66"); };
 		hud.querySelector("#st-invite").onclick = () => net.invite();
-		hud.querySelector("#st-host-lan").onclick = async () => { const r = await net.hostWs(27777); if (!r.ok) setStatus(t("error", r.error), "#f66"); };
-		// Join LAN: separate IP and PORT fields (QoL — TCentraL); window.prompt doesn't work in Electron
+		hud.querySelector("#st-host-lan").onclick = async () => {
+			const r = await net.hostWs(27777);
+			if (!r.ok) { setStatus(t("error", r.error), "#f66"); return; }
+			ST._directMode = false; ST._directAddr = null; rememberJoin(r);
+			setStatus(t("hosting_lan", r.port || 27777) + " — " + lanAddrsText());
+		};
+		// Join LAN: one address field; window.prompt doesn't work in Electron
 		const lanRow = hud.querySelector("#st-lan-row");
 		const lanInput = hud.querySelector("#st-lan-addr");
-		const lanPort = hud.querySelector("#st-lan-port");
 		async function doJoinLan() {
-			let h = (lanInput.value || "").trim();
-			let p = (lanPort.value || "").trim();
-			// convenience: pasting "ip:port" into the IP field splits itself automatically
-			if (h.indexOf(":") >= 0) { const parts = h.split(":"); h = parts[0]; if (parts[1]) { p = parts[1]; lanPort.value = p; } lanInput.value = h; }
-			if (!h) { lanInput.focus(); return; }
-			const port = parseInt(p || "27777", 10);
-			if (!(port > 0 && port < 65536)) { setStatus(t("error", "port?"), "#f66"); lanPort.focus(); lanPort.select(); return; }
+			const a = splitJoinAddr(lanInput.value);
+			if (!a.h) { lanInput.focus(); return; }
+			const port = parseInt(a.port || "27777", 10);
+			if (!(port > 0 && port < 65536)) { setStatus(t("error", "port?"), "#f66"); lanInput.focus(); return; }
 			setStatus(t("creating_lobby"));
-			const r = await net.joinWs(h, port);
+			const r = await net.joinWs(a.h, port, a.code);
 			if (!r.ok) setStatus(t("error", r.error), "#f66");
-			else { lanRow.style.display = "none"; lanInput.blur(); lanPort.blur(); } // hand the keyboard back to the game
+			else { lanRow.style.display = "none"; lanInput.blur(); } // hand the keyboard back to the game
 		}
 		// Keys typed into the fields must not reach the game (the game's keyup does NOT filter INPUT elements;
 		// they bubble up to window — stopPropagation on the inputs cuts off this whole class of problem)
-		for (const el2 of [lanInput, lanPort]) {
+		for (const el2 of [lanInput]) {
 			el2.addEventListener("keydown", (e) => { e.stopPropagation(); if (e.key === "Enter") { e.preventDefault(); doJoinLan(); } });
 			el2.addEventListener("keyup", (e) => e.stopPropagation());
 		}
@@ -7656,7 +7749,7 @@
 						const r = await net.hostDirect(27777);
 						if (!r || !r.ok) setStatus(t("error", (r && r.error) || "?"), "#f66");
 						else {
-							ST._directAddr = (r.publicIp ? r.publicIp : null); ST._directPort = r.port || 27777; ST._directUpnp = !!r.upnp;
+							rememberJoin(r); ST._directAddr = (r.publicIp ? r.publicIp : null); ST._directPort = r.port || 27777; ST._directUpnp = !!r.upnp;
 							ST._directShown = false;
 							setStatus(r.upnp ? t("direct_ready") : t("direct_no_upnp", ST._directPort), r.upnp ? "#5f5" : "#fd5");
 							log("HOST DIRECT: upnp=" + r.upnp + " port=" + r.port + " ip=" + (r.publicIp ? "(hidden)" : "unknown") + (r.error ? " err=" + r.error : ""));
@@ -7667,7 +7760,11 @@
 				p.appendChild(bDir);
 				const bLan = lbBtn(t("btn_host_lan"), t("lb_host_lan_d"), false);
 				bLan.onclick = async () => {
-					try { const r = await net.hostWs(27777); if (!r.ok) setStatus(t("error", r.error), "#f66"); }
+					try {
+						const r = await net.hostWs(27777);
+						if (!r.ok) setStatus(t("error", r.error), "#f66");
+						else { ST._directMode = false; ST._directAddr = null; rememberJoin(r); }
+					}
 					catch (e) { setStatus(t("error", e.message), "#f66"); log("lobby hostWs error:", e.message); }
 					renderLobby(true);
 				};
@@ -7676,25 +7773,23 @@
 				const bJoin = lbBtn(t("btn_join_lan"), t("lb_join_lan_d"), false);
 				const row = document.createElement("div");
 				row.style.cssText = "display:none;margin:2px 0 6px;padding:0 2px";
-				const ip = lbInput("IP", "127.0.0.1", 170);
-				const port = lbInput("port", "27777", 62); port.maxLength = 5;
+				const ip = lbInput(t("lan_addr_ph"), "", 240);
 				const go = document.createElement("button");
 				go.textContent = t("btn_connect");
 				go.style.cssText = "margin-left:6px;background:#1d4a6b;color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:3px;font:600 13px inherit;cursor:pointer;padding:5px 12px";
 				const doJoin = async () => {
-					let h = (ip.value || "").trim(); let pr = (port.value || "").trim();
-					if (h.indexOf(":") >= 0) { const a = h.split(":"); h = a[0]; if (a[1]) { pr = a[1]; port.value = pr; } ip.value = h; }
-					if (!h) { ip.focus(); return; }
-					const pn = parseInt(pr || "27777", 10);
-					if (!(pn > 0 && pn < 65536)) { port.focus(); port.select(); return; }
+					const a = splitJoinAddr(ip.value);
+					if (!a.h) { ip.focus(); return; }
+					const pn = parseInt(a.port || "27777", 10);
+					if (!(pn > 0 && pn < 65536)) { ip.focus(); return; }
 					setStatus(t("creating_lobby"));
-					const r = await net.joinWs(h, pn);
+					const r = await net.joinWs(a.h, pn, a.code);
 					if (!r.ok) setStatus(t("error", r.error), "#f66");
 					renderLobby(true);
 				};
-				for (const el of [ip, port]) el.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doJoin(); } });
+				ip.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); doJoin(); } });
 				go.onclick = doJoin;
-				row.appendChild(ip); row.appendChild(port); row.appendChild(go);
+				row.appendChild(ip); row.appendChild(go);
 				bJoin.onclick = () => { row.style.display = row.style.display === "none" ? "block" : "none"; if (row.style.display === "block") { ip.focus(); ip.select(); } };
 				p.appendChild(bJoin); p.appendChild(row);
 				const bId = lbBtn(t("btn_join_id"), t("lb_join_id_d"), false);
@@ -7739,27 +7834,39 @@
 					};
 					p.appendChild(idRow);
 				}
-				// direct host address — MASKED BY DEFAULT (stream-safe), copyable without revealing it
-				if (ST.net.role === "host" && ST._directAddr) {
+				// host address — MASKED BY DEFAULT (stream-safe), copyable without revealing it.
+				// Direct: the public address; LAN: one line per local/VPN address of this PC (LAN, Tailscale, ...)
+				if (ST.net.role === "host" && ST.net.transport === "ws" && (ST._directAddr || ST._lanAddr)) {
+					const list = ST._directAddr ? [{ ip: ST._directAddr }] : (ST._lanAddrs && ST._lanAddrs.length ? ST._lanAddrs : [{ ip: ST._lanAddr }]);
 					const row = document.createElement("div");
-					row.style.cssText = "margin:6px 0 8px;font-size:13px;color:#9f9;display:flex;align-items:center;gap:8px;flex-wrap:wrap";
+					row.style.cssText = "margin:6px 0 4px;font-size:13px;color:#9f9;display:flex;align-items:center;gap:8px;flex-wrap:wrap";
 					const lbl = document.createElement("span"); lbl.style.color = "#9fb6c9"; lbl.textContent = t("direct_addr") + ":";
-					const val = document.createElement("span");
-					val.style.cssText = "font:13px monospace;color:#9f9";
-					const paint = () => { val.textContent = ST._directShown ? (ST._directAddr + ":" + ST._directPort) : ("●●●.●●●.●●●.●●●:" + ST._directPort); };
-					paint();
+					const vals = [];
+					const paint = () => { for (const v of vals) v.el.textContent = ST._directShown ? joinAddr(v.ip) : ("●●●.●●●.●●●.●●●:" + ST._directPort + (ST._joinCode ? "/●●●●●●" : "")); };
 					const eye = document.createElement("span");
 					eye.style.cssText = "cursor:pointer;font-size:11px;color:#6cf;text-decoration:underline";
 					eye.textContent = ST._directShown ? t("direct_hide") : t("direct_show");
 					eye.onclick = () => { ST._directShown = !ST._directShown; paint(); eye.textContent = ST._directShown ? t("direct_hide") : t("direct_show"); };
-					const cp = document.createElement("span");
-					cp.style.cssText = "cursor:pointer;font-size:11px;color:#6cf;text-decoration:underline";
-					cp.textContent = "📋 " + t("lb_copy");
-					cp.onclick = async () => { try { await navigator.clipboard.writeText(ST._directAddr + ":" + ST._directPort); cp.textContent = t("direct_copied"); setTimeout(() => { cp.textContent = "📋 " + t("lb_copy"); }, 1200); } catch (e) {} };
 					const hint = document.createElement("span");
 					hint.style.cssText = "font-size:10px;color:#7d95a8"; hint.textContent = t("direct_hidden_hint");
-					row.appendChild(lbl); row.appendChild(val); row.appendChild(eye); row.appendChild(cp); row.appendChild(hint);
+					row.appendChild(lbl); row.appendChild(eye); row.appendChild(hint);
 					p.appendChild(row);
+					for (const a of list) {
+						const line = document.createElement("div");
+						line.style.cssText = "margin:0 0 4px 10px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap";
+						if (a.name && list.length > 1) { const nm = document.createElement("span"); nm.style.cssText = "font-size:11px;color:#9fb6c9"; nm.textContent = a.name; line.appendChild(nm); }
+						const val = document.createElement("span");
+						val.style.cssText = "font:13px monospace;color:#9f9";
+						vals.push({ el: val, ip: a.ip });
+						const cp = document.createElement("span");
+						cp.style.cssText = "cursor:pointer;font-size:11px;color:#6cf;text-decoration:underline";
+						cp.textContent = "📋 " + t("lb_copy");
+						cp.onclick = async () => { try { await navigator.clipboard.writeText(joinAddr(a.ip)); cp.textContent = t("direct_copied"); setTimeout(() => { cp.textContent = "📋 " + t("lb_copy"); }, 1200); } catch (e) {} };
+						line.appendChild(val); line.appendChild(cp);
+						p.appendChild(line);
+					}
+					paint();
+					p.lastChild.style.marginBottom = "8px";
 				}
 				const plH = document.createElement("div");
 				plH.style.cssText = "font-weight:700;font-size:14px;color:#fff;margin-top:6px"; plH.textContent = t("lb_players");
@@ -8981,7 +9088,8 @@
 							if (q3[5] && ST._drawBridge) {
 								try {
 									ctx.save(); ctx.globalAlpha = 0.75;
-									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx });
+									// segmentStructureType: 0.6.0 needs it for bridges not built yet (otherwise draws nothing)
+									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx, segmentStructureType: q3[2] });
 									ctx.restore(); drawn = true;
 								} catch (e) { ST._drawBridge = null; try { ctx.restore(); } catch (e2) {} }
 							}

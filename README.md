@@ -55,7 +55,7 @@ The game is an Electron app; the simulation is non-deterministic (83× `Math.ran
 
 1. Install the mod into your game once (`dist-package/install.bat`; macOS: `dist-package/install.command`; Linux: `dist-package/install-linux.sh` — the Unix installers need no Node, they run on the game's own Electron via `ELECTRON_RUN_AS_NODE`).
 2. Edit `src/sandtogether.js`, then copy it to `<game>/resources/app/dist/js/sandtogether.js` and restart the game (bundle patches only need re-applying when `patches.json` changes).
-3. Two-instance local testing: launch a second copy with `--st-userdata=<dir>` (bypasses the single-instance lock; any `--st-*` arg does) and use `Host LAN` / `Join LAN` on `127.0.0.1`.
+3. Two-instance local testing: launch a second copy with `--st-userdata=<dir>` (bypasses the single-instance lock; any `--st-*` arg does) and use `Host LAN` / `Join LAN` with the host's join address `127.0.0.1:27777/<code>`. `--st-autotest=host` / `--st-autotest=join` connect the two copies without a code.
 4. Logs: `%APPDATA%\Sandustry\logs\main.log` (macOS: `~/Library/Logs/Sandustry/main.log`) — everything the mod does is tagged `[SandTogether]`.
 
 ### Contributing

@@ -62,7 +62,7 @@ You never run the installer again, and both players always match versions.
 2. After "World imported!": **Load Game** → load the received world.
 3. You now share one live world (the panel shows "host mirror").
 
-**LAN:** Host LAN / Join LAN (type `ip` or `ip:port`, default 27777).
+**LAN / direct:** Host LAN or Host (Internet — direct) shows a join address `ip:port/code` with a copy button. The code changes every time you start hosting; the joining player pastes the whole address into Join by address.
 **Chat:** type in the panel's message box, press Enter.
 **Hide/show panel:** click its header or Ctrl+Shift+H. **Resync** forces a full world refresh.
 
