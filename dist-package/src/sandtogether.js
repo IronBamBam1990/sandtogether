@@ -1366,6 +1366,13 @@
 			}
 		} else if (msg.t === "wi") {
 			if (ST.net.role === "client" && ST.state && ST.wsx.paused) { ST._applyingNet = true; try { applyWorldItems(ST.state, msg.wi); } finally { ST._applyingNet = false; } }
+		} else if (msg.t === "wpick") {
+			if (ST.net.role === "client" && ST.state && ST.wsx.paused) hostPickedUp(ST.state, msg.id);
+		} else if (msg.t === "ach") {
+			if (ST.state && Array.isArray(msg.ids)) {
+				applyAchievements(ST.state, msg.ids, from);
+				if (ST.net.role === "host") net.send({ t: "ach", ids: msg.ids.slice(0, 50) }); // relay; the sender skips ids it has
+			}
 		} else if (msg.t === "chat") {
 			const nick = (ST.peers.get(from) && ST.peers.get(from).nick) || "?";
 			addChat(nick, String(msg.m || "").slice(0, 200));
@@ -3183,6 +3190,8 @@
 				setMoveHalf("to", to);
 			});
 			ST.FH.events.on(state, "worldItem:pickedUp", (st, data) => {
+				// host: every pickup (its own and replayed ones) goes to the clients, so they run the game's pickup too
+				if (ST.net.role === "host" && ST.peers.size && data && data.item) { net.send({ t: "wpick", id: data.item.id }); return; }
 				if (ST._applyingNet || ST.net.role !== "client" || !ST.wsx.paused || !data || !data.item) return;
 				ST._pickedPending.set(data.item.id, performance.now());
 				net.send({ t: "act", k: "pickup", id: data.item.id });
@@ -3479,6 +3488,9 @@
 	// of the enum for the pipe. We take it from there instead of the hardcoded 23; the old path (first pipe in the world)
 	// remains as a fallback, because it only works when pipes are already on the map.
 	function isPipeType(state, t) {
+		// 0.6.0: the game's own segment test covers every pipe network (water, gas, modded)
+		const API = ST._pipeApi;
+		if (state && API && typeof API.isSegment === "function") { try { return !!API.isSegment(state, t); } catch (e) { swallow("isPipeType", e); } }
 		try {
 			// isPipe/isPipeType run in loops over all structures, so when there is no answer
 			// we retry the query at most once per second, not on every block
@@ -3633,6 +3645,7 @@
 		const d = (q && q.data) || {};
 		return {
 			x: q.x, y: q.y,
+			type: q.type,     // 0.6.0 restoreSnapshots defaults a missing type to the water pipe (gas pipes!)
 			data: {
 				pipeConnectionMask: d.pipeConnectionMask || 0,
 				pipeBridgeConnectionMask: d.pipeBridgeConnectionMask || 0,
@@ -3715,7 +3728,7 @@
 				P.restoreSnapshots = function (state, snaps) {
 					if (isClientSync() && ST.wsx.paused && !ST._applyingNet) {
 						try {
-							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, data: q.data }));
+							const lista = (snaps || []).map((q) => ({ x: q.x, y: q.y, type: q.type, data: q.data }));   // type: gas pipes (0.6.0)
 							if (lista.length) { net.send({ t: "act", k: "pipeRestore", s: lista }); stampAct("placeN", lista.length); }
 							if (lim("pipeRestTx", 200, 600000)) log("CLIENT pipe undo -> host: restore " + lista.length);
 						} catch (e) { swallow("pipe undo", e); }
@@ -3855,6 +3868,8 @@
 				} catch (e) { swallow("drag probe", e); }
 			} catch (e) { swallow("pipe drag history", e); }
 			const m = { t: "act", k: "pipeRun", s: { x: start.x, y: start.y }, e: { x: end.x, y: end.y } };
+			const ty = positions && positions[0] && positions[0].structureType;   // 0.6.0: gas pipes
+			if (ty != null) m.ty = ty;
 			if (ST._placeQ) { (ST._pipeRunQ || (ST._pipeRunQ = [])).push(m); }   // there are pipes in the queue — wait for them
 			else net.send(m);                                                    // the drag itself over existing pipes
 			if (lim("pipeRunTx", 30)) log("CLIENT pipe drag -> host: (" + start.x + "," + start.y + ") -> ("
@@ -3940,7 +3955,7 @@
 	// each other could get glued together) and the closing of two-cell gaps.
 	// We don't transmit the route: cZ walks a straight line from start to end in grid steps anyway
 	// (function V in the game's code), so the host only needs two points and replays it without loss.
-	function pipeRunHost(state, poczatek, koniec) {
+	function pipeRunHost(state, poczatek, koniec, typ) {
 		// EVERY exit says why. The 0.9.250 regression survived the entire test precisely because these
 		// exits were silent: the log showed the client's send and nothing on the host's side.
 		const nie = (powod) => { if (lim("pdRunNie:" + powod, 5)) log("HOST: pipe drag skipped — " + powod); return 0; };
@@ -3960,6 +3975,13 @@
 		const naTrasie = [];
 		for (const punkt of trasa) { const q = pipeAt(state, punkt.x, punkt.y); if (q) naTrasie.push(q); }
 		if (!naTrasie.length) return nie("na trasie nie ma ani jednej rury (" + (kroki + 1) + " punktow) — paczka rur jeszcze nie doszla?");
+		// 0.6.0: the route planner takes the pipe type from the points and assumes the water pipe otherwise,
+		// which blocks gas pipe endpoints. Type from the client, else from the pipe at the start of the route.
+		if (typ == null || (typeof API.isSegment === "function" && !isPipeType(state, typ))) {
+			const q0 = pipeAt(state, poczatek.x, poczatek.y);
+			typ = q0 ? q0.type : undefined;
+		}
+		if (typ != null) for (const punkt of trasa) punkt.structureType = typ;
 		let wynik = null, role = "";
 		try {
 			API.path(state, trasa, poczatek, koniec);              // point roles according to the HOST'S WORLD
@@ -4541,7 +4563,67 @@
 	function applyWorldItems(state, list) {
 		const now = performance.now();
 		for (const [id, ts] of ST._pickedPending) if (now - ts > 10000) ST._pickedPending.delete(id);
+		const old = state.store.worldItems || [];
 		state.store.worldItems = (list || []).filter((i) => !ST._pickedPending.has(i.id));
+		syncWorldItemSprites(state, old, state.store.worldItems);
+	}
+	// The game makes sprites for built-in item types (orb, glyph key, artifact, stratacore) only in spawn and at
+	// load, and removes them only in pickUp/destroy. Replacing the list leaves new host items invisible and
+	// gone ones on screen. _wiApi (patches.json) exposes the game's own make/drop.
+	function syncWorldItemSprites(state, old, next) {
+		const api = ST._wiApi;
+		const r = state.session && state.session.rendering;
+		const spr = r && r.pixi && r.pixi.sprites && r.pixi.sprites.worldItems;
+		if (!api || !spr) return;
+		const ids = new Set(next.map((i) => i.id));
+		for (const it of old) if (!ids.has(it.id) && spr[it.id]) { try { api.drop(state, it); } catch (e) { swallow("wiDrop", e); } }
+		for (const k of Object.keys(spr)) if (!ids.has(+k)) { try { api.drop(state, { id: +k }); } catch (e) { swallow("wiDrop", e); } }
+		for (const it of next) if (!spr[it.id]) { try { api.make(state, it); } catch (e) { swallow("wiMake", e); } }
+	}
+	// The host picked an item up: run the game's own pickup here (sprite, light, toast, orb tech unlock, portal
+	// unlock, decor). Artifacts and stratacores start a choice screen or overlay for the picker, so those are only removed.
+	function hostPickedUp(state, id) {
+		const items = (ST.FH.world && ST.FH.world.items) || deepFindNs("items", "pickUp");
+		const item = items && items.getById ? items.getById(state, id) : null;
+		if (!item) return;
+		ST._applyingNet = true;
+		try {
+			if (item.type === 1 || item.type === 3) {   // KW.Artifact, KW.Stratacore
+				const lp = item.data && item.data.lightPosition;
+				if (lp && ST.FH.world.removeLightSourcesAt) ST.FH.world.removeLightSourcesAt(state, lp.x, lp.y);
+				if (items.destroy) items.destroy(state, item);
+				else state.store.worldItems = state.store.worldItems.filter((i) => i.id !== id);
+			} else if (items.pickUp) items.pickUp(state, item);
+			log("host picked up item", id, "type", item.type);
+		} catch (e) { swallow("wpick", e); }
+		finally { ST._applyingNet = false; }
+	}
+
+	// SHARED ACHIEVEMENTS: the game unlocks only where the event fires. Each side sends the ids that newly
+	// appear in store.achievements, the host relays them, and every player unlocks them too.
+	function syncAchievementsIfDue(state) {
+		const now = performance.now();
+		if (now - (ST._achT || 0) < 1000) return;
+		ST._achT = now;
+		const a = state.store.achievements || {};
+		const wid = state.store.meta && state.store.meta.worldId;
+		if (ST._achStore !== state.store || ST._achWid !== wid) { ST._achStore = state.store; ST._achWid = wid; ST._achSeen = new Set(Object.keys(a)); return; } // new world: baseline
+		const fresh = [];
+		for (const id of Object.keys(a)) if (a[id] && !ST._achSeen.has(id)) { ST._achSeen.add(id); fresh.push(id); }
+		if (fresh.length) { net.send({ t: "ach", ids: fresh }); log("achievements shared:", fresh.join(",")); }
+	}
+	function applyAchievements(state, ids, from) {
+		const integ = state.store.integrity;
+		if (integ && integ.cheatsUsed) return;   // same gate as the game
+		const plat = window.electron && window.electron.platform;
+		state.store.achievements = state.store.achievements || {};
+		for (const id of ids.slice(0, 50)) {
+			if (typeof id !== "string" || !/^[A-Z0-9_]{1,64}$/.test(id) || state.store.achievements[id]) continue;
+			state.store.achievements[id] = true;
+			if (ST._achSeen) ST._achSeen.add(id);
+			if (plat && plat.unlockAchievement) plat.unlockAchievement(id).catch(() => {});
+			log("achievement from", from, ":", id);
+		}
 	}
 	// FAST DROPS (G12): a new item on the ground only arrived with the 2.5s snapshot.
 	// Host: on every id list CHANGE it sends it immediately (checked at 5 Hz, sent only on change).
@@ -4929,7 +5011,7 @@
 				// must go through _entDrop (sprite+light), because swapping the reference does NOT clean up the renderer.
 				try {
 					if (ST._entDrop && ST.FH && ST.FH.entities && ST.FH.entities.getAll) {
-						const oldList = ST.FH.entities.getAll(state) || [];
+						const oldList = (ST.FH.entities.getAll(state) || []).slice(); // copy: _entDrop splices the live list
 						let newIds = null;
 						for (const k2 in (msg.st || {})) { const v2 = msg.st[k2]; if (v2 && Array.isArray(v2.list)) { newIds = new Set(v2.list.map((c5) => c5 && c5.id)); break; } }
 						if (newIds) for (const c6 of oldList) { if (c6 && c6.id >= 0 && !newIds.has(c6.id)) { if (ST._entCollectFx) { try { ST._entCollectFx(state, c6); } catch (e2) {} } try { ST._entDrop(c6); } catch (e2) {} } }
@@ -4942,7 +5024,7 @@
 				// we clear lightIndex (light+sprite will be assigned to them by _entInit from the fast bus).
 				try {
 					const EN9 = ST.FH && ST.FH.entities;
-					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []) : [];
+					const oldL9 = EN9 && EN9.getAll ? (EN9.getAll(state) || []).slice() : []; // copy: _entDrop splices the live list
 					const oldBy9 = new Map(oldL9.map((c9) => [c9 && c9.id, c9]));
 					for (const k9 in (msg.st || {})) {
 						const v9 = msg.st[k9];
@@ -6489,7 +6571,7 @@
 				// client pipe drag — we replay it with the game's functions AFTER the placeN batch
 				// has placed the pipes themselves (the channel is ordered, so they're already here)
 				ST._applyingNet = true;
-				try { pipeRunHost(state, msg.s, msg.e); } finally { ST._applyingNet = false; }
+				try { pipeRunHost(state, msg.s, msg.e, msg.ty); } finally { ST._applyingNet = false; }
 			} else if (msg.k === "pd") {
 				// client pipe connections: we apply them locally, and our own watcher broadcasts them further
 				ST._applyingNet = true;
@@ -6614,11 +6696,16 @@
 					}
 				} finally { ST._applyingNet = false; }
 			} else if (msg.k === "story") {
-				// client story step: append to storyProgression.completedSteps (idempotently) + re-emit
+				// client story step: the game's completeStep advances the host's story (next step, waypoint,
+				// factory-level block); without it the host stayed on the old step until a reload
 				ST._applyingNet = true;
 				try {
+					const prog = ST.FH.progression;
 					const ens = (ST.FH.storage && ST.FH.storage.ensure) || findApi("ensure", ["storage"]);
-					if (ens) {
+					if (prog && typeof prog.completeStep === "function") {
+						const done = prog.completeStep(state, msg.id);
+						log("HOST: client story step:", msg.id, done ? "" : "(already done or unknown)");
+					} else if (ens) {
 						const sp = ens(state, "storyProgression");
 						const arrS = sp.completedSteps || [];
 						if (!arrS.includes(msg.id)) {
@@ -6652,8 +6739,9 @@
 						state.store.conservatory.tickets += Math.pow(2, types);
 					}
 					try { ST.FH.events.emit(state, "entity:collected", { typeId: msg.ty }); } catch (e) { swallow("act:" + msg.k, e); }
-					// remove the entity from the host's map (no official remove — emulated: splice from the LIVE getAll list
-					// + hide the sprite via getSprite + turn off the light). Without this the critter hung around until the 2nd collection.
+					// remove the entity from the host's map via _entDrop (full removal incl. the 0.6.0 id cache and pet overlay);
+					// fallback emulation: splice from the LIVE getAll list + hide the sprite + turn off the light.
+					// Without this the critter hung around until the 2nd collection.
 					try {
 						const EN = ST.FH.entities;
 						if (msg.eid != null && EN && EN.getAll) {
@@ -6661,9 +6749,13 @@
 							const idxE = listE.findIndex((en) => en && en.id === msg.eid);
 							if (idxE >= 0) {
 								const en = listE[idxE];
-								try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
-								try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
-								listE.splice(idxE, 1);
+								let dropped = false;
+								if (ST._entDrop) { try { ST._entDrop(en); dropped = true; } catch (e) { swallow("act:" + msg.k, e); } }
+								if (!dropped) {
+									try { if (en.lightIndex !== undefined && ST.FH.effects && ST.FH.effects.removeLight) { ST.FH.effects.removeLight(state, en.lightIndex); en.lightIndex = undefined; } } catch (e) { swallow("act:" + msg.k, e); }
+									try { const spr = EN.getSprite && EN.getSprite(state, en.id); if (spr) { spr.renderable = false; spr.visible = false; } } catch (e) { swallow("act:" + msg.k, e); }
+									const i2 = listE.indexOf(en); if (i2 >= 0) listE.splice(i2, 1);
+								}
 							}
 						}
 					} catch (e) { swallow("act:" + msg.k, e); }
@@ -8981,7 +9073,8 @@
 							if (q3[5] && ST._drawBridge) {
 								try {
 									ctx.save(); ctx.globalAlpha = 0.75;
-									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx });
+									// segmentStructureType: 0.6.0 needs it for bridges not built yet (otherwise draws nothing)
+									ST._drawBridge(state, gx, gy, q3[5] === 1 ? "horizontal" : "vertical", { ctx: ctx, segmentStructureType: q3[2] });
 									ctx.restore(); drawn = true;
 								} catch (e) { ST._drawBridge = null; try { ctx.restore(); } catch (e2) {} }
 							}
@@ -9330,6 +9423,19 @@
 					log("FH hooks: entities.startCapture/spawn/launch (Wrangler -> host)");
 				}
 			} catch (e) { log("hook entities error:", e && e.message); }
+			// DIAG: world items come from the host's list; log when the client's own game spawns one (story orb?)
+			try {
+				const wit = FH.world && FH.world.items;
+				if (wit && wit.spawn && !wit.__stWrapped) {
+					wit.__stWrapped = 1;
+					const oSpawn = wit.spawn;
+					wit.spawn = (...a) => {
+						const it = oSpawn(...a);
+						if (isClientSync() && ST.wsx.paused && lim("cliSpawn", 20)) log("CLIENT spawned world item type", a[1], "id", it && it.id, "@", a[2], a[3], "(not on the host)");
+						return it;
+					};
+				}
+			} catch (e) { log("hook world items error:", e && e.message); }
 			log("FH hooks: energy.consume=" + !!(FH.energy && FH.energy.consume && FH.energy.consume._st) + " world.excavate=" + !!(FH.world && FH.world.excavate && FH.world.excavate._st));
 		} catch (e) { log("installFhHooks error:", e.message); }
 	}
@@ -9773,6 +9879,7 @@
 			T("res", () => sendResourcesIfDue(state));
 			T("ent", () => sendEntitiesIfDue(state));
 			T("wi", () => sendWorldItemsIfChanged(state)); // szybkie dropy (G12)
+			T("ach", () => syncAchievementsIfDue(state));
 		}
 		// FRAME PROFILER (0.9.154, permanent): one "MOD-FRAME" line every 10 s, ONLY when there are spikes —
 		// "FPS drops" reports now come in with data (how many frames > 25 ms and whose cost it is).
@@ -10055,6 +10162,7 @@
 			}
 			sendMyProjectilesIfDue(state);
 			sendResourceDeltaIfDue(state); // send the host the client's resource deltas (dotNine)
+			if (ST.wsx.everApplied && !ST._loadingWorld) syncAchievementsIfDue(state);
 			// flush the fire/ice batches every ~60 ms
 			if (ST._fireQ.length && now - (ST._lastFireB || 0) > 60) { ST._lastFireB = now; try { net.send({ t: "act", k: "fireB", c: ST._fireQ, q: 1 }); } catch (e) {} ST._fireQ = []; }
 			if (ST._cryoQ.length && now - (ST._lastCryoB || 0) > 60) { ST._lastCryoB = now; try { net.send({ t: "act", k: "cryoB", c: ST._cryoQ, q: 1 }); } catch (e) {} ST._cryoQ = []; }

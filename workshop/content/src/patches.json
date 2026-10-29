@@ -1,5 +1,6 @@
 {
 	"supportedVersions": [
+		"0.6.0",
 		"0.5.7",
 		"0.5.6",
 		"0.5.5",
@@ -27,6 +28,11 @@
 			"name": "dig hook (DN)",
 			"variants": [
 				{
+					"anchor": "},T=(e,t,n,r,o,i,a={},s)=>{const l=Math.floor(r.length/2);",
+					"patched": "},T=(e,t,n,r,o,i,a={},s)=>{if(window.SandTogether&&window.SandTogether._dig&&window.SandTogether._dig(e,t,n,r,o,i,a))return;const l=Math.floor(r.length/2);",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "M=(e,t,n,r,o,a,i={},s)=>{const l=Math.floor(r.length/2);",
 					"patched": "M=(e,t,n,r,o,a,i={},s)=>{if(window.SandTogether&&window.SandTogether._dig&&window.SandTogether._dig(e,t,n,r,o,a,i))return;const l=Math.floor(r.length/2);",
 					"note": "game 0.5.5 (build 30.08.2026, alias se)"
@@ -48,6 +54,11 @@
 		{
 			"name": "setCell hook (Gz)",
 			"variants": [
+				{
+					"anchor": "I=(e,t,n,r,i)=>{h.on.setCellId(e.shared.sim,t,n,r),",
+					"patched": "I=(e,t,n,r,i)=>{if(window.SandTogether&&window.SandTogether._setCell&&window.SandTogether._setCell(e,t,n,r,i))return;h.on.setCellId(e.shared.sim,t,n,r),",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "j=(e,t,n,r,a)=>{p.on.setCellId(e.shared.sim,t,n,r),",
 					"patched": "j=(e,t,n,r,a)=>{if(window.SandTogether&&window.SandTogether._setCell&&window.SandTogether._setCell(e,t,n,r,a))return;p.on.setCellId(e.shared.sim,t,n,r),"
@@ -78,6 +89,11 @@
 		{
 			"name": "building place hook (_place)",
 			"variants": [
+				{
+					"anchor": "if((0,_.Im)(e,g)&&T.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:g,x:t.x,y:t.y,data:x}))return null;",
+					"patched": "if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,g,t.x,t.y,x,t.clearance,n&&n.copiedStructure))return null;if((0,_.Im)(e,g)&&T.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:g,x:t.x,y:t.y,data:x}))return null;",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "if((0,F.Im)(e,p)&&M.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:p,x:t.x,y:t.y,data:v}))return null;",
 					"patched": "if(window.SandTogether&&window.SandTogether._place&&window.SandTogether._place(e,p,t.x,t.y,v,t.clearance,n&&n.copiedStructure))return null;if((0,F.Im)(e,p)&&M.FH.hooks.runInterceptorsSafe(e,\"building:place\",{structureId:p,x:t.x,y:t.y,data:v}))return null;"
@@ -128,6 +144,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "e.store.projectiles.push(u)",
+					"patched": "(window.SandTogether&&window.SandTogether._proj&&window.SandTogether._proj(e,u),e.store.projectiles.push(u))",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "e.store.projectiles.push(f)",
 					"patched": "(window.SandTogether&&window.SandTogether._proj&&window.SandTogether._proj(e,f),e.store.projectiles.push(f))"
 				}
@@ -137,6 +158,11 @@
 			"name": "grabber host-side hook (_grab)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "H=(e,t)=>{var n,l,h,g,y,x,k,C;let S=e.session;const M=t.data.matrix;let T=M[1];",
+					"patched": "H=(e,t)=>{if(window.SandTogether&&window.SandTogether._grab&&window.SandTogether._grab(e,t))return;var n,l,h,g,y,x,k,C;let S=e.session;const M=t.data.matrix;let T=M[1];",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "z=(e,t)=>{var n,l,p,g,U,x,k,S;let C=e.session;const M=t.data.matrix;let E=M[1];",
 					"patched": "z=(e,t)=>{if(window.SandTogether&&window.SandTogether._grab&&window.SandTogether._grab(e,t))return;var n,l,p,g,U,x,k,S;let C=e.session;const M=t.data.matrix;let E=M[1];"
@@ -163,6 +189,11 @@
 		{
 			"name": "vacuum hook (j)",
 			"variants": [
+				{
+					"anchor": "D=(e,t,n,r,o=(0,U.iV)())=>{var i;const s=S(e);I(t,s);const d=t.data.tanks,",
+					"patched": "D=(e,t,n,r,o=(0,U.iV)())=>{if(window.SandTogether&&window.SandTogether._vac&&window.SandTogether._vac(e,t,n,r))return;var i;const s=S(e);I(t,s);const d=t.data.tanks,",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "N=(e,t,n,r,o=(0,b.iV)())=>{var a;const s=C(e);j(t,s);const d=t.data.tanks,",
 					"patched": "N=(e,t,n,r,o=(0,b.iV)())=>{if(window.SandTogether&&window.SandTogether._vac&&window.SandTogether._vac(e,t,n,r))return;var a;const s=C(e);j(t,s);const d=t.data.tanks,"
@@ -194,6 +225,11 @@
 			"name": "player-dig flag (I)",
 			"variants": [
 				{
+					"anchor": "W=(e,t,n,r,i)=>{const a=(0,w.uN)(e,e.store.upgrades.shovel.size.level>0?\"shovelLarge\":\"shovel\",o.Np.Shovel,\"tool\",n,r);return(0,d.DN)(e,n,r,a.pattern,i,a.power,a.options,a.terrainRules),a}",
+					"patched": "W=(e,t,n,r,i)=>{window.SandTogether&&(window.SandTogether._pd=1);try{const a=(0,w.uN)(e,e.store.upgrades.shovel.size.level>0?\"shovelLarge\":\"shovel\",o.Np.Shovel,\"tool\",n,r);return(0,d.DN)(e,n,r,a.pattern,i,a.power,a.options,a.terrainRules),a}finally{window.SandTogether&&(window.SandTogether._pd=0)}}",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "F=(e,t,n,r,a)=>{const i=(0,w.uN)(e,e.store.upgrades.shovel.size.level>0?\"shovelLarge\":\"shovel\",o.Np.Shovel,\"tool\",n,r);(0,d.DN)(e,n,r,i.pattern,a,i.power,i.options,i.terrainRules)}",
 					"patched": "F=(e,t,n,r,a)=>{window.SandTogether&&(window.SandTogether._pd=1);try{const i=(0,w.uN)(e,e.store.upgrades.shovel.size.level>0?\"shovelLarge\":\"shovel\",o.Np.Shovel,\"tool\",n,r);(0,d.DN)(e,n,r,i.pattern,a,i.power,i.options,i.terrainRules)}finally{window.SandTogether&&(window.SandTogether._pd=0)}}"
 				},
@@ -220,6 +256,11 @@
 			"name": "projectile-update flag (m)",
 			"variants": [
 				{
+					"anchor": "U=(e,t)=>e.store.projectiles.forEach(n=>(0,i.Hm)(e,n,t)),",
+					"patched": "U=(e,t)=>{window.SandTogether&&(window.SandTogether._projCtx=1);try{e.store.projectiles.forEach(n=>(0,i.Hm)(e,n,t))}finally{window.SandTogether&&(window.SandTogether._projCtx=0)}},",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "p=(e,t)=>e.store.projectiles.forEach(n=>(0,a.Hm)(e,n,t)),",
 					"patched": "p=(e,t)=>{window.SandTogether&&(window.SandTogether._projCtx=1);try{e.store.projectiles.forEach(n=>(0,a.Hm)(e,n,t))}finally{window.SandTogether&&(window.SandTogether._projCtx=0)}},"
 				},
@@ -245,6 +286,11 @@
 		{
 			"name": "spray flag (_)",
 			"variants": [
+				{
+					"anchor": "X=(e,t)=>{let n=s.A.getGunArmAxis(e.store.player),o=s.A.getAngle(n,e.session.input.mouse.worldPosition),i=s.A.getPointFromAngleAndDistance(n,o,6*r.A.cellSize);",
+					"patched": "X=(e,t)=>{window.SandTogether&&window.SandTogether._sprayFlag&&window.SandTogether._sprayFlag();let n=s.A.getGunArmAxis(e.store.player),o=s.A.getAngle(n,e.session.input.mouse.worldPosition),i=s.A.getPointFromAngleAndDistance(n,o,6*r.A.cellSize);",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "R=(e,t)=>{let n=s.A.getGunArmAxis(e.store.player),o=s.A.getAngle(n,e.session.input.mouse.worldPosition),a=s.A.getPointFromAngleAndDistance(n,o,6*r.A.cellSize);",
 					"patched": "R=(e,t)=>{window.SandTogether&&window.SandTogether._sprayFlag&&window.SandTogether._sprayFlag();let n=s.A.getGunArmAxis(e.store.player),o=s.A.getAngle(n,e.session.input.mouse.worldPosition),a=s.A.getPointFromAngleAndDistance(n,o,6*r.A.cellSize);"
@@ -273,6 +319,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "C=(e,t,n,i,a=0)=>{if(t<0||n<0||t>=e.store.world.size.width||n>=e.store.world.size.height)return;",
+					"patched": "C=(e,t,n,i,a=0)=>{if(window.SandTogether&&window.SandTogether._fire&&window.SandTogether._fire(e,t,n,i,a))return;if(t<0||n<0||t>=e.store.world.size.width||n>=e.store.world.size.height)return;",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "S=(e,t,n,a,i=0)=>{if(t<0||n<0||t>=e.store.world.size.width||n>=e.store.world.size.height)return;",
 					"patched": "S=(e,t,n,a,i=0)=>{if(window.SandTogether&&window.SandTogether._fire&&window.SandTogether._fire(e,t,n,a,i))return;if(t<0||n<0||t>=e.store.world.size.width||n>=e.store.world.size.height)return;"
 				},
@@ -296,6 +347,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "x={x:Math.cos(U)*y,y:Math.sin(U)*y};(0,p.Lu)(e,s,l,e=>{if(!(0,u.lV)(e,s,l))return",
+					"patched": "x={x:Math.cos(U)*y,y:Math.sin(U)*y};window.SandTogether&&window.SandTogether._cryo&&window.SandTogether._cryo(e,s,l,x),(0,p.Lu)(e,s,l,e=>{if(!(0,u.lV)(e,s,l))return",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "x={x:Math.cos(b)*U,y:Math.sin(b)*U};(0,h.Lu)(e,s,l,e=>{if(!(0,u.lV)(e,s,l))return",
 					"patched": "x={x:Math.cos(b)*U,y:Math.sin(b)*U};window.SandTogether&&window.SandTogether._cryo&&window.SandTogether._cryo(e,s,l,x),(0,h.Lu)(e,s,l,e=>{if(!(0,u.lV)(e,s,l))return",
 					"note": "game 0.5.5 (build 30.08.2026, alias se)"
@@ -314,6 +370,11 @@
 			"name": "demolisher area hook (_demol)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "try{let{start:t,end:n}=Q(e);const i=U.FH.action.getSelected(e)",
+					"patched": "try{let{start:t,end:n}=Q(e);if(window.SandTogether&&window.SandTogether._demol&&window.SandTogether._demol(e,t,n)){r.action.customData=null;return}const i=U.FH.action.getSelected(e)",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "try{let{start:t,end:n}=$(e);const a=b.FH.action.getSelected(e)",
 					"patched": "try{let{start:t,end:n}=$(e);if(window.SandTogether&&window.SandTogether._demol&&window.SandTogether._demol(e,t,n)){r.action.customData=null;return}const a=b.FH.action.getSelected(e)"
@@ -342,6 +403,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "(0,b.Lu)(e,y,w,e=>{if(!m.on.isCellEmpty(e.shared.sim,y,w))return;const t=(0,a.n)(o.RJ.Residue,y,w)",
+					"patched": "(window.SandTogether&&window.SandTogether._shakeRes&&window.SandTogether._shakeRes(e,y,w),0,b.Lu)(e,y,w,e=>{if(!m.on.isCellEmpty(e.shared.sim,y,w))return;const t=(0,a.n)(o.RJ.Residue,y,w)",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "(0,y.Lu)(e,U,w,e=>{if(!m.on.isCellEmpty(e.shared.sim,U,w))return;const t=(0,i.n)(o.RJ.Residue,U,w)",
 					"patched": "(window.SandTogether&&window.SandTogether._shakeRes&&window.SandTogether._shakeRes(e,U,w),0,y.Lu)(e,U,w,e=>{if(!m.on.isCellEmpty(e.shared.sim,U,w))return;const t=(0,i.n)(o.RJ.Residue,U,w)"
 				},
@@ -365,6 +431,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "p=o,m=a;(0,Mt.Lu)(e,p,m,e=>{se.FH.world.isCellEmpty(e,p,m)&&se.FH.elements.createAt(e,p,m,D.RJ.Lava",
+					"patched": "p=o,m=a;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,p,m,f),(0,Mt.Lu)(e,p,m,e=>{se.FH.world.isCellEmpty(e,p,m)&&se.FH.elements.createAt(e,p,m,D.RJ.Lava",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "h=o,m=i;(0,St.Lu)(e,h,m,e=>{se.FH.world.isCellEmpty(e,h,m)&&se.FH.elements.createAt(e,h,m,N.RJ.Lava",
 					"patched": "h=o,m=i;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,h,m,f),(0,St.Lu)(e,h,m,e=>{se.FH.world.isCellEmpty(e,h,m)&&se.FH.elements.createAt(e,h,m,N.RJ.Lava"
 				},
@@ -387,6 +458,11 @@
 			"name": "caulkBlaster spray hook (_caulk)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "f=r,p=o;(0,Mt.Lu)(e,f,p,e=>{se.FH.world.isCellEmpty(e,f,p)&&se.FH.elements.createAt(e,f,p,tp.caulkElementType",
+					"patched": "f=r,p=o;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,p,u),(0,Mt.Lu)(e,f,p,e=>{se.FH.world.isCellEmpty(e,f,p)&&se.FH.elements.createAt(e,f,p,tp.caulkElementType",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "f=r,h=o;(0,St.Lu)(e,f,h,e=>{se.FH.world.isCellEmpty(e,f,h)&&se.FH.elements.createAt(e,f,h,xf.caulkElementType",
 					"patched": "f=r,h=o;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,h,u),(0,St.Lu)(e,f,h,e=>{se.FH.world.isCellEmpty(e,f,h)&&se.FH.elements.createAt(e,f,h,xf.caulkElementType"
@@ -415,6 +491,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "const a=t,s=n,l=r;return(0,Mt.Lu)(e,a,s,e=>{se.FH.elements.getResolvedTypeAtPos(e,a,s)!==l?",
+					"patched": "const a=t,s=n,l=r;return window.SandTogether&&window.SandTogether._caulkRm&&window.SandTogether._caulkRm(e,a,s),(0,Mt.Lu)(e,a,s,e=>{se.FH.elements.getResolvedTypeAtPos(e,a,s)!==l?",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "const i=t,s=n,l=r;return(0,St.Lu)(e,i,s,e=>{se.FH.elements.getResolvedTypeAtPos(e,i,s)!==l?",
 					"patched": "const i=t,s=n,l=r;return window.SandTogether&&window.SandTogether._caulkRm&&window.SandTogether._caulkRm(e,i,s),(0,St.Lu)(e,i,s,e=>{se.FH.elements.getResolvedTypeAtPos(e,i,s)!==l?"
 				},
@@ -438,6 +519,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "Q=e=>{const t=e.session.action.customData.pos;return(0,s.GO)(t.start.x,t.start.y,t.end.x,t.end.y)}}",
+					"patched": "Q=e=>{const t=e.session.action.customData.pos;return(0,s.GO)(t.start.x,t.start.y,t.end.x,t.end.y)};window.SandTogether&&(window.SandTogether._pipeZn=m.Zn,window.SandTogether._areaL=Y)}",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "$=e=>{const t=e.session.action.customData.pos;return(0,s.GO)(t.start.x,t.start.y,t.end.x,t.end.y)}}",
 					"patched": "$=e=>{const t=e.session.action.customData.pos;return(0,s.GO)(t.start.x,t.start.y,t.end.x,t.end.y)};window.SandTogether&&(window.SandTogether._pipeZn=m.Zn,window.SandTogether._areaL=z)}"
 				},
@@ -460,6 +546,11 @@
 			"name": "tech module export (_techMod)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>$,",
+					"patched": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>$,});window.SandTogether&&(window.SandTogether._techMod=t);n.d(t,{",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>D,",
 					"patched": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>D,});window.SandTogether&&(window.SandTogether._techMod=t);n.d(t,{"
@@ -497,6 +588,11 @@
 			"name": "mutation-queue drop (Lu)",
 			"variants": [
 				{
+					"anchor": "function m(e,t,n,r){o.push({x:t,y:n,apply:r}),s.add(p(t,n))}function h(e){i.push(e)}",
+					"patched": "function m(e,t,n,r){if(window.SandTogether&&window.SandTogether._dropLu&&window.SandTogether._dropLu())return;o.push({x:t,y:n,apply:r}),s.add(p(t,n))}function h(e){if(window.SandTogether&&window.SandTogether._dropLu&&window.SandTogether._dropLu())return;i.push(e)}",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "function m(e,t,n,r){o.push({x:t,y:n,apply:r}),s.add(h(t,n))}function p(e){a.push(e)}",
 					"patched": "function m(e,t,n,r){if(window.SandTogether&&window.SandTogether._dropLu&&window.SandTogether._dropLu())return;o.push({x:t,y:n,apply:r}),s.add(h(t,n))}function p(e){if(window.SandTogether&&window.SandTogether._dropLu&&window.SandTogether._dropLu())return;a.push(e)}"
 				},
@@ -524,6 +620,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "z=(e,t)=>{if(!(0,g.ml)(e))",
+					"patched": "z=(e,t)=>{if(window.SandTogether&&window.SandTogether._vacRel&&window.SandTogether._vacRel(e,t))return;if(!(0,g.ml)(e))",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "D=(e,t)=>{if(!(0,g.ml)(e))",
 					"patched": "D=(e,t)=>{if(window.SandTogether&&window.SandTogether._vacRel&&window.SandTogether._vacRel(e,t))return;if(!(0,g.ml)(e))"
 				},
@@ -546,6 +647,11 @@
 			"name": "corraller capture target (__capX)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "r.captureProgress=n;const o=b-r.x,i=v-r.y,l=Math.sqrt(o*o+i*i);if(n>=1||l<16){ii(e,r);continue}",
+					"patched": "r.captureProgress=n;const _cx=(r.__capX!=null?r.__capX:b),_cy=(r.__capY!=null?r.__capY:v);const o=_cx-r.x,i=_cy-r.y,l=Math.sqrt(o*o+i*i);if(n>=1||l<16){if(!(window.SandTogether&&SandTogether._entNoSpawn&&SandTogether._entNoSpawn())){ii(e,r);}continue}",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "r.captureProgress=n;const o=b-r.x,a=y-r.y,s=Math.sqrt(o*o+a*a);if(n>=1||s<16){$p(e,r);continue}",
 					"patched": "r.captureProgress=n;const _cx=(r.__capX!=null?r.__capX:b),_cy=(r.__capY!=null?r.__capY:y);const o=_cx-r.x,a=_cy-r.y,s=Math.sqrt(o*o+a*a);if(n>=1||s<16){if(!(window.SandTogether&&SandTogether._entNoSpawn&&SandTogether._entNoSpawn())){$p(e,r);}continue}"
@@ -574,6 +680,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "r.nextId=void 0}const i=Eo(e),a=Io(e);a.clear();",
+					"patched": "r.nextId=void 0}window.SandTogether&&(window.SandTogether._entInit=(t2)=>{Io(e).set(t2.id,t2);const o2=Dr.get(t2.type);o2&&(o2.onInit(t2),Lo(t2),void 0===t2.ghostTimer&&(t2.ghostTimer=0),ni(e,t2,o2),ri(e,t2,o2))},window.SandTogether._entDrop=(t2)=>{oi(e,t2)||(void 0!==t2.lightIndex&&(se.FH.effects.removeLight(e,t2.lightIndex),t2.lightIndex=void 0),(0,Ir.GA)(e,Pr,t2.id),Oo(e,t2.id),Io(e).delete(t2.id))});const i=Eo(e),a=Io(e);a.clear();",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "}const a=Ep(e);let i=0;for(let t=0;t<a.length;t++){const n=a[t];n.id>i&&(i=n.id);",
 					"patched": "}window.SandTogether&&(window.SandTogether._entInit=(t2)=>{const o2=op.get(t2.type);o2&&(o2.onInit(t2),Fp(t2),void 0===t2.ghostTimer&&(t2.ghostTimer=0),Np(e,t2,o2),Dp(e,t2,o2))},window.SandTogether._entDrop=(t2)=>Lp(e,t2));const a=Ep(e);let i=0;for(let t=0;t<a.length;t++){const n=a[t];n.id>i&&(i=n.id);"
 				},
@@ -597,6 +708,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "Qo=(e,t,n,r)=>{const o=Dr.get(t);if(!o)return null;",
+					"patched": "Qo=(e,t,n,r)=>{if(window.SandTogether&&window.SandTogether._entNoSpawn&&window.SandTogether._entNoSpawn())return null;const o=Dr.get(t);if(!o)return null;",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "Dp=(e,t,n,r)=>{const o=ip.get(t);if(!o)return null;",
 					"patched": "Dp=(e,t,n,r)=>{if(window.SandTogether&&window.SandTogether._entNoSpawn&&window.SandTogether._entNoSpawn())return null;const o=ip.get(t);if(!o)return null;"
 				},
@@ -619,6 +735,11 @@
 			"name": "corraller release diag (call/noAvail)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "const r=t[n];if(!r||r.available<=0)return!1;const o=wt.A.getGunArmAxis(e.store.player)",
+					"patched": "const r=t[n];window.SandTogether&&(SandTogether._rlCall=(SandTogether._rlCall||0)+1);if(!r||r.available<=0){window.SandTogether&&(SandTogether._rlNoAvail=(SandTogether._rlNoAvail||0)+1);return!1}const o=wt.A.getGunArmAxis(e.store.player)",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "const r=t[n];if(!r||r.available<=0)return!1;const o=xt.A.getGunArmAxis(e.store.player)",
 					"patched": "const r=t[n];window.SandTogether&&(SandTogether._rlCall=(SandTogether._rlCall||0)+1);if(!r||r.available<=0){window.SandTogether&&(SandTogether._rlNoAvail=(SandTogether._rlNoAvail||0)+1);return!1}const o=xt.A.getGunArmAxis(e.store.player)"
@@ -668,6 +789,11 @@
 			"name": "undo module export (_undoState)",
 			"variants": [
 				{
+					"anchor": "Hf={id:\"undo\",onInit:e=>{",
+					"patched": "Hf={id:\"undo\",onInit:e=>{window.SandTogether&&(window.SandTogether._undoState=Ff);",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "{id:\"undo\",onInit:e=>{",
 					"patched": "{id:\"undo\",onInit:e=>{window.SandTogether&&(window.SandTogether._undoState=of);"
 				},
@@ -681,6 +807,11 @@
 			"name": "build preview export (_bpPos/_drawStruct)",
 			"variants": [
 				{
+					"anchor": "const J=_.positions,Z=e.session.rendering.overlayContext;",
+					"patched": "const J=_.positions;window.SandTogether&&(window.SandTogether._bpPos=J,window.SandTogether._bpT=performance.now(),window.SandTogether._bpColor=Y,window.SandTogether._drawStruct=f.gJ,window.SandTogether._drawBridge=f.ky);const Z=e.session.rendering.overlayContext;",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "const m=c.positions,p=e.session.rendering.overlayContext;",
 					"patched": "const m=c.positions;window.SandTogether&&(window.SandTogether._bpPos=m,window.SandTogether._bpT=performance.now(),window.SandTogether._bpColor=(c&&c.color)!=null?c.color:null,window.SandTogether._drawStruct=i.gJ,window.SandTogether._drawBridge=i.ky);const p=e.session.rendering.overlayContext;"
 				}
@@ -689,6 +820,11 @@
 		{
 			"name": "build preview export - single place (_bpPos/_drawStruct)",
 			"variants": [
+				{
+					"anchor": "if(J.globalAlpha=.6,\"singleDirectional\"===Z.type)X(e,j,G.x,G.y,Y);",
+					"patched": "if(J.globalAlpha=.6,window.SandTogether&&(window.SandTogether._drawStruct=f.gJ,window.SandTogether._bpPos=[{x:G.x,y:G.y,structureType:Q.structureType,color:Y}],window.SandTogether._bpColor=Y,window.SandTogether._bpT=performance.now()),\"singleDirectional\"===Z.type)X(e,j,G.x,G.y,Y);",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "h.globalAlpha=.6,\"singleDirectional\"===m.type?Q(e,l,u.x,u.y,f):(0,i.gJ)(e,{type:U?\"quantumPortalExit\":p.structureType,x:u.x,y:u.y,color:f},{ctx:h,placing:!0})",
 					"patched": "h.globalAlpha=.6,window.SandTogether&&(window.SandTogether._drawStruct=i.gJ,window.SandTogether._bpPos=[{x:u.x,y:u.y,structureType:p.structureType,color:f}],window.SandTogether._bpColor=f,window.SandTogether._bpT=performance.now()),\"singleDirectional\"===m.type?Q(e,l,u.x,u.y,f):(0,i.gJ)(e,{type:U?\"quantumPortalExit\":p.structureType,x:u.x,y:u.y,color:f},{ctx:h,placing:!0})"
@@ -703,6 +839,11 @@
 			"name": "build direction arrow export (_bpArw)",
 			"variants": [
 				{
+					"anchor": "ReverseBuildDirection)&&(n=n>0?n-180:n+180);const i=r.A.cellSize*r.A.snapGridCellSize,a=null!==(v=null==re?void 0:re.sizeRatio)",
+					"patched": "ReverseBuildDirection)&&(n=n>0?n-180:n+180);window.SandTogether&&(window.SandTogether._bpArw={x:_.endPosition.x,y:_.endPosition.y,a:n,t:performance.now()});const i=r.A.cellSize*r.A.snapGridCellSize,a=null!==(v=null==re?void 0:re.sizeRatio)",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "ReverseBuildDirection)&&(n=n>0?n-180:n+180);const o=r.A.cellSize*r.A.snapGridCellSize,i=\"clearingFrameRight\"===l",
 					"patched": "ReverseBuildDirection)&&(n=n>0?n-180:n+180);window.SandTogether&&(window.SandTogether._bpArw={x:c.endPosition.x,y:c.endPosition.y,a:n,t:performance.now()});const o=r.A.cellSize*r.A.snapGridCellSize,i=\"clearingFrameRight\"===l"
 				},
@@ -716,6 +857,11 @@
 			"name": "select/copy preview export (_bpPos)",
 			"variants": [
 				{
+					"anchor": "selectedStructures.forEach(t=>{var n,o,d;let u;u=e.session.action.customData.mode===i.cl.Selected&&e.session.action.customData.start?{x:e.session.action.customData.start.x+t.x,y:e.session.action.customData.start.y+t.y}:{x:s.x+t.x-Math.floor(e.session.action.customData.mouseOffset.x/r.A.snapGridCellSize)*r.A.snapGridCellSize,y:s.y+t.y-Math.floor(e.session.action.customData.mouseOffset.y/r.A.snapGridCellSize)*r.A.snapGridCellSize},u.x=Math.floor(u.x/r.A.snapGridCellSize)*r.A.snapGridCellSize,u.y=Math.floor(u.y/r.A.snapGridCellSize)*r.A.snapGridCellSize;",
+					"patched": "selectedStructures.forEach((t,__stI)=>{var n,o,d;let u;u=e.session.action.customData.mode===i.cl.Selected&&e.session.action.customData.start?{x:e.session.action.customData.start.x+t.x,y:e.session.action.customData.start.y+t.y}:{x:s.x+t.x-Math.floor(e.session.action.customData.mouseOffset.x/r.A.snapGridCellSize)*r.A.snapGridCellSize,y:s.y+t.y-Math.floor(e.session.action.customData.mouseOffset.y/r.A.snapGridCellSize)*r.A.snapGridCellSize},u.x=Math.floor(u.x/r.A.snapGridCellSize)*r.A.snapGridCellSize,u.y=Math.floor(u.y/r.A.snapGridCellSize)*r.A.snapGridCellSize;if(window.SandTogether){const S=window.SandTogether;if(__stI===0){S._bpSelSkip=e.session.action.customData.mode===i.cl.Selected;if(S._bpSelSkip)S._bpT=0;else S._bpSelA=[];}if(!S._bpSelSkip){if(S._bpSelA&&S._bpSelA.length<200000)S._bpSelA.push({x:u.x,y:u.y,structureType:t.type,color:t.color});S._bpPos=S._bpSelA;S._bpT=performance.now();S._drawStruct=a.gJ;}}",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "selectedStructures.forEach(t=>{var n,o,d;let u;u=e.session.action.customData.mode===a.cl.Selected&&e.session.action.customData.start?{x:e.session.action.customData.start.x+t.x,y:e.session.action.customData.start.y+t.y}:{x:s.x+t.x-Math.floor(e.session.action.customData.mouseOffset.x/r.A.snapGridCellSize)*r.A.snapGridCellSize,y:s.y+t.y-Math.floor(e.session.action.customData.mouseOffset.y/r.A.snapGridCellSize)*r.A.snapGridCellSize},u.x=Math.floor(u.x/r.A.snapGridCellSize)*r.A.snapGridCellSize,u.y=Math.floor(u.y/r.A.snapGridCellSize)*r.A.snapGridCellSize;",
 					"patched": "selectedStructures.forEach((t,__stI)=>{var n,o,d;let u;u=e.session.action.customData.mode===a.cl.Selected&&e.session.action.customData.start?{x:e.session.action.customData.start.x+t.x,y:e.session.action.customData.start.y+t.y}:{x:s.x+t.x-Math.floor(e.session.action.customData.mouseOffset.x/r.A.snapGridCellSize)*r.A.snapGridCellSize,y:s.y+t.y-Math.floor(e.session.action.customData.mouseOffset.y/r.A.snapGridCellSize)*r.A.snapGridCellSize},u.x=Math.floor(u.x/r.A.snapGridCellSize)*r.A.snapGridCellSize,u.y=Math.floor(u.y/r.A.snapGridCellSize)*r.A.snapGridCellSize;if(window.SandTogether){const S=window.SandTogether;if(__stI===0){S._bpSelSkip=e.session.action.customData.mode===a.cl.Selected;if(S._bpSelSkip)S._bpT=0;else S._bpSelA=[];}if(!S._bpSelSkip){if(S._bpSelA&&S._bpSelA.length<200000)S._bpSelA.push({x:u.x,y:u.y,structureType:t.type,color:t.color});S._bpPos=S._bpSelA;S._bpT=performance.now();S._drawStruct=i.gJ;}}"
 				},
@@ -728,6 +874,11 @@
 		{
 			"name": "selection marquee export (_bpSelRect)",
 			"variants": [
+				{
+					"anchor": "const l=ie(e,o*r.A.cellSize,i*r.A.cellSize),c=l.x,d=l.y,u=ie(e,a*r.A.cellSize,s*r.A.cellSize),f=e.session.rendering.overlayContext;f.save(),f.lineWidth=2,f.strokeStyle=\"rgb(0, 204, 255)\"",
+					"patched": "window.SandTogether&&(window.SandTogether._bpSelRect={x0:o,y0:i,x1:a,y1:s,t:performance.now()});const l=ie(e,o*r.A.cellSize,i*r.A.cellSize),c=l.x,d=l.y,u=ie(e,a*r.A.cellSize,s*r.A.cellSize),f=e.session.rendering.overlayContext;f.save(),f.lineWidth=2,f.strokeStyle=\"rgb(0, 204, 255)\"",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "const l=je(e,o*r.A.cellSize,a*r.A.cellSize),c=l.x,d=l.y,u=je(e,i*r.A.cellSize,s*r.A.cellSize),f=e.session.rendering.overlayContext;f.save(),f.lineWidth=2,f.strokeStyle=\"rgb(0, 204, 255)\"",
 					"patched": "window.SandTogether&&(window.SandTogether._bpSelRect={x0:o,y0:a,x1:i,y1:s,t:performance.now()});const l=je(e,o*r.A.cellSize,a*r.A.cellSize),c=l.x,d=l.y,u=je(e,i*r.A.cellSize,s*r.A.cellSize),f=e.session.rendering.overlayContext;f.save(),f.lineWidth=2,f.strokeStyle=\"rgb(0, 204, 255)\""
@@ -743,6 +894,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "let N=null,_=null,D=null;const z=[],L=[],H={x:0,y:0};",
+					"patched": "let N=null,_=null,D=null;const z=[],L=[],H={x:0,y:0};window.SandTogether&&(window.SandTogether._movePreviewQ=z);",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "let B=null,I=null,F=null;const P=[],O=[],R={x:0,y:0};",
 					"patched": "let B=null,I=null,F=null;const P=[],O=[],R={x:0,y:0};window.SandTogether&&(window.SandTogether._movePreviewQ=P);"
 				}
@@ -752,6 +908,11 @@
 			"name": "flame burn light export (_flame)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "case D.dD.FlameBurn:(0,vt.sz)(t,n.data[1]*_.A.cellSize,n.data[2]*_.A.cellSize,Ma);break;case D.dD.FlameBurnBatch:{const e=n.data[1],r=e.length;for(let n=0;n<r;n+=2)(0,vt.sz)(t,e[n]*_.A.cellSize,e[n+1]*_.A.cellSize,Ma);break}",
+					"patched": "case D.dD.FlameBurn:(window.SandTogether&&window.SandTogether._flame&&window.SandTogether._flame(n.data[1],n.data[2]),(0,vt.sz)(t,n.data[1]*_.A.cellSize,n.data[2]*_.A.cellSize,Ma));break;case D.dD.FlameBurnBatch:{const e=n.data[1],r=e.length;window.SandTogether&&window.SandTogether._flameB&&window.SandTogether._flameB(e);for(let n=0;n<r;n+=2)(0,vt.sz)(t,e[n]*_.A.cellSize,e[n+1]*_.A.cellSize,Ma);break}",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "case N.dD.FlameBurn:(0,bt.sz)(t,n.data[1]*_.A.cellSize,n.data[2]*_.A.cellSize,Ui);break;case N.dD.FlameBurnBatch:{const e=n.data[1],r=e.length;for(let n=0;n<r;n+=2)(0,bt.sz)(t,e[n]*_.A.cellSize,e[n+1]*_.A.cellSize,Ui);break}",
 					"patched": "case N.dD.FlameBurn:(window.SandTogether&&window.SandTogether._flame&&window.SandTogether._flame(n.data[1],n.data[2]),(0,bt.sz)(t,n.data[1]*_.A.cellSize,n.data[2]*_.A.cellSize,Ui));break;case N.dD.FlameBurnBatch:{const e=n.data[1],r=e.length;window.SandTogether&&window.SandTogether._flameB&&window.SandTogether._flameB(e);for(let n=0;n<r;n+=2)(0,bt.sz)(t,e[n]*_.A.cellSize,e[n+1]*_.A.cellSize,Ui);break}"
@@ -763,6 +924,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "const m=e=>{switch(e){case a.Ag.Bullet:return\"bullet\";case a.Ag.Rocket:return\"rocket\";case a.Ag.Digger:return\"digger\";default:return null}}",
+					"patched": "const m=e=>{switch(e){case a.Ag.Bullet:return\"bullet\";case a.Ag.Rocket:return\"rocket\";case a.Ag.Digger:return\"digger\";default:return null}},__stSpr=(window.SandTogether&&(window.SandTogether._projSprite=m,window.SandTogether._sprAdd=c.P9,window.SandTogether._sprDel=c.GA),0)",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "const u=e=>{switch(e){case i.Ag.Bullet:return\"bullet\";case i.Ag.Rocket:return\"rocket\";case i.Ag.Digger:return\"digger\";default:return null}}",
 					"patched": "const u=e=>{switch(e){case i.Ag.Bullet:return\"bullet\";case i.Ag.Rocket:return\"rocket\";case i.Ag.Digger:return\"digger\";default:return null}},__stSpr=(window.SandTogether&&(window.SandTogether._projSprite=u,window.SandTogether._sprAdd=c.P9,window.SandTogether._sprDel=c.GA),0)"
 				}
@@ -772,6 +938,11 @@
 			"name": "simulation light export (_addLight)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "case D.dD.AddLight:(0,vt.sz)(t,n.data[1],n.data[2],n.data[3]);break;case D.dD.AddLightBatch:{const e=n.data[1],r=e.length;for(let n=0;n<r;n+=3)(0,vt.sz)(t,e[n],e[n+1],e[n+2]);break}",
+					"patched": "case D.dD.AddLight:(window.SandTogether&&window.SandTogether._addLight&&window.SandTogether._addLight(n.data[1],n.data[2],n.data[3]),(0,vt.sz)(t,n.data[1],n.data[2],n.data[3]));break;case D.dD.AddLightBatch:{const e=n.data[1],r=e.length;window.SandTogether&&window.SandTogether._addLightB&&window.SandTogether._addLightB(e);for(let n=0;n<r;n+=3)(0,vt.sz)(t,e[n],e[n+1],e[n+2]);break}",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "case N.dD.AddLight:(0,bt.sz)(t,n.data[1],n.data[2],n.data[3]);break;case N.dD.AddLightBatch:{const e=n.data[1],r=e.length;for(let n=0;n<r;n+=3)(0,bt.sz)(t,e[n],e[n+1],e[n+2]);break}",
 					"patched": "case N.dD.AddLight:(window.SandTogether&&window.SandTogether._addLight&&window.SandTogether._addLight(n.data[1],n.data[2],n.data[3]),(0,bt.sz)(t,n.data[1],n.data[2],n.data[3]));break;case N.dD.AddLightBatch:{const e=n.data[1],r=e.length;window.SandTogether&&window.SandTogether._addLightB&&window.SandTogether._addLightB(e);for(let n=0;n<r;n+=3)(0,bt.sz)(t,e[n],e[n+1],e[n+2]);break}"
@@ -783,6 +954,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": ",Se=(e,t)=>{if(e.type!==t.type)return!1;const n=i.A.snapGridCellSize,r=t.x-e.x,o=t.y-e.y;if(Math.abs(r)+Math.abs(o)!==n)return!1;const a=le(r,o),s=le(-r,-o),l=oe(e),c=oe(t),d=0===(l.pipeConnectionMask&a)||0===(c.pipeConnectionMask&s);return l.pipeConnectionMask|=a,c.pipeConnectionMask|=s,d}",
+					"patched": ",Se=(e,t)=>{if(e.type!==t.type)return!1;const n=i.A.snapGridCellSize,r=t.x-e.x,o=t.y-e.y;if(Math.abs(r)+Math.abs(o)!==n)return!1;const a=le(r,o),s=le(-r,-o),l=oe(e),c=oe(t),d=0===(l.pipeConnectionMask&a)||0===(c.pipeConnectionMask&s);return l.pipeConnectionMask|=a,c.pipeConnectionMask|=s,d},__stPipe=(window.SandTogether&&(window.SandTogether._pipeApi={get connect(){return Se},get refresh(){return Ue},get relink(){return Ne},get at(){return Q},get path(){return Ce},get run(){return Ie},get sprite(){return Z},get isSegment(){return O}}),0)",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": ",K=(e,t)=>{const n=a.A.snapGridCellSize,r=t.x-e.x,o=t.y-e.y;if(Math.abs(r)+Math.abs(o)!==n)return!1;const i=j(r,o),s=j(-r,-o),l=C(e),c=C(t),d=0===(l.pipeConnectionMask&i)||0===(c.pipeConnectionMask&s);return l.pipeConnectionMask|=i,c.pipeConnectionMask|=s,d}",
 					"patched": ",K=(e,t)=>{const n=a.A.snapGridCellSize,r=t.x-e.x,o=t.y-e.y;if(Math.abs(r)+Math.abs(o)!==n)return!1;const i=j(r,o),s=j(-r,-o),l=C(e),c=C(t),d=0===(l.pipeConnectionMask&i)||0===(c.pipeConnectionMask&s);return l.pipeConnectionMask|=i,c.pipeConnectionMask|=s,d},__stPipe=(window.SandTogether&&(window.SandTogether._pipeApi={get connect(){return K},get refresh(){return L},get relink(){return re},get at(){return w},get path(){return q},get run(){return Q},get sprite(){return A}}),0)"
 				}
@@ -792,6 +968,11 @@
 			"name": "pipe drag run export (_pipeRun)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "function Te(e,t,n,r,o,i){var a,s;const l=(0,y.wK)(e,null===(a=i.structureConfig)||void 0===a?void 0:a.structureType);if(l){const t=(0,y.cZ)(e,i.positions,i.startPosition,i.endPosition,n);",
+					"patched": "function Te(e,t,n,r,o,i){var a,s;const l=(0,y.wK)(e,null===(a=i.structureConfig)||void 0===a?void 0:a.structureType);if(l){window.SandTogether&&window.SandTogether._pipeRun&&window.SandTogether._pipeRun(e,i.positions,i.startPosition,i.endPosition,n);const t=(0,y.cZ)(e,i.positions,i.startPosition,i.endPosition,n);",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
 				{
 					"anchor": "function me(e,t,n,r,o,i){var s;const l=(null===(s=i.structureConfig)||void 0===s?void 0:s.structureType)===a.ev.Pipe;if(l){const t=(0,U.cZ)(e,i.positions,i.startPosition,i.endPosition,n);",
 					"patched": "function me(e,t,n,r,o,i){var s;const l=(null===(s=i.structureConfig)||void 0===s?void 0:s.structureType)===a.ev.Pipe;if(l){window.SandTogether&&window.SandTogether._pipeRun&&window.SandTogether._pipeRun(e,i.positions,i.startPosition,i.endPosition,n);const t=(0,U.cZ)(e,i.positions,i.startPosition,i.endPosition,n);"
@@ -803,8 +984,28 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "case D.$V.Delete:return{down:e=>{let t=(0,J.oM)(e);",
+					"patched": "case D.$V.Delete:return{down:e=>{if(window.SandTogether&&window.SandTogether._delSel&&window.SandTogether._delSel(e))return;let t=(0,J.oM)(e);",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
 					"anchor": "case N.$V.Delete:return{down:e=>{let t=(0,J.oM)(e);",
 					"patched": "case N.$V.Delete:return{down:e=>{if(window.SandTogether&&window.SandTogether._delSel&&window.SandTogether._delSel(e))return;let t=(0,J.oM)(e);"
+				}
+			]
+		},
+		{
+			"name": "world item sprite api (_wiApi)",
+			"critical": false,
+			"variants": [
+				{
+					"anchor": "T=(e,t)=>{(0,i.GA)(e,\"worldItems\",t.id),(0,o.s7)(e,t)},E=e=>{e.store.worldItems.forEach(t=>{C(e,t)})},",
+					"patched": "T=(e,t)=>{(0,i.GA)(e,\"worldItems\",t.id),(0,o.s7)(e,t)},E=e=>{e.store.worldItems.forEach(t=>{C(e,t)})},__stWi=(window.SandTogether&&(window.SandTogether._wiApi={make:C,drop:T}),0),",
+					"note": "game 0.6.0 (Update #5, 2026-10-21)"
+				},
+				{
+					"anchor": "y=(e,t)=>{(0,a.GA)(e,\"worldItems\",t.id),(0,o.s7)(e,t)},v=e=>{e.store.worldItems.forEach(t=>{(0,a.P9)(e,\"worldItems\",p[t.type],t.id,t.x,t.y)})},",
+					"patched": "y=(e,t)=>{(0,a.GA)(e,\"worldItems\",t.id),(0,o.s7)(e,t)},v=e=>{e.store.worldItems.forEach(t=>{(0,a.P9)(e,\"worldItems\",p[t.type],t.id,t.x,t.y)})},__stWi=(window.SandTogether&&(window.SandTogether._wiApi={make:(e,t)=>(0,a.P9)(e,\"worldItems\",p[t.type],t.id,t.x,t.y),drop:y}),0),"
 				}
 			]
 		}
