@@ -1,5 +1,6 @@
 {
 	"supportedVersions": [
+		"0.6.1",
 		"0.6.0",
 		"0.5.7",
 		"0.5.6",
@@ -13,6 +14,11 @@
 			"name": "frame hook (state+FH capture)",
 			"critical": true,
 			"variants": [
+				{
+					"anchor": "le.FH.events.emit(e,\"frame:update\",{state:",
+					"patched": "le.FH.events.emit((window.SandTogether&&window.SandTogether._frame&&window.SandTogether._frame(e,le.FH),e),\"frame:update\",{state:",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": "se.FH.events.emit(e,\"frame:update\",{state:",
 					"patched": "se.FH.events.emit((window.SandTogether&&window.SandTogether._frame&&window.SandTogether._frame(e,se.FH),e),\"frame:update\",{state:",
@@ -54,6 +60,11 @@
 		{
 			"name": "setCell hook (Gz)",
 			"variants": [
+				{
+					"anchor": "E=(e,t,n,r,i)=>{m.on.setCellId(e.shared.sim,t,n,r),",
+					"patched": "E=(e,t,n,r,i)=>{if(window.SandTogether&&window.SandTogether._setCell&&window.SandTogether._setCell(e,t,n,r,i))return;m.on.setCellId(e.shared.sim,t,n,r),",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": "I=(e,t,n,r,i)=>{h.on.setCellId(e.shared.sim,t,n,r),",
 					"patched": "I=(e,t,n,r,i)=>{if(window.SandTogether&&window.SandTogether._setCell&&window.SandTogether._setCell(e,t,n,r,i))return;h.on.setCellId(e.shared.sim,t,n,r),",
@@ -125,6 +136,11 @@
 			"name": "drone deploy hook (_drone)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "T=(e,t)=>{e.store.drones.push(t)}",
+					"patched": "T=(e,t)=>{window.SandTogether&&window.SandTogether._drone&&window.SandTogether._drone(e,t);e.store.drones.push(t)}",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": "C=(e,t)=>{e.store.drones.push(t)}",
 					"patched": "C=(e,t)=>{window.SandTogether&&window.SandTogether._drone&&window.SandTogether._drone(e,t);e.store.drones.push(t)}"
@@ -371,6 +387,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "try{let{start:t,end:n}=te(e);const i=b.FH.action.getSelected(e)",
+					"patched": "try{let{start:t,end:n}=te(e);if(window.SandTogether&&window.SandTogether._demol&&window.SandTogether._demol(e,t,n)){r.action.customData=null;return}const i=b.FH.action.getSelected(e)",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "try{let{start:t,end:n}=Q(e);const i=U.FH.action.getSelected(e)",
 					"patched": "try{let{start:t,end:n}=Q(e);if(window.SandTogether&&window.SandTogether._demol&&window.SandTogether._demol(e,t,n)){r.action.customData=null;return}const i=U.FH.action.getSelected(e)",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
@@ -431,6 +452,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "p=o,m=a;(0,Tt.Lu)(e,p,m,e=>{le.FH.world.isCellEmpty(e,p,m)&&le.FH.elements.createAt(e,p,m,D.RJ.Lava",
+					"patched": "p=o,m=a;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,p,m,f),(0,Tt.Lu)(e,p,m,e=>{le.FH.world.isCellEmpty(e,p,m)&&le.FH.elements.createAt(e,p,m,D.RJ.Lava",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "p=o,m=a;(0,Mt.Lu)(e,p,m,e=>{se.FH.world.isCellEmpty(e,p,m)&&se.FH.elements.createAt(e,p,m,D.RJ.Lava",
 					"patched": "p=o,m=a;window.SandTogether&&window.SandTogether._volc&&window.SandTogether._volc(e,p,m,f),(0,Mt.Lu)(e,p,m,e=>{se.FH.world.isCellEmpty(e,p,m)&&se.FH.elements.createAt(e,p,m,D.RJ.Lava",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
@@ -458,6 +484,11 @@
 			"name": "caulkBlaster spray hook (_caulk)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "f=r,p=o;(0,Tt.Lu)(e,f,p,e=>{le.FH.world.isCellEmpty(e,f,p)&&le.FH.elements.createAt(e,f,p,fp.caulkElementType",
+					"patched": "f=r,p=o;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,p,u),(0,Tt.Lu)(e,f,p,e=>{le.FH.world.isCellEmpty(e,f,p)&&le.FH.elements.createAt(e,f,p,fp.caulkElementType",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": "f=r,p=o;(0,Mt.Lu)(e,f,p,e=>{se.FH.world.isCellEmpty(e,f,p)&&se.FH.elements.createAt(e,f,p,tp.caulkElementType",
 					"patched": "f=r,p=o;window.SandTogether&&window.SandTogether._caulk&&window.SandTogether._caulk(e,f,p,u),(0,Mt.Lu)(e,f,p,e=>{se.FH.world.isCellEmpty(e,f,p)&&se.FH.elements.createAt(e,f,p,tp.caulkElementType",
@@ -491,6 +522,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "const a=t,s=n,l=r;return(0,Tt.Lu)(e,a,s,e=>{le.FH.elements.getResolvedTypeAtPos(e,a,s)!==l?",
+					"patched": "const a=t,s=n,l=r;return window.SandTogether&&window.SandTogether._caulkRm&&window.SandTogether._caulkRm(e,a,s),(0,Tt.Lu)(e,a,s,e=>{le.FH.elements.getResolvedTypeAtPos(e,a,s)!==l?",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "const a=t,s=n,l=r;return(0,Mt.Lu)(e,a,s,e=>{se.FH.elements.getResolvedTypeAtPos(e,a,s)!==l?",
 					"patched": "const a=t,s=n,l=r;return window.SandTogether&&window.SandTogether._caulkRm&&window.SandTogether._caulkRm(e,a,s),(0,Mt.Lu)(e,a,s,e=>{se.FH.elements.getResolvedTypeAtPos(e,a,s)!==l?",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
@@ -519,6 +555,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "te=e=>{const t=e.session.action.customData.pos;return(0,l.GO)(t.start.x,t.start.y,t.end.x,t.end.y)}}",
+					"patched": "te=e=>{const t=e.session.action.customData.pos;return(0,l.GO)(t.start.x,t.start.y,t.end.x,t.end.y)};window.SandTogether&&(window.SandTogether._pipeZn=h.Zn,window.SandTogether._areaL=Z)}",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "Q=e=>{const t=e.session.action.customData.pos;return(0,s.GO)(t.start.x,t.start.y,t.end.x,t.end.y)}}",
 					"patched": "Q=e=>{const t=e.session.action.customData.pos;return(0,s.GO)(t.start.x,t.start.y,t.end.x,t.end.y)};window.SandTogether&&(window.SandTogether._pipeZn=m.Zn,window.SandTogether._areaL=Y)}",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
@@ -546,6 +587,11 @@
 			"name": "tech module export (_techMod)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>W,",
+					"patched": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>W,});window.SandTogether&&(window.SandTogether._techMod=t);n.d(t,{",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>$,",
 					"patched": "77135(e,t,n){\"use strict\";n.r(t),n.d(t,{BRANCH_PARENTS:()=>$,});window.SandTogether&&(window.SandTogether._techMod=t);n.d(t,{",
@@ -648,6 +694,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "r.captureProgress=n;const o=b-r.x,i=v-r.y,l=Math.sqrt(o*o+i*i);if(n>=1||l<16){si(e,r);continue}",
+					"patched": "r.captureProgress=n;const _cx=(r.__capX!=null?r.__capX:b),_cy=(r.__capY!=null?r.__capY:v);const o=_cx-r.x,i=_cy-r.y,l=Math.sqrt(o*o+i*i);if(n>=1||l<16){if(!(window.SandTogether&&SandTogether._entNoSpawn&&SandTogether._entNoSpawn())){si(e,r);}continue}",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "r.captureProgress=n;const o=b-r.x,i=v-r.y,l=Math.sqrt(o*o+i*i);if(n>=1||l<16){ii(e,r);continue}",
 					"patched": "r.captureProgress=n;const _cx=(r.__capX!=null?r.__capX:b),_cy=(r.__capY!=null?r.__capY:v);const o=_cx-r.x,i=_cy-r.y,l=Math.sqrt(o*o+i*i);if(n>=1||l<16){if(!(window.SandTogether&&SandTogether._entNoSpawn&&SandTogether._entNoSpawn())){ii(e,r);}continue}",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
@@ -680,6 +731,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "r.nextId=void 0}const i=Fo(e),a=Po(e);a.clear();",
+					"patched": "r.nextId=void 0}window.SandTogether&&(window.SandTogether._entInit=(t2)=>{Po(e).set(t2.id,t2);const o2=Lr.get(t2.type);o2&&(o2.onInit(t2),Oo(t2),void 0===t2.ghostTimer&&(t2.ghostTimer=0),oi(e,t2,o2),ii(e,t2,o2))},window.SandTogether._entDrop=(t2)=>{ai(e,t2)||(void 0!==t2.lightIndex&&(le.FH.effects.removeLight(e,t2.lightIndex),t2.lightIndex=void 0),(0,Fr.GA)(e,jr,t2.id),Wo(e,t2.id),Po(e).delete(t2.id))});const i=Fo(e),a=Po(e);a.clear();",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "r.nextId=void 0}const i=Eo(e),a=Io(e);a.clear();",
 					"patched": "r.nextId=void 0}window.SandTogether&&(window.SandTogether._entInit=(t2)=>{Io(e).set(t2.id,t2);const o2=Dr.get(t2.type);o2&&(o2.onInit(t2),Lo(t2),void 0===t2.ghostTimer&&(t2.ghostTimer=0),ni(e,t2,o2),ri(e,t2,o2))},window.SandTogether._entDrop=(t2)=>{oi(e,t2)||(void 0!==t2.lightIndex&&(se.FH.effects.removeLight(e,t2.lightIndex),t2.lightIndex=void 0),(0,Ir.GA)(e,Pr,t2.id),Oo(e,t2.id),Io(e).delete(t2.id))});const i=Eo(e),a=Io(e);a.clear();",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
@@ -707,6 +763,11 @@
 			"name": "entities spawn gate (_entNoSpawn)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "ti=(e,t,n,r)=>{const o=Lr.get(t);if(!o)return null;",
+					"patched": "ti=(e,t,n,r)=>{if(window.SandTogether&&window.SandTogether._entNoSpawn&&window.SandTogether._entNoSpawn())return null;const o=Lr.get(t);if(!o)return null;",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": "Qo=(e,t,n,r)=>{const o=Dr.get(t);if(!o)return null;",
 					"patched": "Qo=(e,t,n,r)=>{if(window.SandTogether&&window.SandTogether._entNoSpawn&&window.SandTogether._entNoSpawn())return null;const o=Dr.get(t);if(!o)return null;",
@@ -736,6 +797,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "const r=t[n];if(!r||r.available<=0)return!1;const o=kt.A.getGunArmAxis(e.store.player)",
+					"patched": "const r=t[n];window.SandTogether&&(SandTogether._rlCall=(SandTogether._rlCall||0)+1);if(!r||r.available<=0){window.SandTogether&&(SandTogether._rlNoAvail=(SandTogether._rlNoAvail||0)+1);return!1}const o=kt.A.getGunArmAxis(e.store.player)",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "const r=t[n];if(!r||r.available<=0)return!1;const o=wt.A.getGunArmAxis(e.store.player)",
 					"patched": "const r=t[n];window.SandTogether&&(SandTogether._rlCall=(SandTogether._rlCall||0)+1);if(!r||r.available<=0){window.SandTogether&&(SandTogether._rlNoAvail=(SandTogether._rlNoAvail||0)+1);return!1}const o=wt.A.getGunArmAxis(e.store.player)",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
@@ -759,6 +825,11 @@
 			"name": "corraller release diag (noSpot)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "if(!d)return!1;const u=le.FH.entities;",
+					"patched": "if(!d){window.SandTogether&&(SandTogether._rlNoSpot=(SandTogether._rlNoSpot||0)+1);return!1}const u=le.FH.entities;",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": "if(!d)return!1;const u=se.FH.entities;",
 					"patched": "if(!d){window.SandTogether&&(SandTogether._rlNoSpot=(SandTogether._rlNoSpot||0)+1);return!1}const u=se.FH.entities;",
@@ -788,6 +859,11 @@
 		{
 			"name": "undo module export (_undoState)",
 			"variants": [
+				{
+					"anchor": "Zf={id:\"undo\",onInit:e=>{",
+					"patched": "Zf={id:\"undo\",onInit:e=>{window.SandTogether&&(window.SandTogether._undoState=Of);",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": "Hf={id:\"undo\",onInit:e=>{",
 					"patched": "Hf={id:\"undo\",onInit:e=>{window.SandTogether&&(window.SandTogether._undoState=Ff);",
@@ -909,6 +985,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "case D.dD.FlameBurn:(0,xt.sz)(t,n.data[1]*_.A.cellSize,n.data[2]*_.A.cellSize,Ea);break;case D.dD.FlameBurnBatch:{const e=n.data[1],r=e.length;for(let n=0;n<r;n+=2)(0,xt.sz)(t,e[n]*_.A.cellSize,e[n+1]*_.A.cellSize,Ea);break}",
+					"patched": "case D.dD.FlameBurn:(window.SandTogether&&window.SandTogether._flame&&window.SandTogether._flame(n.data[1],n.data[2]),(0,xt.sz)(t,n.data[1]*_.A.cellSize,n.data[2]*_.A.cellSize,Ea));break;case D.dD.FlameBurnBatch:{const e=n.data[1],r=e.length;window.SandTogether&&window.SandTogether._flameB&&window.SandTogether._flameB(e);for(let n=0;n<r;n+=2)(0,xt.sz)(t,e[n]*_.A.cellSize,e[n+1]*_.A.cellSize,Ea);break}",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "case D.dD.FlameBurn:(0,vt.sz)(t,n.data[1]*_.A.cellSize,n.data[2]*_.A.cellSize,Ma);break;case D.dD.FlameBurnBatch:{const e=n.data[1],r=e.length;for(let n=0;n<r;n+=2)(0,vt.sz)(t,e[n]*_.A.cellSize,e[n+1]*_.A.cellSize,Ma);break}",
 					"patched": "case D.dD.FlameBurn:(window.SandTogether&&window.SandTogether._flame&&window.SandTogether._flame(n.data[1],n.data[2]),(0,vt.sz)(t,n.data[1]*_.A.cellSize,n.data[2]*_.A.cellSize,Ma));break;case D.dD.FlameBurnBatch:{const e=n.data[1],r=e.length;window.SandTogether&&window.SandTogether._flameB&&window.SandTogether._flameB(e);for(let n=0;n<r;n+=2)(0,vt.sz)(t,e[n]*_.A.cellSize,e[n+1]*_.A.cellSize,Ma);break}",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
@@ -939,6 +1020,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "case D.dD.AddLight:(0,xt.sz)(t,n.data[1],n.data[2],n.data[3]);break;case D.dD.AddLightBatch:{const e=n.data[1],r=e.length;for(let n=0;n<r;n+=3)(0,xt.sz)(t,e[n],e[n+1],e[n+2]);break}",
+					"patched": "case D.dD.AddLight:(window.SandTogether&&window.SandTogether._addLight&&window.SandTogether._addLight(n.data[1],n.data[2],n.data[3]),(0,xt.sz)(t,n.data[1],n.data[2],n.data[3]));break;case D.dD.AddLightBatch:{const e=n.data[1],r=e.length;window.SandTogether&&window.SandTogether._addLightB&&window.SandTogether._addLightB(e);for(let n=0;n<r;n+=3)(0,xt.sz)(t,e[n],e[n+1],e[n+2]);break}",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "case D.dD.AddLight:(0,vt.sz)(t,n.data[1],n.data[2],n.data[3]);break;case D.dD.AddLightBatch:{const e=n.data[1],r=e.length;for(let n=0;n<r;n+=3)(0,vt.sz)(t,e[n],e[n+1],e[n+2]);break}",
 					"patched": "case D.dD.AddLight:(window.SandTogether&&window.SandTogether._addLight&&window.SandTogether._addLight(n.data[1],n.data[2],n.data[3]),(0,vt.sz)(t,n.data[1],n.data[2],n.data[3]));break;case D.dD.AddLightBatch:{const e=n.data[1],r=e.length;window.SandTogether&&window.SandTogether._addLightB&&window.SandTogether._addLightB(e);for(let n=0;n<r;n+=3)(0,vt.sz)(t,e[n],e[n+1],e[n+2]);break}",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
@@ -953,6 +1039,11 @@
 			"name": "pipe api export (_pipeApi)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": ",Ee=(e,t)=>{if(e.type!==t.type)return!1;const n=i.A.snapGridCellSize,r=t.x-e.x,o=t.y-e.y;if(Math.abs(r)+Math.abs(o)!==n)return!1;const a=ue(r,o),s=ue(-r,-o),l=se(e),c=se(t),d=0===(l.pipeConnectionMask&a)||0===(c.pipeConnectionMask&s);return l.pipeConnectionMask|=a,c.pipeConnectionMask|=s,d}",
+					"patched": ",Ee=(e,t)=>{if(e.type!==t.type)return!1;const n=i.A.snapGridCellSize,r=t.x-e.x,o=t.y-e.y;if(Math.abs(r)+Math.abs(o)!==n)return!1;const a=ue(r,o),s=ue(-r,-o),l=se(e),c=se(t),d=0===(l.pipeConnectionMask&a)||0===(c.pipeConnectionMask&s);return l.pipeConnectionMask|=a,c.pipeConnectionMask|=s,d},__stPipe=(window.SandTogether&&(window.SandTogether._pipeApi={get connect(){return Ee},get refresh(){return xe},get relink(){return ze},get at(){return ne},get path(){return Te},get run(){return Be},get sprite(){return te},get isSegment(){return V}}),0)",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": ",Se=(e,t)=>{if(e.type!==t.type)return!1;const n=i.A.snapGridCellSize,r=t.x-e.x,o=t.y-e.y;if(Math.abs(r)+Math.abs(o)!==n)return!1;const a=le(r,o),s=le(-r,-o),l=oe(e),c=oe(t),d=0===(l.pipeConnectionMask&a)||0===(c.pipeConnectionMask&s);return l.pipeConnectionMask|=a,c.pipeConnectionMask|=s,d}",
 					"patched": ",Se=(e,t)=>{if(e.type!==t.type)return!1;const n=i.A.snapGridCellSize,r=t.x-e.x,o=t.y-e.y;if(Math.abs(r)+Math.abs(o)!==n)return!1;const a=le(r,o),s=le(-r,-o),l=oe(e),c=oe(t),d=0===(l.pipeConnectionMask&a)||0===(c.pipeConnectionMask&s);return l.pipeConnectionMask|=a,c.pipeConnectionMask|=s,d},__stPipe=(window.SandTogether&&(window.SandTogether._pipeApi={get connect(){return Se},get refresh(){return Ue},get relink(){return Ne},get at(){return Q},get path(){return Ce},get run(){return Ie},get sprite(){return Z},get isSegment(){return O}}),0)",
@@ -983,6 +1074,11 @@
 			"name": "selection delete hook (_delSel)",
 			"critical": false,
 			"variants": [
+				{
+					"anchor": "case D.$V.Delete:return{down:e=>{let t=(0,Z.oM)(e);",
+					"patched": "case D.$V.Delete:return{down:e=>{if(window.SandTogether&&window.SandTogether._delSel&&window.SandTogether._delSel(e))return;let t=(0,Z.oM)(e);",
+					"note": "game 0.6.1"
+				},
 				{
 					"anchor": "case D.$V.Delete:return{down:e=>{let t=(0,J.oM)(e);",
 					"patched": "case D.$V.Delete:return{down:e=>{if(window.SandTogether&&window.SandTogether._delSel&&window.SandTogether._delSel(e))return;let t=(0,J.oM)(e);",
