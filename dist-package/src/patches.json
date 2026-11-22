@@ -999,6 +999,11 @@
 			"critical": false,
 			"variants": [
 				{
+					"anchor": "E=(e,t)=>{(0,i.GA)(e,\"worldItems\",t.id),(0,o.s7)(e,t)},I=e=>{e.store.worldItems.forEach(t=>{S(e,t)})},",
+					"patched": "E=(e,t)=>{(0,i.GA)(e,\"worldItems\",t.id),(0,o.s7)(e,t)},I=e=>{e.store.worldItems.forEach(t=>{S(e,t)})},__stWi=(window.SandTogether&&(window.SandTogether._wiApi={make:S,drop:E}),0),",
+					"note": "game 0.6.1"
+				},
+				{
 					"anchor": "T=(e,t)=>{(0,i.GA)(e,\"worldItems\",t.id),(0,o.s7)(e,t)},E=e=>{e.store.worldItems.forEach(t=>{C(e,t)})},",
 					"patched": "T=(e,t)=>{(0,i.GA)(e,\"worldItems\",t.id),(0,o.s7)(e,t)},E=e=>{e.store.worldItems.forEach(t=>{C(e,t)})},__stWi=(window.SandTogether&&(window.SandTogether._wiApi={make:C,drop:T}),0),",
 					"note": "game 0.6.0 (Update #5, 2026-10-21)"
